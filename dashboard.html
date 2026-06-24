@@ -1,0 +1,1358 @@
+<!-- <!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Quidax Market Monitor</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@2.47.0/tabler-icons.min.css" />
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  :root {
+    --bg0: #ffffff; --bg1: #f5f5f3; --bg2: #ebebea;
+    --text0: #1a1a18; --text1: #5f5e5a; --text2: #888780;
+    --border: rgba(0,0,0,0.12); --border2: rgba(0,0,0,0.2);
+    --green: #1D9E75; --green-bg: #E1F5EE; --green-text: #0F6E56;
+    --amber: #BA7517; --amber-bg: #FAEEDA; --amber-text: #854F0B;
+    --red: #E24B4A; --red-bg: #FCEBEB; --red-text: #A32D2D;
+    --blue: #378ADD; --blue-bg: #E6F1FB; --blue-text: #185FA5;
+    --radius-md: 8px; --radius-lg: 12px;
+    --font: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg0: #1e1e1c; --bg1: #282826; --bg2: #323230;
+      --text0: #e8e6df; --text1: #a8a69e; --text2: #6e6c66;
+      --border: rgba(255,255,255,0.1); --border2: rgba(255,255,255,0.18);
+      --green-bg: #04342C; --green-text: #9FE1CB;
+      --amber-bg: #412402; --amber-text: #FAC775;
+      --red-bg: #501313; --red-text: #F7C1C1;
+      --blue-bg: #042C53; --blue-text: #B5D4F4;
+    }
+  }
+  body { font-family: var(--font); background: var(--bg1); color: var(--text0); font-size: 14px; min-height: 100vh; }
+  .shell { max-width: 960px; margin: 0 auto; padding: 20px 16px 40px; }
+  .top-bar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; flex-wrap: wrap; gap: 8px; }
+  .top-bar h1 { font-size: 16px; font-weight: 500; display: flex; align-items: center; gap: 8px; }
+  .meta { font-size: 12px; color: var(--text2); display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+  .pulse { width: 8px; height: 8px; border-radius: 50%; background: var(--green); display: inline-block; animation: blink 2s infinite; }
+  .pulse.stale { background: var(--amber); }
+  @keyframes blink { 0%,100%{opacity:1} 50%{opacity:.25} }
+  .metric-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px; margin-bottom: 20px; }
+  .metric { background: var(--bg0); border: 0.5px solid var(--border); border-radius: var(--radius-md); padding: 12px 14px; }
+  .metric .label { font-size: 11px; color: var(--text2); margin-bottom: 4px; }
+  .metric .value { font-size: 22px; font-weight: 500; }
+  .metric .value.ok  { color: var(--green); }
+  .metric .value.warn{ color: var(--amber); }
+  .metric .value.crit{ color: var(--red);   }
+  .section-label { font-size: 11px; color: var(--text2); text-transform: uppercase; letter-spacing: .06em; margin: 20px 0 8px; }
+  .pair-card { background: var(--bg0); border: 0.5px solid var(--border); border-radius: var(--radius-lg); padding: 14px 16px; margin-bottom: 10px; }
+  .pair-card.warn-card { border-left: 3px solid var(--amber); border-radius: 0 var(--radius-lg) var(--radius-lg) 0; }
+  .pair-card.crit-card { border-left: 3px solid var(--red);   border-radius: 0 var(--radius-lg) var(--radius-lg) 0; }
+  .pair-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; flex-wrap: wrap; gap: 6px; }
+  .pair-name { font-size: 15px; font-weight: 500; display: flex; align-items: center; gap: 6px; }
+  .badge { font-size: 11px; padding: 2px 9px; border-radius: var(--radius-md); font-weight: 500; }
+  .badge.ok   { background: var(--green-bg); color: var(--green-text); }
+  .badge.warn { background: var(--amber-bg); color: var(--amber-text); }
+  .badge.crit { background: var(--red-bg);   color: var(--red-text);   }
+  .pair-metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(100px, 1fr)); gap: 10px; }
+  .pm .k { font-size: 11px; color: var(--text2); margin-bottom: 2px; }
+  .pm .v { font-size: 13px; font-weight: 500; }
+  .pm .v.warn { color: var(--amber); }
+  .pm .v.crit { color: var(--red); }
+  .issues { margin-top: 10px; border-top: 0.5px solid var(--border); padding-top: 8px; display: flex; flex-direction: column; gap: 5px; }
+  .issue-row { font-size: 12px; display: flex; align-items: flex-start; gap: 6px; line-height: 1.5; }
+  .issue-row .tag { font-size: 10px; padding: 1px 6px; border-radius: 4px; font-weight: 500; white-space: nowrap; flex-shrink: 0; margin-top: 2px; }
+  .tag.HIGH     { background: var(--amber-bg); color: var(--amber-text); }
+  .tag.CRITICAL { background: var(--red-bg);   color: var(--red-text);   }
+  .tag.MEDIUM   { background: var(--blue-bg);  color: var(--blue-text);  }
+  .chart-card { background: var(--bg0); border: 0.5px solid var(--border); border-radius: var(--radius-lg); padding: 14px 16px; margin-bottom: 10px; }
+  .chart-title { font-size: 13px; font-weight: 500; margin-bottom: 10px; }
+  .legend { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 8px; font-size: 11px; color: var(--text2); }
+  .legend span { display: flex; align-items: center; gap: 4px; }
+  .swatch { width: 10px; height: 10px; border-radius: 2px; flex-shrink: 0; }
+  .log-row { display: flex; gap: 10px; padding: 8px 0; border-bottom: 0.5px solid var(--border); align-items: flex-start; font-size: 12px; }
+  .log-row:last-child { border-bottom: none; }
+  .log-time { color: var(--text2); white-space: nowrap; min-width: 60px; }
+  .log-msg { color: var(--text0); line-height: 1.5; }
+  .empty-state { font-size: 13px; color: var(--text2); padding: 14px 0; }
+  .footer { margin-top: 24px; padding-top: 12px; border-top: 0.5px solid var(--border); font-size: 11px; color: var(--text2); display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; }
+  .btn { font-size: 12px; cursor: pointer; background: none; border: 0.5px solid var(--border2); border-radius: var(--radius-md); padding: 5px 12px; color: var(--text1); font-family: var(--font); }
+  .btn:hover { background: var(--bg2); }
+  .error-banner { background: var(--red-bg); color: var(--red-text); border: 0.5px solid var(--red); border-radius: var(--radius-md); padding: 10px 14px; font-size: 13px; margin-bottom: 16px; display: none; }
+</style>
+</head>
+<body>
+<div class="shell">
+  <div class="top-bar">
+    <h1>
+      <i class="ti ti-activity-heartbeat" style="font-size:20px" aria-hidden="true"></i>
+      Quidax Market Monitor
+    </h1>
+    <div class="meta">
+      <span><span class="pulse" id="pulse"></span> Live</span>
+      <span id="clock">—</span>
+      <span>Refreshes every <b>60s</b></span>
+    </div>
+  </div>
+
+  <div class="error-banner" id="error-banner">
+    <i class="ti ti-alert-circle" aria-hidden="true"></i>
+    <span id="error-text">Could not reach API.</span>
+  </div>
+
+  <div class="metric-row">
+    <div class="metric"><div class="label">Pairs monitored</div><div class="value" id="m-pairs">—</div></div>
+    <div class="metric"><div class="label">Healthy</div><div class="value ok" id="m-healthy">—</div></div>
+    <div class="metric"><div class="label">Warnings</div><div class="value warn" id="m-warn">—</div></div>
+    <div class="metric"><div class="label">Alerts fired</div><div class="value crit" id="m-crit">—</div></div>
+    <div class="metric"><div class="label">Last updated</div><div class="value" id="m-ts" style="font-size:13px;line-height:1.3">—</div></div>
+  </div>
+
+  <div class="section-label" style="display:flex;align-items:center;justify-content:space-between;">
+    <span>Pairs — <span id="pairs-label">warnings only</span></span>
+    <button class="btn" id="toggle-btn" onclick="toggleFilter()" style="font-size:11px;padding:3px 10px;">Show all</button>
+  </div>
+  <div id="pairs-container"><p class="empty-state">Loading…</p></div>
+
+  <div class="section-label">Spread % — last 30 cycles (today)</div>
+  <div class="chart-card">
+    <div class="chart-title" id="chart-title">Spread history</div>
+    <div class="legend">
+      <span><span class="swatch" style="background:#378ADD"></span>Spread %</span>
+      <span><span class="swatch" style="background:#E24B4A;opacity:.55"></span>Target</span>
+    </div>
+    <div style="position:relative;height:200px">
+      <canvas id="spreadChart" role="img" aria-label="Line chart of spread percentage over the last 30 monitoring cycles.">Spread history.</canvas>
+    </div>
+  </div>
+
+  <div class="section-label">Alert log</div>
+  <div class="chart-card" id="alert-log-container"><p class="empty-state">No alerts this session.</p></div>
+
+  <div class="footer">
+    <span>Quidax OHM — API mode &nbsp;|&nbsp; <span id="api-url">GET /api/status</span></span>
+    <button class="btn" onclick="fetchAndRender()">
+      <i class="ti ti-refresh" aria-hidden="true"></i> Refresh now
+    </button>
+  </div>
+</div>
+
+<script>
+const API_BASE = "";  // same origin; change to "http://localhost:8000" for local dev
+let spreadChart;
+let spreadHistoryMap = {};   // symbol → [spread values]
+let targetMap = {};          // symbol → target spread
+let alertLog = [];
+let lastData = null;
+let showAll = false;
+
+function toggleFilter() {
+  showAll = !showAll;
+  document.getElementById("toggle-btn").textContent  = showAll ? "Warnings only" : "Show all";
+  document.getElementById("pairs-label").textContent = showAll ? "all pairs" : "warnings only";
+  if (lastData) renderPairs(lastData.pairs);
+}
+
+// ── Clock ─────────────────────────────────────────────────────────────────────
+function ngtTime() {
+  return new Date().toLocaleTimeString("en-GB", { timeZone: "Africa/Lagos", hour12: false });
+}
+setInterval(() => document.getElementById("clock").textContent = ngtTime() + " NGT", 1000);
+document.getElementById("clock").textContent = ngtTime() + " NGT";
+
+// ── Fetch ─────────────────────────────────────────────────────────────────────
+async function fetchAndRender() {
+  const pulse = document.getElementById("pulse");
+  const banner = document.getElementById("error-banner");
+  try {
+    const res = await fetch(`${API_BASE}/api/status`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    lastData = data;
+    banner.style.display = "none";
+    pulse.classList.remove("stale");
+    renderDashboard(data);
+    // Also try to fetch history for the chart
+    fetchHistory(data);
+  } catch (err) {
+    pulse.classList.add("stale");
+    banner.style.display = "block";
+    document.getElementById("error-text").textContent =
+      `Could not reach ${API_BASE}/api/status — ${err.message}. Is uvicorn running?`;
+  }
+}
+
+async function fetchHistory(statusData) {
+  try {
+    const res = await fetch(`${API_BASE}/api/history`);
+    if (!res.ok) return;
+    const data = await res.json();
+    buildSpreadHistory(data.rows, statusData);
+  } catch (_) {}
+}
+
+// ── History → chart data ──────────────────────────────────────────────────────
+function buildSpreadHistory(rows, statusData) {
+  // rows is the daily_log CSV: columns like STATUS (CHECK 1), TIME (CHECK 1) ...
+  // We need a different approach: use the current pairs as the source and
+  // reconstruct spread cols from STATUS columns (they contain status text, not spread).
+  // Since daily_log doesn't store spread values per-check, we fall back to
+  // using current pairs for the chart with live data appended each refresh.
+
+  // If we have current pair data, push to in-memory history
+  if (statusData && statusData.pairs) {
+    statusData.pairs.forEach(pair => {
+      const sym = pair.symbol;
+      if (!spreadHistoryMap[sym]) spreadHistoryMap[sym] = [];
+      if (pair.current_spread !== null && pair.current_spread !== undefined) {
+        spreadHistoryMap[sym].push(parseFloat(pair.current_spread));
+        if (spreadHistoryMap[sym].length > 30) spreadHistoryMap[sym].shift();
+      }
+      if (pair.target_spread && pair.target_spread !== "N/A") {
+        targetMap[sym] = parseFloat(pair.target_spread);
+      }
+    });
+  }
+  updateChart(statusData);
+}
+
+// ── Render dashboard ──────────────────────────────────────────────────────────
+function renderDashboard(data) {
+  const { summary, pairs } = data;
+
+  document.getElementById("m-pairs").textContent   = summary.total_pairs ?? "—";
+  document.getElementById("m-healthy").textContent = summary.healthy ?? "—";
+  document.getElementById("m-warn").textContent    = summary.warnings ?? "—";
+  document.getElementById("m-crit").textContent    = summary.alerts_fired ?? "—";
+  document.getElementById("m-ts").textContent      = summary.last_updated
+    ? summary.last_updated.split(" ").pop()   // show time only
+    : "—";
+
+  renderPairs(pairs);
+
+  // Build alert log from pairs that have should_alert=true
+  pairs.forEach(p => {
+    if (p.should_alert) {
+      const entry = {
+        time: ngtTime(),
+        sym: p.symbol.toUpperCase(),
+        spread: p.current_spread,
+        target: p.target_spread,
+        diff: p.percent_diff,
+        dws: p.dws,
+      };
+      // Avoid duplicate entries in same session
+      const key = `${p.symbol}-${p.timestamp}`;
+      if (!alertLog.find(a => a._key === key)) {
+        entry._key = key;
+        alertLog.unshift(entry);
+        if (alertLog.length > 30) alertLog.pop();
+      }
+    }
+  });
+  renderAlertLog();
+}
+
+function renderPairs(pairs) {
+  const container = document.getElementById("pairs-container");
+  if (!pairs || !pairs.length) {
+    container.innerHTML = `<p class="empty-state">No data in latest.csv yet — run a monitor cycle first.</p>`;
+    return;
+  }
+  const visible = showAll
+    ? pairs
+    : pairs.filter(p => (p.status || "").toLowerCase() === "warning");
+  if (!visible.length) {
+    container.innerHTML = `<p class="empty-state" style="color:var(--green)"><i class="ti ti-circle-check" aria-hidden="true" style="font-size:15px;vertical-align:-2px;margin-right:4px"></i>All ${pairs.length} pair${pairs.length !== 1 ? "s" : ""} healthy.</p>`;
+    return;
+  }
+  container.innerHTML = visible.map(p => renderPairCard(p)).join("");
+}
+
+function renderPairCard(p) {
+  const isWarn  = (p.status || "").toLowerCase() === "warning";
+  const isCrit  = p.issues && p.issues.includes("CRITICAL");
+  const alerted = p.should_alert;
+
+  let cardCls = "pair-card";
+  if (isCrit)       cardCls += " crit-card";
+  else if (isWarn)  cardCls += " warn-card";
+
+  let badgeCls  = "badge ok";
+  let badgeText = "Healthy";
+  if (alerted)     { badgeCls = "badge crit"; badgeText = "Alert fired"; }
+  else if (isWarn) { badgeCls = "badge warn"; badgeText = "Warning"; }
+
+  const spreadCls = isWarn ? "v warn" : "v";
+  const dwsCls    = p.dws_poor ? "v warn" : "v";
+
+  let issuesHtml = "";
+  if (p.issues) {
+    const parts = p.issues.split("|").filter(Boolean);
+    if (parts.length) {
+      issuesHtml = `<div class="issues">` +
+        parts.map(part => {
+          const [id, sev] = part.split(":");
+          const sevCls = sev === "CRITICAL" ? "CRITICAL" : sev === "HIGH" ? "HIGH" : "MEDIUM";
+          return `<div class="issue-row"><span class="tag ${sevCls}">[${id}] ${sev}</span><span>${part}</span></div>`;
+        }).join("") + `</div>`;
+    }
+  }
+
+  const sym    = p.symbol ? p.symbol.toUpperCase() : "—";
+  const base   = sym.length >= 6 ? sym.slice(0, -3) + "/" + sym.slice(-3) : sym;
+  const spread = p.current_spread != null ? parseFloat(p.current_spread).toFixed(4) + "%" : "—";
+  const target = p.target_spread && p.target_spread !== "N/A" ? p.target_spread + "%" : "Monitor only";
+  const diff   = p.percent_diff != null && p.percent_diff !== "N/A"
+    ? (parseFloat(p.percent_diff) > 0 ? "+" : "") + parseFloat(p.percent_diff).toFixed(1) + "%"
+    : "—";
+  const mid    = p.mid_price != null ? Number(p.mid_price).toLocaleString(undefined, {maximumFractionDigits: 2}) : "—";
+  const dws    = p.dws != null ? parseFloat(p.dws).toFixed(4) : "—";
+  const askL   = p.ask_layers ?? "—";
+  const bidL   = p.bid_layers ?? "—";
+  const d25    = p.depth_1_25x || p["depth_1.25x"] || "—";
+  const d50    = p.depth_1_5x  || p["depth_1.5x"]  || "—";
+
+  return `
+  <div class="${cardCls}">
+    <div class="pair-header">
+      <div class="pair-name">
+        <i class="ti ti-currency-bitcoin" aria-hidden="true" style="font-size:16px"></i>
+        ${base}
+      </div>
+      <span class="${badgeCls}">${badgeText}</span>
+    </div>
+    <div class="pair-metrics">
+      <div class="pm"><div class="k">Spread</div><div class="${spreadCls}">${spread}</div></div>
+      <div class="pm"><div class="k">Target</div><div class="v">${target}</div></div>
+      <div class="pm"><div class="k">Diff</div><div class="${isWarn ? 'v warn' : 'v'}">${diff}</div></div>
+      <div class="pm"><div class="k">Mid price</div><div class="v">${mid}</div></div>
+      <div class="pm"><div class="k">DWS</div><div class="${dwsCls}">${dws}${p.dws_poor ? " ⚠" : ""}</div></div>
+      <div class="pm"><div class="k">Ask layers</div><div class="v">${askL}</div></div>
+      <div class="pm"><div class="k">Bid layers</div><div class="v">${bidL}</div></div>
+      <div class="pm"><div class="k">Depth 1.25×</div><div class="v">${d25}</div></div>
+      <div class="pm"><div class="k">Depth 1.5×</div><div class="v">${d50}</div></div>
+    </div>
+    ${issuesHtml}
+  </div>`;
+}
+
+function renderAlertLog() {
+  const el = document.getElementById("alert-log-container");
+  if (!alertLog.length) {
+    el.innerHTML = `<p class="empty-state">No alerts this session.</p>`;
+    return;
+  }
+  el.innerHTML = alertLog.map(a => `
+    <div class="log-row">
+      <span class="log-time">${a.time}</span>
+      <span class="log-msg">
+        <i class="ti ti-alert-triangle" aria-hidden="true" style="font-size:13px;vertical-align:-1px;margin-right:4px;color:var(--amber)"></i>
+        <b>${a.sym}</b> — spread ${a.spread != null ? parseFloat(a.spread).toFixed(4) + "%" : "—"}
+        (target ${a.target !== "N/A" ? a.target + "%" : "N/A"},
+        diff ${a.diff != null ? (parseFloat(a.diff) > 0 ? "+" : "") + parseFloat(a.diff).toFixed(1) + "%" : "—"})
+        &nbsp;|&nbsp; DWS ${a.dws != null ? parseFloat(a.dws).toFixed(4) : "—"}
+      </span>
+    </div>`).join("");
+}
+
+// ── Chart ─────────────────────────────────────────────────────────────────────
+function initChart() {
+  const ctx = document.getElementById("spreadChart").getContext("2d");
+  spreadChart = new Chart(ctx, {
+    type: "line",
+    data: {
+      labels: [],
+      datasets: [
+        {
+          label: "Spread %",
+          data: [],
+          borderColor: "#378ADD",
+          backgroundColor: "rgba(55,138,221,0.08)",
+          pointRadius: 3,
+          pointBackgroundColor: "#378ADD",
+          fill: true,
+          tension: 0.3,
+          borderWidth: 1.5,
+        },
+        {
+          label: "Target",
+          data: [],
+          borderColor: "rgba(226,75,74,0.5)",
+          borderDash: [4, 3],
+          pointRadius: 0,
+          borderWidth: 1,
+          fill: false,
+          tension: 0,
+        },
+      ],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
+      scales: {
+        x: { display: true, ticks: { font: { size: 10 }, color: "#888780", maxRotation: 0 } },
+        y: {
+          grid: { color: "rgba(128,128,128,0.1)" },
+          ticks: {
+            font: { size: 11 }, color: "#888780",
+            callback: v => v.toFixed(3) + "%",
+          },
+        },
+      },
+      animation: { duration: 300 },
+    },
+  });
+}
+
+function updateChart(statusData) {
+  if (!spreadChart) return;
+
+  // Pick the first non-monitor-only pair with history
+  const sym = statusData && statusData.pairs
+    ? (statusData.pairs.find(p => !p.monitor_only && spreadHistoryMap[p.symbol]) || statusData.pairs[0] || {}).symbol
+    : Object.keys(spreadHistoryMap)[0];
+
+  if (!sym || !spreadHistoryMap[sym]) return;
+
+  const history = spreadHistoryMap[sym];
+  const target  = targetMap[sym] ?? null;
+  const labels  = history.map((_, i) => `C${i + 1}`);
+
+  document.getElementById("chart-title").textContent =
+    `${sym.toUpperCase()} spread vs target`;
+
+  spreadChart.data.labels = labels;
+  spreadChart.data.datasets[0].data = history;
+  spreadChart.data.datasets[1].data = target !== null ? history.map(() => target) : [];
+  spreadChart.update();
+}
+
+// ── Auto-refresh ──────────────────────────────────────────────────────────────
+initChart();
+fetchAndRender();
+setInterval(fetchAndRender, 60_000);
+</script>
+</body>
+</html> -->
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Quidax Market Monitor</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@2.47.0/tabler-icons.min.css" />
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+:root {
+  --bg-base: #f0f2f7;
+  --bg-sidebar: #ffffff;
+  --bg-card: #ffffff;
+  --bg-card-hover: #f8f9fc;
+  --text-primary: #1a1d2e;
+  --text-secondary: #6b7280;
+  --text-muted: #9ca3af;
+  --border: rgba(0,0,0,0.07);
+  --border-strong: rgba(0,0,0,0.12);
+  --accent: #7c3aed;
+  --accent-light: #ede9fe;
+  --accent-mid: #a78bfa;
+  --green: #10b981;
+  --green-bg: #d1fae5;
+  --green-text: #065f46;
+  --amber: #f59e0b;
+  --amber-bg: #fef3c7;
+  --amber-text: #78350f;
+  --red: #ef4444;
+  --red-bg: #fee2e2;
+  --red-text: #7f1d1d;
+  --blue: #3b82f6;
+  --blue-bg: #dbeafe;
+  --blue-text: #1e3a8a;
+  --sidebar-w: 220px;
+  --radius: 12px;
+  --radius-sm: 8px;
+  --shadow: 0 1px 3px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04);
+  --shadow-md: 0 4px 16px rgba(0,0,0,0.08);
+  --font: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  --mono: 'JetBrains Mono', monospace;
+}
+
+body { font-family: var(--font); background: var(--bg-base); color: var(--text-primary); font-size: 14px; min-height: 100vh; display: flex; }
+
+/* ─── Sidebar ───────────────────────────────────── */
+.sidebar {
+  width: var(--sidebar-w);
+  background: var(--bg-sidebar);
+  height: 100vh;
+  position: fixed;
+  left: 0; top: 0;
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--border);
+  z-index: 100;
+  padding: 0;
+}
+
+.sidebar-logo {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 20px 20px 16px;
+  border-bottom: 1px solid var(--border);
+}
+.logo-icon {
+  width: 32px; height: 32px;
+  background: var(--accent);
+  border-radius: 8px;
+  display: flex; align-items: center; justify-content: center;
+  color: #fff; font-size: 16px;
+}
+.sidebar-logo-text { font-size: 14px; font-weight: 600; color: var(--text-primary); }
+.sidebar-logo-sub  { font-size: 11px; color: var(--text-muted); }
+
+.sidebar-nav { flex: 1; padding: 12px 10px; overflow-y: auto; }
+.nav-section-label { font-size: 10px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: .06em; padding: 8px 10px 4px; }
+.nav-item {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 12px; border-radius: var(--radius-sm);
+  color: var(--text-secondary); font-size: 13px; font-weight: 500;
+  cursor: pointer; transition: all .15s;
+  text-decoration: none; user-select: none;
+}
+.nav-item:hover { background: var(--bg-base); color: var(--text-primary); }
+.nav-item.active { background: var(--accent-light); color: var(--accent); }
+.nav-item i { font-size: 16px; flex-shrink: 0; }
+.nav-badge { margin-left: auto; font-size: 10px; background: var(--red-bg); color: var(--red-text); padding: 1px 6px; border-radius: 10px; font-weight: 600; }
+.nav-badge.ok { background: var(--green-bg); color: var(--green-text); }
+
+.sidebar-bottom { padding: 12px 10px 20px; border-top: 1px solid var(--border); }
+.sidebar-status { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-radius: var(--radius-sm); background: var(--bg-base); }
+.pulse { width: 8px; height: 8px; border-radius: 50%; background: var(--green); flex-shrink: 0; animation: blink 2s infinite; }
+.pulse.stale { background: var(--amber); }
+@keyframes blink { 0%,100%{opacity:1} 50%{opacity:.3} }
+.sidebar-status-text { font-size: 11px; color: var(--text-secondary); line-height: 1.3; }
+.sidebar-status-text b { color: var(--text-primary); font-weight: 600; }
+
+/* ─── Main ──────────────────────────────────────── */
+.main {
+  margin-left: var(--sidebar-w);
+  flex: 1;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.topbar {
+  background: var(--bg-card);
+  border-bottom: 1px solid var(--border);
+  padding: 0 24px;
+  height: 56px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  position: sticky; top: 0; z-index: 50;
+}
+.topbar-title { font-size: 15px; font-weight: 600; }
+.topbar-right { display: flex; align-items: center; gap: 12px; }
+.topbar-clock { font-family: var(--mono); font-size: 12px; color: var(--text-muted); background: var(--bg-base); padding: 4px 10px; border-radius: 6px; }
+.btn {
+  font-size: 12px; cursor: pointer; background: var(--bg-base);
+  border: 1px solid var(--border-strong); border-radius: var(--radius-sm);
+  padding: 6px 14px; color: var(--text-secondary); font-family: var(--font);
+  display: inline-flex; align-items: center; gap: 6px;
+  transition: all .15s; font-weight: 500;
+}
+.btn:hover { background: var(--border); color: var(--text-primary); }
+.btn-accent { background: var(--accent); color: #fff; border-color: var(--accent); }
+.btn-accent:hover { background: #6d28d9; color: #fff; }
+
+.content { padding: 24px; flex: 1; }
+
+.error-banner {
+  background: var(--red-bg); color: var(--red-text);
+  border: 1px solid rgba(239,68,68,.2); border-radius: var(--radius-sm);
+  padding: 10px 14px; font-size: 13px; margin-bottom: 20px; display: none;
+  align-items: center; gap: 8px;
+}
+
+/* ─── Stat Cards ────────────────────────────────── */
+.stats-row {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 16px;
+  margin-bottom: 24px;
+}
+.stat-card {
+  background: var(--bg-card);
+  border-radius: var(--radius);
+  padding: 20px;
+  box-shadow: var(--shadow);
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+}
+.stat-icon {
+  width: 42px; height: 42px; border-radius: 10px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 20px; flex-shrink: 0;
+}
+.stat-icon.purple { background: var(--accent-light); color: var(--accent); }
+.stat-icon.green  { background: var(--green-bg);    color: var(--green); }
+.stat-icon.amber  { background: var(--amber-bg);    color: var(--amber); }
+.stat-icon.red    { background: var(--red-bg);      color: var(--red); }
+.stat-body { flex: 1; min-width: 0; }
+.stat-label { font-size: 11px; color: var(--text-muted); font-weight: 500; margin-bottom: 4px; text-transform: uppercase; letter-spacing: .04em; }
+.stat-value { font-size: 28px; font-weight: 600; line-height: 1; font-family: var(--mono); }
+.stat-value.purple { color: var(--accent); }
+.stat-value.green  { color: var(--green); }
+.stat-value.amber  { color: var(--amber); }
+.stat-value.red    { color: var(--red); }
+
+/* ─── Section header ────────────────────────────── */
+.section-header {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 14px;
+}
+.section-title { font-size: 14px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+.section-title .count { font-size: 11px; background: var(--bg-base); color: var(--text-muted); padding: 2px 8px; border-radius: 20px; font-weight: 500; }
+
+.two-col { display: grid; grid-template-columns: 1fr 340px; gap: 20px; align-items: start; margin-bottom: 24px; }
+
+/* ─── Market Grid (left col) ────────────────────── */
+.market-grid { display: flex; flex-direction: column; gap: 8px; }
+
+.market-row {
+  background: var(--bg-card);
+  border-radius: var(--radius);
+  padding: 14px 18px;
+  box-shadow: var(--shadow);
+  cursor: pointer;
+  transition: box-shadow .15s, transform .1s;
+  border: 1.5px solid transparent;
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+.market-row::before {
+  content: '';
+  position: absolute;
+  left: 0; top: 0; bottom: 0;
+  width: 3px;
+  background: transparent;
+  transition: background .15s;
+}
+.market-row:hover { box-shadow: var(--shadow-md); transform: translateY(-1px); border-color: var(--border-strong); }
+.market-row.warn::before  { background: var(--amber); }
+.market-row.crit::before  { background: var(--red); }
+.market-row.ok::before    { background: var(--green); }
+.market-row.selected { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-light), var(--shadow); }
+
+.mr-sym { flex: 0 0 90px; }
+.mr-sym-name { font-size: 14px; font-weight: 600; }
+.mr-sym-base { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+.mr-price { flex: 0 0 100px; }
+.mr-price-val { font-family: var(--mono); font-size: 13px; font-weight: 500; }
+.mr-price-label { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+.mr-spread { flex: 0 0 80px; }
+.mr-spread-val { font-family: var(--mono); font-size: 13px; font-weight: 500; }
+.mr-spread-label { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+.mr-issues { flex: 1; display: flex; flex-wrap: wrap; gap: 5px; justify-content: flex-end; align-items: center; }
+.mr-badge {
+  font-size: 10px; padding: 2px 8px; border-radius: 20px; font-weight: 600; white-space: nowrap;
+}
+.mr-badge.ok   { background: var(--green-bg); color: var(--green-text); }
+.mr-badge.warn { background: var(--amber-bg); color: var(--amber-text); }
+.mr-badge.crit { background: var(--red-bg);   color: var(--red-text);   }
+.mr-badge.blue { background: var(--blue-bg);  color: var(--blue-text);  }
+
+.mr-chevron { color: var(--text-muted); font-size: 16px; flex-shrink: 0; transition: transform .15s; }
+.market-row:hover .mr-chevron { transform: translateX(2px); color: var(--text-secondary); }
+.market-row.selected .mr-chevron { color: var(--accent); transform: rotate(90deg); }
+
+/* ─── Detail Panel (right col) ──────────────────── */
+.detail-panel {
+  background: var(--bg-card);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 20px;
+  position: sticky;
+  top: 76px;
+}
+.detail-empty {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  padding: 40px 20px; color: var(--text-muted); text-align: center; gap: 12px;
+}
+.detail-empty i { font-size: 32px; }
+.detail-empty p { font-size: 13px; line-height: 1.5; }
+
+.detail-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; gap: 8px; }
+.detail-sym { font-size: 18px; font-weight: 700; }
+.detail-time { font-size: 11px; color: var(--text-muted); font-family: var(--mono); }
+
+.detail-metrics {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 16px;
+}
+.dm {
+  background: var(--bg-base); border-radius: var(--radius-sm); padding: 10px 12px;
+}
+.dm .k { font-size: 10px; color: var(--text-muted); font-weight: 600; text-transform: uppercase; letter-spacing: .04em; margin-bottom: 4px; }
+.dm .v { font-size: 15px; font-weight: 600; font-family: var(--mono); }
+.dm .v.ok   { color: var(--green); }
+.dm .v.warn { color: var(--amber); }
+.dm .v.crit { color: var(--red); }
+.dm .v.muted{ color: var(--text-secondary); }
+
+.detail-alerts-title { font-size: 12px; font-weight: 600; color: var(--text-secondary); text-transform: uppercase; letter-spacing: .04em; margin-bottom: 10px; }
+
+.alert-checks { display: flex; flex-direction: column; gap: 6px; }
+.check-row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 9px 12px; border-radius: var(--radius-sm); font-size: 12px;
+  border: 1px solid transparent;
+}
+.check-row.pass  { background: #f0fdf4; color: #166534; border-color: #bbf7d0; }
+.check-row.warn  { background: var(--amber-bg); color: var(--amber-text); border-color: #fcd34d; }
+.check-row.crit  { background: var(--red-bg); color: var(--red-text); border-color: #fca5a5; }
+.check-row.info  { background: var(--blue-bg); color: var(--blue-text); border-color: #93c5fd; }
+.check-row.na    { background: var(--bg-base); color: var(--text-muted); border-color: transparent; }
+.check-icon { font-size: 14px; flex-shrink: 0; }
+.check-body { flex: 1; }
+.check-name { font-weight: 600; }
+.check-desc { font-size: 11px; opacity: .85; margin-top: 1px; }
+.check-sev { font-size: 10px; font-weight: 700; flex-shrink: 0; padding: 1px 6px; border-radius: 4px; background: rgba(0,0,0,.08); }
+
+/* ─── Chart Card ────────────────────────────────── */
+.chart-card {
+  background: var(--bg-card);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 20px;
+  margin-bottom: 24px;
+}
+.chart-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
+.chart-title { font-size: 14px; font-weight: 600; }
+.chart-selector { display: flex; gap: 6px; flex-wrap: wrap; }
+.chart-pill {
+  font-size: 11px; padding: 3px 10px; border-radius: 20px; cursor: pointer;
+  border: 1px solid var(--border-strong); background: var(--bg-base);
+  color: var(--text-secondary); font-weight: 500; transition: all .15s;
+}
+.chart-pill.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+.legend { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 10px; font-size: 11px; color: var(--text-secondary); }
+.legend span { display: flex; align-items: center; gap: 4px; }
+.swatch { width: 10px; height: 10px; border-radius: 2px; flex-shrink: 0; }
+
+/* ─── Alert log ─────────────────────────────────── */
+.log-card {
+  background: var(--bg-card);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 20px;
+}
+.log-row {
+  display: flex; gap: 12px; padding: 9px 0;
+  border-bottom: 1px solid var(--border);
+  align-items: flex-start; font-size: 12px;
+}
+.log-row:last-child { border-bottom: none; }
+.log-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--amber); flex-shrink: 0; margin-top: 4px; }
+.log-time { color: var(--text-muted); white-space: nowrap; min-width: 56px; font-family: var(--mono); font-size: 11px; }
+.log-msg  { color: var(--text-primary); line-height: 1.5; }
+.empty-state { font-size: 13px; color: var(--text-muted); padding: 20px 0; }
+.empty-state-green { color: var(--green); display: flex; align-items: center; gap: 6px; }
+
+/* ─── Responsive ────────────────────────────────── */
+@media (max-width: 900px) {
+  .sidebar { width: 56px; }
+  .sidebar-logo-text, .sidebar-logo-sub, .nav-item span, .nav-badge, .sidebar-status-text b { display: none; }
+  .nav-item { justify-content: center; padding: 10px; }
+  .sidebar-status { justify-content: center; }
+  .main { margin-left: 56px; }
+  .stats-row { grid-template-columns: 1fr 1fr; }
+  .two-col { grid-template-columns: 1fr; }
+  .detail-panel { position: static; }
+}
+@media (max-width: 600px) {
+  .stats-row { grid-template-columns: 1fr 1fr; }
+  .content { padding: 16px; }
+  .topbar { padding: 0 16px; }
+}
+@media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+</style>
+</head>
+<body>
+
+<!-- ═══ Sidebar ═══════════════════════════════════════════════════════════════ -->
+<aside class="sidebar">
+  <div class="sidebar-logo">
+    <div class="logo-icon"><i class="ti ti-activity-heartbeat"></i></div>
+    <div>
+      <div class="sidebar-logo-text">Quidax OHM</div>
+      <div class="sidebar-logo-sub">Market Monitor</div>
+    </div>
+  </div>
+
+  <nav class="sidebar-nav">
+    <div class="nav-section-label">Monitor</div>
+    <div class="nav-item active">
+      <i class="ti ti-layout-dashboard"></i>
+      <span>Overview</span>
+    </div>
+    <div class="nav-item" onclick="scrollToSection('markets')">
+      <i class="ti ti-currency-bitcoin"></i>
+      <span>Markets</span>
+      <span class="nav-badge" id="nav-warn-count" style="display:none">0</span>
+    </div>
+    <div class="nav-item" onclick="scrollToSection('chart-section')">
+      <i class="ti ti-chart-line"></i>
+      <span>Spread chart</span>
+    </div>
+    <div class="nav-item" onclick="scrollToSection('log-section')">
+      <i class="ti ti-bell"></i>
+      <span>Alert log</span>
+    </div>
+
+    <div class="nav-section-label" style="margin-top:8px">Alerts</div>
+    <div class="nav-item">
+      <i class="ti ti-git-branch"></i>
+      <span>Order book</span>
+    </div>
+    <div class="nav-item">
+      <i class="ti ti-trending-up"></i>
+      <span>Price moves</span>
+    </div>
+    <div class="nav-item">
+      <i class="ti ti-flame"></i>
+      <span>Volume spikes</span>
+    </div>
+  </nav>
+
+  <div class="sidebar-bottom">
+    <div class="sidebar-status">
+      <span class="pulse" id="pulse"></span>
+      <div class="sidebar-status-text">
+        <b id="sidebar-status-text">Live</b>
+        <div id="sidebar-ts" style="font-size:10px;color:var(--text-muted)">—</div>
+      </div>
+    </div>
+  </div>
+</aside>
+
+<!-- ═══ Main ══════════════════════════════════════════════════════════════════ -->
+<div class="main">
+  <header class="topbar">
+    <div class="topbar-title">Market Overview</div>
+    <div class="topbar-right">
+      <div class="topbar-clock" id="clock">—</div>
+      <button class="btn" onclick="fetchAndRender()">
+        <i class="ti ti-refresh"></i> Refresh
+      </button>
+    </div>
+  </header>
+
+  <div class="content">
+    <!-- Error banner -->
+    <div class="error-banner" id="error-banner" style="display:flex">
+      <i class="ti ti-alert-circle"></i>
+      <span id="error-text">Connecting to API…</span>
+    </div>
+
+    <!-- Stat cards -->
+    <div class="stats-row">
+      <div class="stat-card">
+        <div class="stat-icon purple"><i class="ti ti-chart-dots-3"></i></div>
+        <div class="stat-body">
+          <div class="stat-label">Pairs monitored</div>
+          <div class="stat-value purple" id="m-pairs">—</div>
+        </div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-icon green"><i class="ti ti-circle-check"></i></div>
+        <div class="stat-body">
+          <div class="stat-label">Healthy</div>
+          <div class="stat-value green" id="m-healthy">—</div>
+        </div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-icon amber"><i class="ti ti-alert-triangle"></i></div>
+        <div class="stat-body">
+          <div class="stat-label">Warnings</div>
+          <div class="stat-value amber" id="m-warn">—</div>
+        </div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-icon red"><i class="ti ti-bell-ringing"></i></div>
+        <div class="stat-body">
+          <div class="stat-label">Alerts fired</div>
+          <div class="stat-value red" id="m-crit">—</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Markets + Detail panel -->
+    <div id="markets" class="two-col">
+
+      <!-- Left: market rows -->
+      <div>
+        <div class="section-header">
+          <div class="section-title">
+            <i class="ti ti-currency-bitcoin" style="font-size:16px;color:var(--accent)"></i>
+            Markets
+            <span class="count" id="pairs-count-label">—</span>
+          </div>
+          <button class="btn" id="toggle-btn" onclick="toggleFilter()">Show all</button>
+        </div>
+        <div class="market-grid" id="pairs-container">
+          <p class="empty-state">Loading…</p>
+        </div>
+      </div>
+
+      <!-- Right: detail panel -->
+      <div class="detail-panel" id="detail-panel">
+        <div class="detail-empty" id="detail-empty">
+          <i class="ti ti-cursor-text" style="color:var(--accent-mid)"></i>
+          <p>Click any market to see its full health status across all alert checks.</p>
+        </div>
+        <div id="detail-content" style="display:none"></div>
+      </div>
+    </div>
+
+    <!-- Spread chart -->
+    <div id="chart-section" class="chart-card">
+      <div class="chart-header">
+        <div class="chart-title" id="chart-title">Spread % — last 30 cycles</div>
+        <div class="chart-selector" id="chart-selector"></div>
+      </div>
+      <div class="legend">
+        <span><span class="swatch" style="background:var(--accent)"></span>Spread %</span>
+        <span><span class="swatch" style="background:var(--red);opacity:.5"></span>Target</span>
+      </div>
+      <div style="position:relative;height:200px">
+        <canvas id="spreadChart" role="img" aria-label="Spread history chart"></canvas>
+      </div>
+    </div>
+
+    <!-- Alert log -->
+    <div id="log-section">
+      <div class="section-header">
+        <div class="section-title">
+          <i class="ti ti-bell" style="font-size:16px;color:var(--accent)"></i>
+          Alert log
+        </div>
+      </div>
+      <div class="log-card" id="alert-log-container">
+        <p class="empty-state">No alerts this session.</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const API_BASE = "";
+let spreadChart;
+let spreadHistoryMap = {};
+let targetMap = {};
+let alertLog = [];
+let lastData = null;
+let showAll = false;
+let selectedSym = null;
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+function ngtTime() {
+  return new Date().toLocaleTimeString("en-GB", { timeZone: "Africa/Lagos", hour12: false });
+}
+setInterval(() => document.getElementById("clock").textContent = ngtTime() + " WAT", 1000);
+document.getElementById("clock").textContent = ngtTime() + " WAT";
+
+function scrollToSection(id) {
+  const el = document.getElementById(id);
+  if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+function fmt(val, decimals = 4, suffix = "%") {
+  return val != null && val !== "N/A" ? parseFloat(val).toFixed(decimals) + suffix : "—";
+}
+function fmtPrice(val) {
+  if (val == null) return "—";
+  return Number(val).toLocaleString(undefined, { maximumFractionDigits: 4 });
+}
+function symParts(symbol) {
+  if (!symbol) return { base: "—", quote: "" };
+  const s = symbol.toUpperCase();
+  const display = s.length >= 6 ? s.slice(0, -3) + "/" + s.slice(-3) : s;
+  return { base: display, raw: s };
+}
+
+// ── Fetch ─────────────────────────────────────────────────────────────────────
+async function fetchAndRender() {
+  const pulse  = document.getElementById("pulse");
+  const banner = document.getElementById("error-banner");
+  try {
+    const res = await fetch(`${API_BASE}/api/status`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    lastData = data;
+    banner.style.display = "none";
+    pulse.classList.remove("stale");
+    document.getElementById("sidebar-status-text").textContent = "Live";
+    renderDashboard(data);
+    fetchHistory(data);
+  } catch (err) {
+    pulse.classList.add("stale");
+    banner.style.display = "flex";
+    document.getElementById("error-text").textContent =
+      `Cannot reach ${API_BASE}/api/status — ${err.message}. Is uvicorn running?`;
+    document.getElementById("sidebar-status-text").textContent = "Offline";
+  }
+}
+
+async function fetchHistory(statusData) {
+  try {
+    const res = await fetch(`${API_BASE}/api/history`);
+    if (!res.ok) return;
+    const data = await res.json();
+    buildSpreadHistory(data.rows, statusData);
+  } catch (_) {}
+}
+
+function buildSpreadHistory(rows, statusData) {
+  if (statusData && statusData.pairs) {
+    statusData.pairs.forEach(pair => {
+      const sym = pair.symbol;
+      if (!spreadHistoryMap[sym]) spreadHistoryMap[sym] = [];
+      if (pair.current_spread != null) {
+        spreadHistoryMap[sym].push(parseFloat(pair.current_spread));
+        if (spreadHistoryMap[sym].length > 30) spreadHistoryMap[sym].shift();
+      }
+      if (pair.target_spread && pair.target_spread !== "N/A") {
+        targetMap[sym] = parseFloat(pair.target_spread);
+      }
+    });
+  }
+  rebuildChartSelector(statusData);
+  if (selectedSym && spreadHistoryMap[selectedSym]) {
+    updateChart(selectedSym);
+  } else {
+    const first = statusData && statusData.pairs
+      ? (statusData.pairs.find(p => !p.monitor_only && spreadHistoryMap[p.symbol]) || statusData.pairs[0] || {}).symbol
+      : Object.keys(spreadHistoryMap)[0];
+    if (first) updateChart(first);
+  }
+}
+
+// ── Render dashboard ──────────────────────────────────────────────────────────
+function renderDashboard(data) {
+  const { summary, pairs } = data;
+  document.getElementById("m-pairs").textContent   = summary.total_pairs ?? "—";
+  document.getElementById("m-healthy").textContent = summary.healthy ?? "—";
+  document.getElementById("m-warn").textContent    = summary.warnings ?? "—";
+  document.getElementById("m-crit").textContent    = summary.alerts_fired ?? "—";
+  document.getElementById("sidebar-ts").textContent = summary.last_updated
+    ? summary.last_updated.split(" ").pop() : "—";
+
+  const warnCount = pairs.filter(p => (p.status || "").toLowerCase() === "warning" || (p.issues || "").includes("CRITICAL")).length;
+  const navBadge = document.getElementById("nav-warn-count");
+  if (warnCount > 0) { navBadge.style.display = ""; navBadge.textContent = warnCount; navBadge.className = "nav-badge"; }
+  else               { navBadge.style.display = "none"; }
+
+  renderPairs(pairs);
+
+  pairs.forEach(p => {
+    if (p.should_alert) {
+      const entry = { time: ngtTime(), sym: p.symbol.toUpperCase(), spread: p.current_spread, target: p.target_spread, diff: p.percent_diff, dws: p.dws };
+      const key = `${p.symbol}-${p.timestamp}`;
+      if (!alertLog.find(a => a._key === key)) {
+        entry._key = key;
+        alertLog.unshift(entry);
+        if (alertLog.length > 30) alertLog.pop();
+      }
+    }
+  });
+  renderAlertLog();
+}
+
+function toggleFilter() {
+  showAll = !showAll;
+  document.getElementById("toggle-btn").textContent = showAll ? "Warnings only" : "Show all";
+  if (lastData) renderPairs(lastData.pairs);
+}
+
+function renderPairs(pairs) {
+  const container = document.getElementById("pairs-container");
+  if (!pairs || !pairs.length) {
+    container.innerHTML = `<p class="empty-state">No data yet — run a monitor cycle first.</p>`;
+    return;
+  }
+  const visible = showAll ? pairs : pairs.filter(p => (p.status || "").toLowerCase() === "warning");
+  document.getElementById("pairs-count-label").textContent = visible.length + " of " + pairs.length;
+  if (!visible.length) {
+    container.innerHTML = `<p class="empty-state empty-state-green"><i class="ti ti-circle-check" style="font-size:15px"></i> All ${pairs.length} pairs healthy</p>`;
+    return;
+  }
+  container.innerHTML = visible.map(p => renderMarketRow(p)).join("");
+}
+
+function renderMarketRow(p) {
+  const isCrit  = p.issues && p.issues.includes("CRITICAL");
+  const isWarn  = (p.status || "").toLowerCase() === "warning";
+  const alerted = p.should_alert;
+  const rowCls  = isCrit ? "crit" : isWarn ? "warn" : "ok";
+  const { base } = symParts(p.symbol);
+  const spread = fmt(p.current_spread, 4);
+  const mid = fmtPrice(p.mid_price);
+  const isSelected = p.symbol === selectedSym;
+
+  let badgesHtml = "";
+  if (alerted) badgesHtml += `<span class="mr-badge crit">Alert fired</span>`;
+  else if (isCrit) badgesHtml += `<span class="mr-badge crit">Critical</span>`;
+  else if (isWarn) badgesHtml += `<span class="mr-badge warn">Warning</span>`;
+  else             badgesHtml += `<span class="mr-badge ok">Healthy</span>`;
+
+  if (p.issues) {
+    const codes = p.issues.split("|").filter(Boolean).map(part => part.split(":")[0]);
+    codes.slice(0, 2).forEach(c => { badgesHtml += `<span class="mr-badge blue">${c}</span>`; });
+    if (codes.length > 2) badgesHtml += `<span class="mr-badge blue">+${codes.length - 2}</span>`;
+  }
+
+  return `<div class="market-row ${rowCls}${isSelected ? " selected" : ""}" onclick="selectMarket('${p.symbol}')">
+    <div class="mr-sym">
+      <div class="mr-sym-name">${base}</div>
+      <div class="mr-sym-base">${p.monitor_only ? "Monitor only" : "Managed"}</div>
+    </div>
+    <div class="mr-price">
+      <div class="mr-price-val">${mid}</div>
+      <div class="mr-price-label">Mid price</div>
+    </div>
+    <div class="mr-spread">
+      <div class="mr-spread-val">${spread}</div>
+      <div class="mr-price-label">Spread</div>
+    </div>
+    <div class="mr-issues">${badgesHtml}</div>
+    <i class="ti ti-chevron-right mr-chevron"></i>
+  </div>`;
+}
+
+// ── Market Detail Panel ───────────────────────────────────────────────────────
+function selectMarket(symbol) {
+  if (selectedSym === symbol) {
+    selectedSym = null;
+    document.getElementById("detail-empty").style.display = "";
+    document.getElementById("detail-content").style.display = "none";
+    if (lastData) renderPairs(lastData.pairs);
+    return;
+  }
+  selectedSym = symbol;
+  if (lastData) {
+    renderPairs(lastData.pairs);
+    const pair = lastData.pairs.find(p => p.symbol === symbol);
+    if (pair) renderDetailPanel(pair);
+  }
+  if (spreadHistoryMap[symbol]) updateChart(symbol);
+}
+
+function renderDetailPanel(p) {
+  const { base } = symParts(p.symbol);
+  const isCrit = p.issues && p.issues.includes("CRITICAL");
+  const isWarn = (p.status || "").toLowerCase() === "warning";
+  const statusBadgeCls = p.should_alert ? "crit" : isCrit ? "crit" : isWarn ? "warn" : "ok";
+  const statusText     = p.should_alert ? "Alert fired" : isCrit ? "Critical" : isWarn ? "Warning" : "Healthy";
+
+  // Parse active issues
+  const activeIssues = {};
+  if (p.issues) {
+    p.issues.split("|").filter(Boolean).forEach(part => {
+      const [id, sev] = part.split(":");
+      activeIssues[id.trim()] = sev ? sev.trim() : "HIGH";
+    });
+  }
+
+  // Build check rows
+  const checks = [
+    {
+      id: "A1", name: "Crossed Book",
+      desc: "Best bid ≥ best ask",
+      severity: "CRITICAL",
+      test: () => activeIssues["A1"] ? "crit" : "pass",
+      passDesc: "Bid < Ask — normal spread",
+    },
+    {
+      id: "A2-Spread", name: "Spread Widening",
+      desc: `Target: ${p.target_spread && p.target_spread !== "N/A" ? p.target_spread + "%" : "N/A"} | Current: ${fmt(p.current_spread, 4)} | Diff: ${fmt(p.percent_diff, 1)}`,
+      severity: "HIGH",
+      test: () => p.monitor_only ? "na" : activeIssues["A2"] ? "warn" : "pass",
+      passDesc: "Spread within tolerance",
+      naDesc: "Monitor-only — no target",
+    },
+    {
+      id: "A2-Depth", name: "Shallow Book",
+      desc: `Ask layers: ${p.ask_layers ?? "—"} | Bid layers: ${p.bid_layers ?? "—"} (min 10)`,
+      severity: "HIGH",
+      test: () => activeIssues["A2-Depth"] || (p.ask_layers != null && p.ask_layers < 10) || (p.bid_layers != null && p.bid_layers < 10) ? "warn" : "pass",
+      passDesc: "Sufficient depth on both sides",
+    },
+    {
+      id: "A3", name: "One-Sided Market",
+      desc: "Either ask or bid side is completely empty",
+      severity: "CRITICAL",
+      test: () => activeIssues["A3"] ? "crit" : "pass",
+      passDesc: "Both sides have orders",
+    },
+    {
+      id: "A4", name: "Thin Mid-Market",
+      desc: "Liquidity within spread band < $5,000",
+      severity: "MEDIUM",
+      test: () => activeIssues["A4"] ? "info" : "pass",
+      passDesc: "Adequate mid-market liquidity",
+    },
+    {
+      id: "STALE", name: "Stale Order Book",
+      desc: "Top-of-book unchanged for 3+ consecutive cycles",
+      severity: "HIGH",
+      test: () => activeIssues["STALE"] ? "warn" : "pass",
+      passDesc: "Order book is updating",
+    },
+    {
+      id: "DWS", name: "Dynamic Weighted Spread",
+      desc: `DWS: ${fmt(p.dws, 4, "")} ${p.dws_poor ? "⚠ above threshold" : "— within range"}`,
+      severity: "HIGH",
+      test: () => p.dws_poor ? "warn" : "pass",
+      passDesc: "DWS within acceptable range",
+    },
+    {
+      id: "DEPTH", name: "Depth Liquidity",
+      desc: `1.25×: ${p.depth_1_25x || p["depth_1.25x"] || "—"} | 1.5×: ${p.depth_1_5x || p["depth_1.5x"] || "—"}`,
+      severity: "INFO",
+      test: () => "info",
+      passDesc: "",
+    },
+  ];
+
+  const checkIcons = { pass: "ti-circle-check", warn: "ti-alert-triangle", crit: "ti-alert-circle", info: "ti-info-circle", na: "ti-minus" };
+
+  const checksHtml = checks.map(c => {
+    const state = c.test();
+    const icon  = checkIcons[state] || "ti-circle";
+    let desc = c.desc;
+    if (state === "pass" && c.passDesc) desc = c.passDesc;
+    if (state === "na"   && c.naDesc)  desc = c.naDesc;
+    const sevLabel = state !== "pass" && state !== "na" ? `<span class="check-sev">${c.severity}</span>` : "";
+    return `<div class="check-row ${state}">
+      <i class="ti ${icon} check-icon"></i>
+      <div class="check-body">
+        <div class="check-name">[${c.id}] ${c.name}</div>
+        <div class="check-desc">${desc}</div>
+      </div>
+      ${sevLabel}
+    </div>`;
+  }).join("");
+
+  document.getElementById("detail-empty").style.display = "none";
+  document.getElementById("detail-content").style.display = "";
+  document.getElementById("detail-content").innerHTML = `
+    <div class="detail-header">
+      <div>
+        <div class="detail-sym">${base}</div>
+        <div class="detail-time">${p.timestamp ? p.timestamp.split(" ").pop() : ngtTime()} WAT</div>
+      </div>
+      <span class="mr-badge ${statusBadgeCls}" style="font-size:12px;padding:4px 12px">${statusText}</span>
+    </div>
+    <div class="detail-metrics">
+      <div class="dm"><div class="k">Mid price</div><div class="v muted">${fmtPrice(p.mid_price)}</div></div>
+      <div class="dm"><div class="k">Spread</div><div class="v ${(p.status||"").toLowerCase() === "warning" ? "warn" : "ok"}">${fmt(p.current_spread, 4)}</div></div>
+      <div class="dm"><div class="k">Target spread</div><div class="v muted">${p.target_spread && p.target_spread !== "N/A" ? p.target_spread + "%" : "N/A"}</div></div>
+      <div class="dm"><div class="k">Spread diff</div><div class="v ${parseFloat(p.percent_diff) > 0 ? "warn" : "ok"}">${fmt(p.percent_diff, 1)}</div></div>
+    </div>
+    <div class="detail-alerts-title">Alert checks</div>
+    <div class="alert-checks">${checksHtml}</div>
+  `;
+}
+
+// ── Alert Log ─────────────────────────────────────────────────────────────────
+function renderAlertLog() {
+  const el = document.getElementById("alert-log-container");
+  if (!alertLog.length) {
+    el.innerHTML = `<p class="empty-state">No alerts this session.</p>`;
+    return;
+  }
+  el.innerHTML = alertLog.map(a => `
+    <div class="log-row">
+      <div class="log-dot"></div>
+      <div class="log-time">${a.time}</div>
+      <div class="log-msg">
+        <b>${a.sym}</b> — spread ${a.spread != null ? parseFloat(a.spread).toFixed(4) + "%" : "—"}
+        (target ${a.target !== "N/A" ? a.target + "%" : "N/A"},
+        diff ${a.diff != null ? (parseFloat(a.diff) > 0 ? "+" : "") + parseFloat(a.diff).toFixed(1) + "%" : "—"})
+        &nbsp;·&nbsp; DWS ${a.dws != null ? parseFloat(a.dws).toFixed(4) : "—"}
+      </div>
+    </div>`).join("");
+}
+
+// ── Chart ─────────────────────────────────────────────────────────────────────
+function initChart() {
+  const ctx = document.getElementById("spreadChart").getContext("2d");
+  spreadChart = new Chart(ctx, {
+    type: "line",
+    data: { labels: [], datasets: [
+      { label: "Spread %", data: [], borderColor: "#7c3aed", backgroundColor: "rgba(124,58,237,0.07)", pointRadius: 3, pointBackgroundColor: "#7c3aed", fill: true, tension: 0.3, borderWidth: 1.5 },
+      { label: "Target",   data: [], borderColor: "rgba(239,68,68,.5)", borderDash: [4, 3], pointRadius: 0, borderWidth: 1, fill: false, tension: 0 },
+    ]},
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
+      scales: {
+        x: { display: true, ticks: { font: { size: 10 }, color: "#9ca3af", maxRotation: 0 }, grid: { color: "rgba(0,0,0,0.04)" } },
+        y: { grid: { color: "rgba(0,0,0,0.05)" }, ticks: { font: { size: 11 }, color: "#9ca3af", callback: v => v.toFixed(3) + "%" } },
+      },
+      animation: { duration: 300 },
+    },
+  });
+}
+
+function rebuildChartSelector(statusData) {
+  if (!statusData || !statusData.pairs) return;
+  const container = document.getElementById("chart-selector");
+  const syms = statusData.pairs.map(p => p.symbol).filter(s => spreadHistoryMap[s] && spreadHistoryMap[s].length > 1);
+  const active = selectedSym && syms.includes(selectedSym) ? selectedSym : syms[0];
+  container.innerHTML = syms.slice(0, 6).map(s => {
+    const { base } = symParts(s);
+    return `<div class="chart-pill${s === active ? " active" : ""}" onclick="selectChartSym('${s}')">${base}</div>`;
+  }).join("");
+}
+
+function selectChartSym(sym) {
+  document.querySelectorAll(".chart-pill").forEach(el => {
+    el.classList.toggle("active", el.textContent === symParts(sym).base);
+  });
+  updateChart(sym);
+}
+
+function updateChart(sym) {
+  if (!spreadChart || !spreadHistoryMap[sym]) return;
+  const history = spreadHistoryMap[sym];
+  const target  = targetMap[sym] ?? null;
+  document.getElementById("chart-title").textContent = `${sym.toUpperCase()} — spread % last ${history.length} cycles`;
+  spreadChart.data.labels = history.map((_, i) => `C${i + 1}`);
+  spreadChart.data.datasets[0].data = history;
+  spreadChart.data.datasets[1].data = target !== null ? history.map(() => target) : [];
+  spreadChart.update();
+}
+
+// ── Boot ──────────────────────────────────────────────────────────────────────
+initChart();
+fetchAndRender();
+setInterval(fetchAndRender, 60_000);
+</script>
+</body>
+</html>
