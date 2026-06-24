@@ -39,7 +39,8 @@ def _sanitize(obj):
     return obj
 
 # ── Config ────────────────────────────────────────────────────────────────────
-DATA_DIR    = Path("data")
+# DATA_DIR    = Path("data")
+DATA_DIR = Path("/app/data")
 LATEST_CSV  = DATA_DIR / "latest.csv"
 STATE_FILE  = DATA_DIR / "health_state.json"
 STATIC_DIR  = Path(".")          # dashboard.html lives next to api.py
