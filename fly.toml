@@ -1,5 +1,5 @@
 app = "quidax-monitor"
-primary_region = "jnb"  # Johannesburg — closest to Nigeria
+region = "jnb"  
 
 [build]
   builder = "paketobuildpacks/builder:base"
