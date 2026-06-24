@@ -121,8 +121,8 @@ MIN_ABS_SPREAD_DIFF_PCT     = 0.05   # percentage-point floor; ignore relative
 MAX_CONCURRENT_PAIRS        = 10     # asyncio semaphore limit
 
 # ── Persistence ───────────────────────────────────────────────────────────────
-# DATA_DIR   = "data"
-DATA_DIR = "/app/data"
+DATA_DIR   = "data"
+# DATA_DIR = "/app/data"
 STATE_FILE = os.path.join(DATA_DIR, "health_state.json")
 
 # ══════════════════════════════════════════════════════════════════════════════
