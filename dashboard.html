@@ -1,443 +1,3 @@
-<!-- <!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Quidax Market Monitor</title>
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@2.47.0/tabler-icons.min.css" />
-<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
-<style>
-  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-  :root {
-    --bg0: #ffffff; --bg1: #f5f5f3; --bg2: #ebebea;
-    --text0: #1a1a18; --text1: #5f5e5a; --text2: #888780;
-    --border: rgba(0,0,0,0.12); --border2: rgba(0,0,0,0.2);
-    --green: #1D9E75; --green-bg: #E1F5EE; --green-text: #0F6E56;
-    --amber: #BA7517; --amber-bg: #FAEEDA; --amber-text: #854F0B;
-    --red: #E24B4A; --red-bg: #FCEBEB; --red-text: #A32D2D;
-    --blue: #378ADD; --blue-bg: #E6F1FB; --blue-text: #185FA5;
-    --radius-md: 8px; --radius-lg: 12px;
-    --font: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  }
-  @media (prefers-color-scheme: dark) {
-    :root {
-      --bg0: #1e1e1c; --bg1: #282826; --bg2: #323230;
-      --text0: #e8e6df; --text1: #a8a69e; --text2: #6e6c66;
-      --border: rgba(255,255,255,0.1); --border2: rgba(255,255,255,0.18);
-      --green-bg: #04342C; --green-text: #9FE1CB;
-      --amber-bg: #412402; --amber-text: #FAC775;
-      --red-bg: #501313; --red-text: #F7C1C1;
-      --blue-bg: #042C53; --blue-text: #B5D4F4;
-    }
-  }
-  body { font-family: var(--font); background: var(--bg1); color: var(--text0); font-size: 14px; min-height: 100vh; }
-  .shell { max-width: 960px; margin: 0 auto; padding: 20px 16px 40px; }
-  .top-bar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; flex-wrap: wrap; gap: 8px; }
-  .top-bar h1 { font-size: 16px; font-weight: 500; display: flex; align-items: center; gap: 8px; }
-  .meta { font-size: 12px; color: var(--text2); display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
-  .pulse { width: 8px; height: 8px; border-radius: 50%; background: var(--green); display: inline-block; animation: blink 2s infinite; }
-  .pulse.stale { background: var(--amber); }
-  @keyframes blink { 0%,100%{opacity:1} 50%{opacity:.25} }
-  .metric-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px; margin-bottom: 20px; }
-  .metric { background: var(--bg0); border: 0.5px solid var(--border); border-radius: var(--radius-md); padding: 12px 14px; }
-  .metric .label { font-size: 11px; color: var(--text2); margin-bottom: 4px; }
-  .metric .value { font-size: 22px; font-weight: 500; }
-  .metric .value.ok  { color: var(--green); }
-  .metric .value.warn{ color: var(--amber); }
-  .metric .value.crit{ color: var(--red);   }
-  .section-label { font-size: 11px; color: var(--text2); text-transform: uppercase; letter-spacing: .06em; margin: 20px 0 8px; }
-  .pair-card { background: var(--bg0); border: 0.5px solid var(--border); border-radius: var(--radius-lg); padding: 14px 16px; margin-bottom: 10px; }
-  .pair-card.warn-card { border-left: 3px solid var(--amber); border-radius: 0 var(--radius-lg) var(--radius-lg) 0; }
-  .pair-card.crit-card { border-left: 3px solid var(--red);   border-radius: 0 var(--radius-lg) var(--radius-lg) 0; }
-  .pair-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; flex-wrap: wrap; gap: 6px; }
-  .pair-name { font-size: 15px; font-weight: 500; display: flex; align-items: center; gap: 6px; }
-  .badge { font-size: 11px; padding: 2px 9px; border-radius: var(--radius-md); font-weight: 500; }
-  .badge.ok   { background: var(--green-bg); color: var(--green-text); }
-  .badge.warn { background: var(--amber-bg); color: var(--amber-text); }
-  .badge.crit { background: var(--red-bg);   color: var(--red-text);   }
-  .pair-metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(100px, 1fr)); gap: 10px; }
-  .pm .k { font-size: 11px; color: var(--text2); margin-bottom: 2px; }
-  .pm .v { font-size: 13px; font-weight: 500; }
-  .pm .v.warn { color: var(--amber); }
-  .pm .v.crit { color: var(--red); }
-  .issues { margin-top: 10px; border-top: 0.5px solid var(--border); padding-top: 8px; display: flex; flex-direction: column; gap: 5px; }
-  .issue-row { font-size: 12px; display: flex; align-items: flex-start; gap: 6px; line-height: 1.5; }
-  .issue-row .tag { font-size: 10px; padding: 1px 6px; border-radius: 4px; font-weight: 500; white-space: nowrap; flex-shrink: 0; margin-top: 2px; }
-  .tag.HIGH     { background: var(--amber-bg); color: var(--amber-text); }
-  .tag.CRITICAL { background: var(--red-bg);   color: var(--red-text);   }
-  .tag.MEDIUM   { background: var(--blue-bg);  color: var(--blue-text);  }
-  .chart-card { background: var(--bg0); border: 0.5px solid var(--border); border-radius: var(--radius-lg); padding: 14px 16px; margin-bottom: 10px; }
-  .chart-title { font-size: 13px; font-weight: 500; margin-bottom: 10px; }
-  .legend { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 8px; font-size: 11px; color: var(--text2); }
-  .legend span { display: flex; align-items: center; gap: 4px; }
-  .swatch { width: 10px; height: 10px; border-radius: 2px; flex-shrink: 0; }
-  .log-row { display: flex; gap: 10px; padding: 8px 0; border-bottom: 0.5px solid var(--border); align-items: flex-start; font-size: 12px; }
-  .log-row:last-child { border-bottom: none; }
-  .log-time { color: var(--text2); white-space: nowrap; min-width: 60px; }
-  .log-msg { color: var(--text0); line-height: 1.5; }
-  .empty-state { font-size: 13px; color: var(--text2); padding: 14px 0; }
-  .footer { margin-top: 24px; padding-top: 12px; border-top: 0.5px solid var(--border); font-size: 11px; color: var(--text2); display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; }
-  .btn { font-size: 12px; cursor: pointer; background: none; border: 0.5px solid var(--border2); border-radius: var(--radius-md); padding: 5px 12px; color: var(--text1); font-family: var(--font); }
-  .btn:hover { background: var(--bg2); }
-  .error-banner { background: var(--red-bg); color: var(--red-text); border: 0.5px solid var(--red); border-radius: var(--radius-md); padding: 10px 14px; font-size: 13px; margin-bottom: 16px; display: none; }
-</style>
-</head>
-<body>
-<div class="shell">
-  <div class="top-bar">
-    <h1>
-      <i class="ti ti-activity-heartbeat" style="font-size:20px" aria-hidden="true"></i>
-      Quidax Market Monitor
-    </h1>
-    <div class="meta">
-      <span><span class="pulse" id="pulse"></span> Live</span>
-      <span id="clock">—</span>
-      <span>Refreshes every <b>60s</b></span>
-    </div>
-  </div>
-
-  <div class="error-banner" id="error-banner">
-    <i class="ti ti-alert-circle" aria-hidden="true"></i>
-    <span id="error-text">Could not reach API.</span>
-  </div>
-
-  <div class="metric-row">
-    <div class="metric"><div class="label">Pairs monitored</div><div class="value" id="m-pairs">—</div></div>
-    <div class="metric"><div class="label">Healthy</div><div class="value ok" id="m-healthy">—</div></div>
-    <div class="metric"><div class="label">Warnings</div><div class="value warn" id="m-warn">—</div></div>
-    <div class="metric"><div class="label">Alerts fired</div><div class="value crit" id="m-crit">—</div></div>
-    <div class="metric"><div class="label">Last updated</div><div class="value" id="m-ts" style="font-size:13px;line-height:1.3">—</div></div>
-  </div>
-
-  <div class="section-label" style="display:flex;align-items:center;justify-content:space-between;">
-    <span>Pairs — <span id="pairs-label">warnings only</span></span>
-    <button class="btn" id="toggle-btn" onclick="toggleFilter()" style="font-size:11px;padding:3px 10px;">Show all</button>
-  </div>
-  <div id="pairs-container"><p class="empty-state">Loading…</p></div>
-
-  <div class="section-label">Spread % — last 30 cycles (today)</div>
-  <div class="chart-card">
-    <div class="chart-title" id="chart-title">Spread history</div>
-    <div class="legend">
-      <span><span class="swatch" style="background:#378ADD"></span>Spread %</span>
-      <span><span class="swatch" style="background:#E24B4A;opacity:.55"></span>Target</span>
-    </div>
-    <div style="position:relative;height:200px">
-      <canvas id="spreadChart" role="img" aria-label="Line chart of spread percentage over the last 30 monitoring cycles.">Spread history.</canvas>
-    </div>
-  </div>
-
-  <div class="section-label">Alert log</div>
-  <div class="chart-card" id="alert-log-container"><p class="empty-state">No alerts this session.</p></div>
-
-  <div class="footer">
-    <span>Quidax OHM — API mode &nbsp;|&nbsp; <span id="api-url">GET /api/status</span></span>
-    <button class="btn" onclick="fetchAndRender()">
-      <i class="ti ti-refresh" aria-hidden="true"></i> Refresh now
-    </button>
-  </div>
-</div>
-
-<script>
-const API_BASE = "";  // same origin; change to "http://localhost:8000" for local dev
-let spreadChart;
-let spreadHistoryMap = {};   // symbol → [spread values]
-let targetMap = {};          // symbol → target spread
-let alertLog = [];
-let lastData = null;
-let showAll = false;
-
-function toggleFilter() {
-  showAll = !showAll;
-  document.getElementById("toggle-btn").textContent  = showAll ? "Warnings only" : "Show all";
-  document.getElementById("pairs-label").textContent = showAll ? "all pairs" : "warnings only";
-  if (lastData) renderPairs(lastData.pairs);
-}
-
-// ── Clock ─────────────────────────────────────────────────────────────────────
-function ngtTime() {
-  return new Date().toLocaleTimeString("en-GB", { timeZone: "Africa/Lagos", hour12: false });
-}
-setInterval(() => document.getElementById("clock").textContent = ngtTime() + " NGT", 1000);
-document.getElementById("clock").textContent = ngtTime() + " NGT";
-
-// ── Fetch ─────────────────────────────────────────────────────────────────────
-async function fetchAndRender() {
-  const pulse = document.getElementById("pulse");
-  const banner = document.getElementById("error-banner");
-  try {
-    const res = await fetch(`${API_BASE}/api/status`);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const data = await res.json();
-    lastData = data;
-    banner.style.display = "none";
-    pulse.classList.remove("stale");
-    renderDashboard(data);
-    // Also try to fetch history for the chart
-    fetchHistory(data);
-  } catch (err) {
-    pulse.classList.add("stale");
-    banner.style.display = "block";
-    document.getElementById("error-text").textContent =
-      `Could not reach ${API_BASE}/api/status — ${err.message}. Is uvicorn running?`;
-  }
-}
-
-async function fetchHistory(statusData) {
-  try {
-    const res = await fetch(`${API_BASE}/api/history`);
-    if (!res.ok) return;
-    const data = await res.json();
-    buildSpreadHistory(data.rows, statusData);
-  } catch (_) {}
-}
-
-// ── History → chart data ──────────────────────────────────────────────────────
-function buildSpreadHistory(rows, statusData) {
-  // rows is the daily_log CSV: columns like STATUS (CHECK 1), TIME (CHECK 1) ...
-  // We need a different approach: use the current pairs as the source and
-  // reconstruct spread cols from STATUS columns (they contain status text, not spread).
-  // Since daily_log doesn't store spread values per-check, we fall back to
-  // using current pairs for the chart with live data appended each refresh.
-
-  // If we have current pair data, push to in-memory history
-  if (statusData && statusData.pairs) {
-    statusData.pairs.forEach(pair => {
-      const sym = pair.symbol;
-      if (!spreadHistoryMap[sym]) spreadHistoryMap[sym] = [];
-      if (pair.current_spread !== null && pair.current_spread !== undefined) {
-        spreadHistoryMap[sym].push(parseFloat(pair.current_spread));
-        if (spreadHistoryMap[sym].length > 30) spreadHistoryMap[sym].shift();
-      }
-      if (pair.target_spread && pair.target_spread !== "N/A") {
-        targetMap[sym] = parseFloat(pair.target_spread);
-      }
-    });
-  }
-  updateChart(statusData);
-}
-
-// ── Render dashboard ──────────────────────────────────────────────────────────
-function renderDashboard(data) {
-  const { summary, pairs } = data;
-
-  document.getElementById("m-pairs").textContent   = summary.total_pairs ?? "—";
-  document.getElementById("m-healthy").textContent = summary.healthy ?? "—";
-  document.getElementById("m-warn").textContent    = summary.warnings ?? "—";
-  document.getElementById("m-crit").textContent    = summary.alerts_fired ?? "—";
-  document.getElementById("m-ts").textContent      = summary.last_updated
-    ? summary.last_updated.split(" ").pop()   // show time only
-    : "—";
-
-  renderPairs(pairs);
-
-  // Build alert log from pairs that have should_alert=true
-  pairs.forEach(p => {
-    if (p.should_alert) {
-      const entry = {
-        time: ngtTime(),
-        sym: p.symbol.toUpperCase(),
-        spread: p.current_spread,
-        target: p.target_spread,
-        diff: p.percent_diff,
-        dws: p.dws,
-      };
-      // Avoid duplicate entries in same session
-      const key = `${p.symbol}-${p.timestamp}`;
-      if (!alertLog.find(a => a._key === key)) {
-        entry._key = key;
-        alertLog.unshift(entry);
-        if (alertLog.length > 30) alertLog.pop();
-      }
-    }
-  });
-  renderAlertLog();
-}
-
-function renderPairs(pairs) {
-  const container = document.getElementById("pairs-container");
-  if (!pairs || !pairs.length) {
-    container.innerHTML = `<p class="empty-state">No data in latest.csv yet — run a monitor cycle first.</p>`;
-    return;
-  }
-  const visible = showAll
-    ? pairs
-    : pairs.filter(p => (p.status || "").toLowerCase() === "warning");
-  if (!visible.length) {
-    container.innerHTML = `<p class="empty-state" style="color:var(--green)"><i class="ti ti-circle-check" aria-hidden="true" style="font-size:15px;vertical-align:-2px;margin-right:4px"></i>All ${pairs.length} pair${pairs.length !== 1 ? "s" : ""} healthy.</p>`;
-    return;
-  }
-  container.innerHTML = visible.map(p => renderPairCard(p)).join("");
-}
-
-function renderPairCard(p) {
-  const isWarn  = (p.status || "").toLowerCase() === "warning";
-  const isCrit  = p.issues && p.issues.includes("CRITICAL");
-  const alerted = p.should_alert;
-
-  let cardCls = "pair-card";
-  if (isCrit)       cardCls += " crit-card";
-  else if (isWarn)  cardCls += " warn-card";
-
-  let badgeCls  = "badge ok";
-  let badgeText = "Healthy";
-  if (alerted)     { badgeCls = "badge crit"; badgeText = "Alert fired"; }
-  else if (isWarn) { badgeCls = "badge warn"; badgeText = "Warning"; }
-
-  const spreadCls = isWarn ? "v warn" : "v";
-  const dwsCls    = p.dws_poor ? "v warn" : "v";
-
-  let issuesHtml = "";
-  if (p.issues) {
-    const parts = p.issues.split("|").filter(Boolean);
-    if (parts.length) {
-      issuesHtml = `<div class="issues">` +
-        parts.map(part => {
-          const [id, sev] = part.split(":");
-          const sevCls = sev === "CRITICAL" ? "CRITICAL" : sev === "HIGH" ? "HIGH" : "MEDIUM";
-          return `<div class="issue-row"><span class="tag ${sevCls}">[${id}] ${sev}</span><span>${part}</span></div>`;
-        }).join("") + `</div>`;
-    }
-  }
-
-  const sym    = p.symbol ? p.symbol.toUpperCase() : "—";
-  const base   = sym.length >= 6 ? sym.slice(0, -3) + "/" + sym.slice(-3) : sym;
-  const spread = p.current_spread != null ? parseFloat(p.current_spread).toFixed(4) + "%" : "—";
-  const target = p.target_spread && p.target_spread !== "N/A" ? p.target_spread + "%" : "Monitor only";
-  const diff   = p.percent_diff != null && p.percent_diff !== "N/A"
-    ? (parseFloat(p.percent_diff) > 0 ? "+" : "") + parseFloat(p.percent_diff).toFixed(1) + "%"
-    : "—";
-  const mid    = p.mid_price != null ? Number(p.mid_price).toLocaleString(undefined, {maximumFractionDigits: 2}) : "—";
-  const dws    = p.dws != null ? parseFloat(p.dws).toFixed(4) : "—";
-  const askL   = p.ask_layers ?? "—";
-  const bidL   = p.bid_layers ?? "—";
-  const d25    = p.depth_1_25x || p["depth_1.25x"] || "—";
-  const d50    = p.depth_1_5x  || p["depth_1.5x"]  || "—";
-
-  return `
-  <div class="${cardCls}">
-    <div class="pair-header">
-      <div class="pair-name">
-        <i class="ti ti-currency-bitcoin" aria-hidden="true" style="font-size:16px"></i>
-        ${base}
-      </div>
-      <span class="${badgeCls}">${badgeText}</span>
-    </div>
-    <div class="pair-metrics">
-      <div class="pm"><div class="k">Spread</div><div class="${spreadCls}">${spread}</div></div>
-      <div class="pm"><div class="k">Target</div><div class="v">${target}</div></div>
-      <div class="pm"><div class="k">Diff</div><div class="${isWarn ? 'v warn' : 'v'}">${diff}</div></div>
-      <div class="pm"><div class="k">Mid price</div><div class="v">${mid}</div></div>
-      <div class="pm"><div class="k">DWS</div><div class="${dwsCls}">${dws}${p.dws_poor ? " ⚠" : ""}</div></div>
-      <div class="pm"><div class="k">Ask layers</div><div class="v">${askL}</div></div>
-      <div class="pm"><div class="k">Bid layers</div><div class="v">${bidL}</div></div>
-      <div class="pm"><div class="k">Depth 1.25×</div><div class="v">${d25}</div></div>
-      <div class="pm"><div class="k">Depth 1.5×</div><div class="v">${d50}</div></div>
-    </div>
-    ${issuesHtml}
-  </div>`;
-}
-
-function renderAlertLog() {
-  const el = document.getElementById("alert-log-container");
-  if (!alertLog.length) {
-    el.innerHTML = `<p class="empty-state">No alerts this session.</p>`;
-    return;
-  }
-  el.innerHTML = alertLog.map(a => `
-    <div class="log-row">
-      <span class="log-time">${a.time}</span>
-      <span class="log-msg">
-        <i class="ti ti-alert-triangle" aria-hidden="true" style="font-size:13px;vertical-align:-1px;margin-right:4px;color:var(--amber)"></i>
-        <b>${a.sym}</b> — spread ${a.spread != null ? parseFloat(a.spread).toFixed(4) + "%" : "—"}
-        (target ${a.target !== "N/A" ? a.target + "%" : "N/A"},
-        diff ${a.diff != null ? (parseFloat(a.diff) > 0 ? "+" : "") + parseFloat(a.diff).toFixed(1) + "%" : "—"})
-        &nbsp;|&nbsp; DWS ${a.dws != null ? parseFloat(a.dws).toFixed(4) : "—"}
-      </span>
-    </div>`).join("");
-}
-
-// ── Chart ─────────────────────────────────────────────────────────────────────
-function initChart() {
-  const ctx = document.getElementById("spreadChart").getContext("2d");
-  spreadChart = new Chart(ctx, {
-    type: "line",
-    data: {
-      labels: [],
-      datasets: [
-        {
-          label: "Spread %",
-          data: [],
-          borderColor: "#378ADD",
-          backgroundColor: "rgba(55,138,221,0.08)",
-          pointRadius: 3,
-          pointBackgroundColor: "#378ADD",
-          fill: true,
-          tension: 0.3,
-          borderWidth: 1.5,
-        },
-        {
-          label: "Target",
-          data: [],
-          borderColor: "rgba(226,75,74,0.5)",
-          borderDash: [4, 3],
-          pointRadius: 0,
-          borderWidth: 1,
-          fill: false,
-          tension: 0,
-        },
-      ],
-    },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      plugins: { legend: { display: false } },
-      scales: {
-        x: { display: true, ticks: { font: { size: 10 }, color: "#888780", maxRotation: 0 } },
-        y: {
-          grid: { color: "rgba(128,128,128,0.1)" },
-          ticks: {
-            font: { size: 11 }, color: "#888780",
-            callback: v => v.toFixed(3) + "%",
-          },
-        },
-      },
-      animation: { duration: 300 },
-    },
-  });
-}
-
-function updateChart(statusData) {
-  if (!spreadChart) return;
-
-  // Pick the first non-monitor-only pair with history
-  const sym = statusData && statusData.pairs
-    ? (statusData.pairs.find(p => !p.monitor_only && spreadHistoryMap[p.symbol]) || statusData.pairs[0] || {}).symbol
-    : Object.keys(spreadHistoryMap)[0];
-
-  if (!sym || !spreadHistoryMap[sym]) return;
-
-  const history = spreadHistoryMap[sym];
-  const target  = targetMap[sym] ?? null;
-  const labels  = history.map((_, i) => `C${i + 1}`);
-
-  document.getElementById("chart-title").textContent =
-    `${sym.toUpperCase()} spread vs target`;
-
-  spreadChart.data.labels = labels;
-  spreadChart.data.datasets[0].data = history;
-  spreadChart.data.datasets[1].data = target !== null ? history.map(() => target) : [];
-  spreadChart.update();
-}
-
-// ── Auto-refresh ──────────────────────────────────────────────────────────────
-initChart();
-fetchAndRender();
-setInterval(fetchAndRender, 60_000);
-</script>
-</body>
-</html> -->
-
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -789,6 +349,91 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
   .topbar { padding: 0 16px; }
 }
 @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+
+/* ─── Config panel ──────────────────────────────── */
+.config-overlay {
+  display: none;
+  position: fixed; inset: 0; z-index: 200;
+  background: rgba(0,0,0,0.4);
+  align-items: flex-start;
+  justify-content: flex-end;
+}
+.config-overlay.open { display: flex; }
+.config-drawer {
+  background: var(--bg-card);
+  width: 640px; max-width: 96vw;
+  height: 100vh;
+  overflow-y: auto;
+  box-shadow: -4px 0 24px rgba(0,0,0,0.15);
+  display: flex; flex-direction: column;
+}
+.config-drawer-header {
+  padding: 20px 24px 16px;
+  border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; justify-content: space-between;
+  position: sticky; top: 0; background: var(--bg-card); z-index: 1;
+}
+.config-drawer-title { font-size: 15px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+.config-drawer-body { padding: 20px 24px; flex: 1; }
+.config-drawer-footer {
+  padding: 16px 24px;
+  border-top: 1px solid var(--border);
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  position: sticky; bottom: 0; background: var(--bg-card);
+}
+.config-section { margin-bottom: 28px; }
+.config-section-title {
+  font-size: 12px; font-weight: 600; color: var(--text-secondary);
+  text-transform: uppercase; letter-spacing: .05em;
+  margin-bottom: 14px; padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; gap: 7px;
+}
+.config-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.config-field { display: flex; flex-direction: column; gap: 5px; }
+.config-field label { font-size: 12px; color: var(--text-secondary); font-weight: 500; }
+.config-field input[type=number], .config-field input[type=text] {
+  border: 1px solid var(--border-strong); border-radius: var(--radius-sm);
+  padding: 7px 10px; font-size: 13px; font-family: var(--mono);
+  color: var(--text-primary); background: var(--bg-base); width: 100%;
+  transition: border-color .15s;
+}
+.config-field input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px rgba(124,58,237,.12); }
+.config-field .hint { font-size: 11px; color: var(--text-muted); line-height: 1.4; }
+
+.pairs-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.pairs-table th {
+  text-align: left; padding: 6px 8px; font-size: 11px; font-weight: 600;
+  color: var(--text-muted); text-transform: uppercase; letter-spacing: .04em;
+  border-bottom: 1px solid var(--border);
+}
+.pairs-table td { padding: 4px 6px; }
+.pairs-table tr:hover td { background: var(--bg-base); }
+.pairs-table input[type=text], .pairs-table input[type=number] {
+  border: 1px solid transparent; border-radius: 5px;
+  padding: 4px 7px; font-size: 12px; font-family: var(--mono);
+  color: var(--text-primary); background: transparent; width: 100%;
+  transition: border-color .12s;
+}
+.pairs-table input:focus { outline: none; border-color: var(--accent); background: var(--bg-card); box-shadow: 0 0 0 2px rgba(124,58,237,.1); }
+.pairs-table .del-btn {
+  background: none; border: none; cursor: pointer; color: var(--text-muted);
+  font-size: 16px; padding: 2px 6px; border-radius: 4px; line-height: 1;
+  transition: color .12s, background .12s;
+}
+.pairs-table .del-btn:hover { color: var(--red); background: var(--red-bg); }
+.add-pair-row { display: flex; gap: 8px; margin-top: 10px; align-items: center; }
+.add-pair-row input { flex: 1; }
+
+.config-toast {
+  position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
+  background: var(--green); color: #fff; font-size: 13px; font-weight: 500;
+  padding: 10px 20px; border-radius: var(--radius); z-index: 9999;
+  box-shadow: 0 4px 16px rgba(0,0,0,.18);
+  opacity: 0; transition: opacity .3s; pointer-events: none;
+}
+.config-toast.show { opacity: 1; }
+.config-toast.error-toast { background: var(--red); }
 </style>
 </head>
 <body>
@@ -835,6 +480,12 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
     <div class="nav-item">
       <i class="ti ti-flame"></i>
       <span>Volume spikes</span>
+    </div>
+
+    <div class="nav-section-label" style="margin-top:8px">Settings</div>
+    <div class="nav-item" onclick="toggleConfigPanel()">
+      <i class="ti ti-adjustments-horizontal"></i>
+      <span>Configuration</span>
     </div>
   </nav>
 
@@ -958,6 +609,158 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
   </div>
 </div>
 
+<!-- ═══ Config drawer ═══════════════════════════════════════════════════════ -->
+<div class="config-overlay" id="config-overlay" onclick="handleOverlayClick(event)">
+  <div class="config-drawer" id="config-drawer">
+    <div class="config-drawer-header">
+      <div class="config-drawer-title">
+        <i class="ti ti-adjustments-horizontal" style="font-size:18px;color:var(--accent)"></i>
+        Monitor configuration
+      </div>
+      <button class="btn" onclick="toggleConfigPanel()" style="padding:5px 10px">
+        <i class="ti ti-x"></i>
+      </button>
+    </div>
+
+    <div class="config-drawer-body">
+
+      <!-- Timing -->
+      <div class="config-section">
+        <div class="config-section-title">
+          <i class="ti ti-clock" style="font-size:14px"></i>
+          Timing
+        </div>
+        <div class="config-grid">
+          <div class="config-field">
+            <label>Alert delay (minutes)</label>
+            <input type="number" id="cfg-anomaly-alert-after" min="1" step="1" />
+            <span class="hint">How long an anomaly must persist before firing a Telegram alert.</span>
+          </div>
+          <div class="config-field">
+            <label>Alert cooldown (minutes)</label>
+            <input type="number" id="cfg-alert-cooldown" min="1" step="1" />
+            <span class="hint">Minimum gap between repeat alerts for the same pair.</span>
+          </div>
+          <div class="config-field">
+            <label>Cycle interval (seconds)</label>
+            <input type="number" id="cfg-cycle-sleep" min="10" step="5" />
+            <span class="hint">Sleep time between full scan cycles.</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Order book thresholds -->
+      <div class="config-section">
+        <div class="config-section-title">
+          <i class="ti ti-book" style="font-size:14px"></i>
+          Order book thresholds
+        </div>
+        <div class="config-grid">
+          <div class="config-field">
+            <label>Min order book layers</label>
+            <input type="number" id="cfg-min-ob-layers" min="1" step="1" />
+            <span class="hint">Fewer layers on either side triggers a shallow book warning.</span>
+          </div>
+          <div class="config-field">
+            <label>Thin depth threshold ($)</label>
+            <input type="number" id="cfg-thin-depth" min="0" step="100" />
+            <span class="hint">USD-equiv total depth within spread band below which A4 fires.</span>
+          </div>
+          <div class="config-field">
+            <label>Stale OB cycles</label>
+            <input type="number" id="cfg-stale-ob-cycles" min="1" step="1" />
+            <span class="hint">Consecutive cycles with identical top-of-book before stale alert.</span>
+          </div>
+          <div class="config-field">
+            <label>Mid-price alert threshold (%)</label>
+            <input type="number" id="cfg-mid-price-alert" min="1" step="1" />
+            <span class="hint">% change in mid-price between cycles that triggers a price-move alert.</span>
+          </div>
+          <div class="config-field">
+            <label>DWS poor threshold</label>
+            <input type="number" id="cfg-dws-poor" min="0" step="0.01" />
+            <span class="hint">Dynamic Weighted Spread above this is considered "poor" quality.</span>
+          </div>
+          <div class="config-field">
+            <label>Min abs spread diff (pp)</label>
+            <input type="number" id="cfg-min-abs-spread" min="0" step="0.001" />
+            <span class="hint">Minimum percentage-point spread deviation before A2 triggers. Protects tiny-target pairs.</span>
+          </div>
+          <div class="config-field">
+            <label>Depth limit (levels)</label>
+            <input type="number" id="cfg-depth-limit" min="1" step="1" />
+            <span class="hint">Max order book levels per side fetched from the API.</span>
+          </div>
+          <div class="config-field">
+            <label>Depth imbalance ratio</label>
+            <input type="number" id="cfg-imbalance-ratio" min="1" step="0.1" />
+            <span class="hint">Captured for reference; imbalance above this ratio is recorded.</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- K-line -->
+      <div class="config-section">
+        <div class="config-section-title">
+          <i class="ti ti-chart-candle" style="font-size:14px"></i>
+          K-line / volume
+        </div>
+        <div class="config-grid">
+          <div class="config-field">
+            <label>Candle size (minutes)</label>
+            <input type="number" id="cfg-kline-candle" min="1" step="1" />
+            <span class="hint">Candle period requested from the API (usually 1).</span>
+          </div>
+          <div class="config-field">
+            <label>Lookback window (minutes)</label>
+            <input type="number" id="cfg-kline-lookback" min="1" step="1" />
+            <span class="hint">Rolling window for volume-spike detection. Fetches this many candles.</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Pairs -->
+      <div class="config-section">
+        <div class="config-section-title">
+          <i class="ti ti-currency-bitcoin" style="font-size:14px"></i>
+          Pairs &amp; spread targets
+          <span style="margin-left:auto;font-size:10px;font-weight:400;color:var(--text-muted);text-transform:none;letter-spacing:0" id="pairs-count-cfg">— pairs</span>
+        </div>
+        <table class="pairs-table" id="pairs-cfg-table">
+          <thead>
+            <tr>
+              <th style="width:48%">Symbol</th>
+              <th style="width:34%">Target spread %</th>
+              <th style="width:18%"></th>
+            </tr>
+          </thead>
+          <tbody id="pairs-cfg-tbody"></tbody>
+        </table>
+        <div class="add-pair-row">
+          <input type="text" id="new-pair-sym" placeholder="symbol (e.g. solusdt)" style="font-family:var(--mono);font-size:12px;border:1px solid var(--border-strong);border-radius:6px;padding:6px 10px;background:var(--bg-base);color:var(--text-primary)" />
+          <input type="number" id="new-pair-target" placeholder="target % (blank = monitor only)" min="0" step="0.01" style="font-family:var(--mono);font-size:12px;border:1px solid var(--border-strong);border-radius:6px;padding:6px 10px;background:var(--bg-base);color:var(--text-primary)" />
+          <button class="btn btn-accent" onclick="addPairRow()" style="white-space:nowrap">
+            <i class="ti ti-plus"></i> Add pair
+          </button>
+        </div>
+      </div>
+
+    </div><!-- end body -->
+
+    <div class="config-drawer-footer">
+      <div style="font-size:12px;color:var(--text-muted)" id="cfg-save-status">Changes take effect on the next monitor cycle.</div>
+      <div style="display:flex;gap:8px">
+        <button class="btn" onclick="resetConfigToDefaults()">Reset to defaults</button>
+        <button class="btn btn-accent" onclick="saveConfig()">
+          <i class="ti ti-device-floppy"></i> Save configuration
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="config-toast" id="config-toast"></div>
+
 <script>
 const API_BASE = "";
 let spreadChart;
@@ -972,8 +775,12 @@ let selectedSym = null;
 function ngtTime() {
   return new Date().toLocaleTimeString("en-GB", { timeZone: "Africa/Lagos", hour12: false });
 }
-setInterval(() => document.getElementById("clock").textContent = ngtTime() + " WAT", 1000);
-document.getElementById("clock").textContent = ngtTime() + " WAT";
+setInterval(() => {
+  const clockEl = document.getElementById("clock");
+  if (clockEl) clockEl.textContent = ngtTime() + " WAT";
+}, 1000);
+const clockEl = document.getElementById("clock");
+if (clockEl) clockEl.textContent = ngtTime() + " WAT";
 
 function scrollToSection(id) {
   const el = document.getElementById(id);
@@ -990,8 +797,13 @@ function fmtPrice(val) {
 function symParts(symbol) {
   if (!symbol) return { base: "—", quote: "" };
   const s = symbol.toUpperCase();
-  const display = s.length >= 6 ? s.slice(0, -3) + "/" + s.slice(-3) : s;
-  return { base: display, raw: s };
+  const l = s.toLowerCase();
+  let base, quote;
+  if (l.endsWith("usdt"))     { base = s.slice(0, -4); quote = "USDT"; }
+  else if (l.endsWith("ngn")) { base = s.slice(0, -3); quote = "NGN";  }
+  else if (l.endsWith("ghs")) { base = s.slice(0, -3); quote = "GHS";  }
+  else                         { base = s.slice(0, -3); quote = s.slice(-3); }
+  return { base: base + "/" + quote, raw: s };
 }
 
 // ── Fetch ─────────────────────────────────────────────────────────────────────
@@ -1300,7 +1112,10 @@ function renderAlertLog() {
 
 // ── Chart ─────────────────────────────────────────────────────────────────────
 function initChart() {
-  const ctx = document.getElementById("spreadChart").getContext("2d");
+  const canvas = document.getElementById("spreadChart");
+  if (!canvas) return;
+  const ctx = canvas.getContext("2d");
+
   spreadChart = new Chart(ctx, {
     type: "line",
     data: { labels: [], datasets: [
@@ -1327,14 +1142,22 @@ function rebuildChartSelector(statusData) {
   const active = selectedSym && syms.includes(selectedSym) ? selectedSym : syms[0];
   container.innerHTML = syms.slice(0, 6).map(s => {
     const { base } = symParts(s);
-    return `<div class="chart-pill${s === active ? " active" : ""}" onclick="selectChartSym('${s}')">${base}</div>`;
+    return `<div class="chart-pill${s === active ? " active" : ""}" data-symbol="${s}" onclick="selectChartSym('${s}')">${base}</div>`;
   }).join("");
 }
 
 function selectChartSym(sym) {
   document.querySelectorAll(".chart-pill").forEach(el => {
-    el.classList.toggle("active", el.textContent === symParts(sym).base);
+    el.classList.remove("active");
   });
+
+  const activePill = [...document.querySelectorAll(".chart-pill")]
+    .find(el => el.dataset.symbol === sym);
+
+  if (activePill) {
+    activePill.classList.add("active");
+  }
+
   updateChart(sym);
 }
 
@@ -1347,6 +1170,189 @@ function updateChart(sym) {
   spreadChart.data.datasets[0].data = history;
   spreadChart.data.datasets[1].data = target !== null ? history.map(() => target) : [];
   spreadChart.update();
+}
+
+// ── Config panel ──────────────────────────────────────────────────────────────
+let configOpen = false;
+let _currentConfig = null;
+
+function toggleConfigPanel() {
+  configOpen = !configOpen;
+  document.getElementById("config-overlay").classList.toggle("open", configOpen);
+  if (configOpen) loadConfigIntoPanel();
+}
+
+function handleOverlayClick(e) {
+  if (e.target === document.getElementById("config-overlay")) toggleConfigPanel();
+}
+
+async function loadConfigIntoPanel() {
+  try {
+    const res = await fetch(`${API_BASE}/api/config`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    _currentConfig = await res.json();
+    populateConfigFields(_currentConfig);
+  } catch (err) {
+    showToast("Could not load config: " + err.message, true);
+  }
+}
+
+function populateConfigFields(cfg) {
+  const t = cfg.timing    || {};
+  const o = cfg.orderbook || {};
+  const k = cfg.kline     || {};
+
+  const set = (id, val) => {
+    const el = document.getElementById(id);
+    if (el && val !== undefined && val !== null) el.value = val;
+  };
+
+  set("cfg-anomaly-alert-after", t.anomaly_alert_after_minutes);
+  set("cfg-alert-cooldown",       t.alert_cooldown_minutes);
+  set("cfg-cycle-sleep",          t.cycle_sleep_seconds);
+
+  set("cfg-depth-limit",     o.depth_limit);
+  set("cfg-min-ob-layers",   o.min_orderbook_layers);
+  set("cfg-thin-depth",      o.thin_depth_threshold);
+  set("cfg-imbalance-ratio", o.depth_imbalance_ratio);
+  set("cfg-stale-ob-cycles", o.stale_ob_cycles);
+  set("cfg-mid-price-alert", o.mid_price_alert_threshold);
+  set("cfg-dws-poor",        o.dws_poor_threshold);
+  set("cfg-min-abs-spread",  o.min_abs_spread_diff_pct);
+
+  set("cfg-kline-candle",   k.candle_minutes);
+  set("cfg-kline-lookback", k.lookback_minutes);
+
+  renderPairsTable(cfg.pairs || []);
+}
+
+function renderPairsTable(pairs) {
+  const tbody = document.getElementById("pairs-cfg-tbody");
+  document.getElementById("pairs-count-cfg").textContent = pairs.length + " pairs";
+  tbody.innerHTML = pairs.map((p, i) => {
+    const sym = Array.isArray(p) ? p[0] : p.symbol;
+    const tgt = Array.isArray(p) ? p[1] : p.target;
+    const tgtVal = tgt !== null && tgt !== undefined ? tgt : "";
+    return `<tr>
+      <td><input type="text" value="${sym}" data-row="${i}" data-col="sym" /></td>
+      <td><input type="number" value="${tgtVal}" placeholder="monitor only" min="0" step="0.01" data-row="${i}" data-col="tgt" /></td>
+      <td style="text-align:center"><button class="del-btn" onclick="deletePairRow(this)" aria-label="Remove pair"><i class="ti ti-trash"></i></button></td>
+    </tr>`;
+  }).join("");
+}
+
+function getPairsFromTable() {
+  const rows = document.querySelectorAll("#pairs-cfg-tbody tr");
+  const pairs = [];
+  rows.forEach(row => {
+    const symInput = row.querySelector("input[data-col='sym']");
+    const tgtInput = row.querySelector("input[data-col='tgt']");
+    if (!symInput) return;
+    const sym = symInput.value.trim().toLowerCase();
+    const tgtRaw = tgtInput ? tgtInput.value.trim() : "";
+    const tgt = tgtRaw === "" ? null : parseFloat(tgtRaw);
+    if (sym) pairs.push([sym, isNaN(tgt) ? null : tgt]);
+  });
+  return pairs;
+}
+
+function deletePairRow(btn) {
+  // btn is the delete button element; walk up to its <tr> and remove it
+  const tr = btn.closest("tr");
+  if (tr) tr.remove();
+  const count = document.querySelectorAll("#pairs-cfg-tbody tr").length;
+  document.getElementById("pairs-count-cfg").textContent = count + " pairs";
+}
+
+function addPairRow() {
+  const symInput = document.getElementById("new-pair-sym");
+  const tgtInput = document.getElementById("new-pair-target");
+  const sym = symInput.value.trim().toLowerCase();
+  if (!sym) { showToast("Enter a symbol first", true); return; }
+  const tgtRaw = tgtInput.value.trim();
+  const tgt = tgtRaw === "" ? null : parseFloat(tgtRaw);
+  if (!_currentConfig) _currentConfig = { pairs: [] };
+  _currentConfig.pairs.push([sym, isNaN(tgt) ? null : tgt]);
+  renderPairsTable(_currentConfig.pairs);
+  symInput.value = "";
+  tgtInput.value = "";
+}
+
+function buildConfigPayload() {
+  const num = id => { const el = document.getElementById(id); return el ? parseFloat(el.value) : null; };
+  return {
+    timing: {
+      anomaly_alert_after_minutes: num("cfg-anomaly-alert-after"),
+      alert_cooldown_minutes:      num("cfg-alert-cooldown"),
+      cycle_sleep_seconds:         num("cfg-cycle-sleep"),
+    },
+    orderbook: {
+      depth_limit:               num("cfg-depth-limit"),
+      min_orderbook_layers:      num("cfg-min-ob-layers"),
+      thin_depth_threshold:      num("cfg-thin-depth"),
+      depth_imbalance_ratio:     num("cfg-imbalance-ratio"),
+      stale_ob_cycles:           num("cfg-stale-ob-cycles"),
+      mid_price_alert_threshold: num("cfg-mid-price-alert"),
+      dws_poor_threshold:        num("cfg-dws-poor"),
+      min_abs_spread_diff_pct:   num("cfg-min-abs-spread"),
+    },
+    kline: {
+      candle_minutes:   num("cfg-kline-candle"),
+      lookback_minutes: num("cfg-kline-lookback"),
+    },
+    pairs: getPairsFromTable(),
+  };
+}
+
+async function saveConfig() {
+  const payload = buildConfigPayload();
+  const statusEl = document.getElementById("cfg-save-status");
+  statusEl.textContent = "Saving…";
+  try {
+    const res = await fetch(`${API_BASE}/api/config`, {
+      method:  "POST",
+      headers: { "Content-Type": "application/json" },
+      body:    JSON.stringify(payload),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: res.statusText }));
+      throw new Error(err.detail || res.statusText);
+    }
+    const data = await res.json();
+    _currentConfig = data.config;
+    populateConfigFields(_currentConfig);
+    statusEl.textContent = "Saved at " + ngtTime() + " WAT";
+    showToast("Configuration saved — takes effect on next cycle");
+  } catch (err) {
+    statusEl.textContent = "Save failed: " + err.message;
+    showToast("Save failed: " + err.message, true);
+  }
+}
+
+async function resetConfigToDefaults() {
+  if (!confirm("Reset all settings to their defaults? This cannot be undone.")) return;
+  try {
+    const res = await fetch(`${API_BASE}/api/config`, {
+      method:  "POST",
+      headers: { "Content-Type": "application/json" },
+      body:    JSON.stringify({ _reset: true }),
+    });
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || res.statusText);
+    const data = await res.json();
+    _currentConfig = data.config;
+    populateConfigFields(_currentConfig);
+    showToast("Reset to defaults");
+  } catch (err) {
+    showToast("Reset failed: " + err.message, true);
+  }
+}
+
+function showToast(msg, isError = false) {
+  const el = document.getElementById("config-toast");
+  el.textContent = msg;
+  el.className = "config-toast" + (isError ? " error-toast" : "");
+  el.classList.add("show");
+  setTimeout(() => el.classList.remove("show"), 3500);
 }
 
 // ── Boot ──────────────────────────────────────────────────────────────────────

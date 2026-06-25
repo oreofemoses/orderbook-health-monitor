@@ -42,88 +42,171 @@ TELEGRAM_CHAT_IDS  = [c.strip() for c in os.environ.get("QUIDAX_TG_CHAT_IDS", ""
 if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_IDS:
     print("⚠️  QUIDAX_TG_BOT_TOKEN / QUIDAX_TG_CHAT_IDS not set — Telegram alerts are disabled.")
 
-BASE_API_URL        = "https://openapi.quidax.io/exchange-open-api/api/v1"
-DEPTH_LIMIT         = 200   # max order book levels per side
-KLINE_CANDLE_MINUTES = 1    # candle size requested from the API
-KLINE_LOOKBACK_MINUTES = 60 # how far back we pull candles (rolling window)
-
-# Pairs config: list of [symbol, target_spread_pct | null]
-# null target  → monitor-only (no spread anomaly check)
-PAIRS: list[tuple[str, Optional[float]]] = [
-    ('aaveusdt'    , 0.3   ),  # AAVE_USDT
-    ('adausdt'     , 2.0  ),  # ADA_USDT
-    ('algousdt'    , 2.0   ),  # ALGO_USDT
-    ('bchusdt'     , 1.20  ),  # BCH_USDT
-    ('bnbusdt'     , 0.3   ),  # BNB_USDT
-    ('bonkusdt'    , 2.0   ),  # BONK_USDT
-    ('btcusdt'     , 0.2   ),  # BTC_USDT
-    ('cakeusdt'    , 0.3   ),  # CAKE_USDT
-    ('cfxusdt'     , 2.0   ),  # CFX_USDT
-    ('dashusdt'    , 2.0   ),  # DASH_USDT
-    ('dotusdt'     , 0.26  ),  # DOT_USDT
-    ('dogeusdt'    , 0.26  ),  # DOGE_USDT
-    ('ethusdt'     , 0.25  ),  # ETH_USDT
-    ('fartcoinusdt', 2.0   ),  # FARTCOIN_USDT
-    ('flokiusdt'   , 0.5   ),  # FLOKI_USDT
-    ('hypeusdt'    , 2.0   ),  # HYPE_USDT
-    ('linkusdt'    , 0.26  ),  # LINK_USDT
-    ('lskusdt'     , 1.5   ),  # LSK_USDT
-    ('ltcusdt'     , 0.3   ),  # LTC_USDT
-    ('pepeusdt'    , 0.5   ),  # PEPE_USDT
-    ('polusdt'     , 0.5   ),  # POL_USDT
-    ('rndrusdt'  , 2.0   ),  # RENDER_USDT
-    ('shibusdt'    , 0.4   ),  # SHIB_USDT
-    ('slpusdt'     , 2.0   ),  # SLP_USDT
-    ('solusdt'     , 0.25  ),  # SOL_USDT
-    ('suiusdt'     , 2.0   ),  # SUI_USDT
-    ('tonusdt'     , 0.3   ),  # TON_USDT
-    ('trxusdt'     , 0.3   ),  # TRX_USDT
-    ('usdcusdt'    , 0.02  ),  # USDC_USDT
-    ('wifusdt'     , 2.0   ),  # WIF_USDT
-    ('xlmusdt'     , 0.3   ),  # XLM_USDT
-    ('xrpusdt'     , 0.3   ),  # XRP_USDT
-    ('xyousdt'     , 1.0   ),  # XYO_USDT
-    ('usdtcngn'    , None  ),  # USDT_CNGN
-    ('btcngn'      , 0.7   ),  # BTC_NGN
-    ('usdtngn'     , 0.95  ),  # USDT_NGN
-    ('ethngn'      , 0.75  ),  # ETH_NGN
-    ('trxngn'      , 0.75  ),  # TRX_NGN
-    ('xrpngn'      , 0.5   ),  # XRP_NGN
-    ('dashngn'     , 0.5   ),  # DASH_NGN
-    ('ltcngn'      , 0.5   ),  # LTC_NGN
-    ('solngn'      , 0.8   ),  # SOL_NGN
-    ('usdcngn'     , 1.2   ),  # USDC_NGN
-    ('cngnngn'     , None  ),  # CNGN_NGN
-    ('usdtghs'     , 1.3   ),  # USDT_GHS
-]
-
-# ── Alert timing ──────────────────────────────────────────────────────────────
-ANOMALY_ALERT_AFTER_MINUTES = 10     # fire alert only after anomaly persists this long
-ALERT_COOLDOWN_MINUTES      = 30     # minimum gap between repeat alerts for same pair+issue
-CYCLE_SLEEP_SECONDS         = 60     # sleep between full scan cycles
-
-# ── Orderbook health thresholds ───────────────────────────────────────────────
-MIN_ORDERBOOK_LAYERS        = 10
-THIN_DEPTH_THRESHOLD        = 5_000  # USD-equiv total depth within spread band
-DEPTH_IMBALANCE_RATIO       = 5.0    # kept for capture; not alerting
-STALE_OB_CYCLES             = 3      # consecutive identical top-of-book → stale
-MID_PRICE_ALERT_THRESHOLD   = 25     # % change in mid-price between cycles
-
-# ── Spread anomaly gate ───────────────────────────────────────────────────────
-DWS_POOR_THRESHOLD          = 0.5    # A2 only counts when DWS also exceeds this
-MIN_ABS_SPREAD_DIFF_PCT     = 0.05   # percentage-point floor; ignore relative
-                                      # blow-ups smaller than this in absolute
-                                      # terms (protects tiny-target pairs like
-                                      # usdcusdt where 0.02% target makes any
-                                      # tiny move look like a huge % diff)
-
-# ── Concurrency ───────────────────────────────────────────────────────────────
-MAX_CONCURRENT_PAIRS        = 10     # asyncio semaphore limit
+BASE_API_URL = "https://openapi.quidax.io/exchange-open-api/api/v1"
 
 # ── Persistence ───────────────────────────────────────────────────────────────
-DATA_DIR   = "data"
+# Resolve DATA_DIR relative to this script's location so that debug.py and
+# api.py always read/write the same files regardless of the working directory
+# each process was launched from.
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+DATA_DIR    = os.path.join(_SCRIPT_DIR, "data")
 # DATA_DIR = "/app/data"
-STATE_FILE = os.path.join(DATA_DIR, "health_state.json")
+STATE_FILE  = os.path.join(DATA_DIR, "health_state.json")
+CONFIG_FILE = os.path.join(DATA_DIR, "monitor_config.json")
+
+# ── Default configuration ─────────────────────────────────────────────────────
+# All tunable parameters live here. The dashboard writes changes to
+# monitor_config.json; apply_config() re-reads it at the top of every cycle
+# so adjustments take effect without restarting the process.
+_DEFAULT_CONFIG: dict = {
+    "timing": {
+        "anomaly_alert_after_minutes": 10,
+        "alert_cooldown_minutes":      30,
+        "cycle_sleep_seconds":         60,
+    },
+    "orderbook": {
+        "depth_limit":               200,
+        "min_orderbook_layers":      10,
+        "thin_depth_threshold":      5_000,
+        "depth_imbalance_ratio":     5.0,
+        "stale_ob_cycles":           3,
+        "mid_price_alert_threshold": 25,
+        "dws_poor_threshold":        0.5,
+        "min_abs_spread_diff_pct":   0.05,
+    },
+    "kline": {
+        "candle_minutes":   1,
+        "lookback_minutes": 60,
+    },
+    "pairs": [
+        ["aaveusdt",     0.3  ],
+        ["adausdt",      2.0  ],
+        ["algousdt",     2.0  ],
+        ["bchusdt",      1.20 ],
+        ["bnbusdt",      0.3  ],
+        ["bonkusdt",     2.0  ],
+        ["btcusdt",      0.2  ],
+        ["cakeusdt",     0.3  ],
+        ["cfxusdt",      2.0  ],
+        ["dashusdt",     2.0  ],
+        ["dotusdt",      0.26 ],
+        ["dogeusdt",     0.26 ],
+        ["ethusdt",      0.25 ],
+        ["fartcoinusdt", 2.0  ],
+        ["flokiusdt",    0.5  ],
+        ["hypeusdt",     2.0  ],
+        ["linkusdt",     0.26 ],
+        ["lskusdt",      1.5  ],
+        ["ltcusdt",      0.3  ],
+        ["pepeusdt",     0.5  ],
+        ["polusdt",      0.5  ],
+        ["rndrusdt",     2.0  ],
+        ["shibusdt",     0.4  ],
+        ["slpusdt",      2.0  ],
+        ["solusdt",      0.25 ],
+        ["suiusdt",      2.0  ],
+        ["tonusdt",      0.3  ],
+        ["trxusdt",      0.3  ],
+        ["usdcusdt",     0.02 ],
+        ["wifusdt",      2.0  ],
+        ["xlmusdt",      0.3  ],
+        ["xrpusdt",      0.3  ],
+        ["xyousdt",      1.0  ],
+        ["usdtcngn",     None ],
+        ["btcngn",       0.7  ],
+        ["usdtngn",      0.95 ],
+        ["ethngn",       0.75 ],
+        ["trxngn",       0.75 ],
+        ["xrpngn",       0.5  ],
+        ["dashngn",      0.5  ],
+        ["ltcngn",       0.5  ],
+        ["solngn",       0.8  ],
+        ["usdcngn",      1.2  ],
+        ["cngnngn",      None ],
+        ["usdtghs",      1.3  ],
+    ],
+}
+
+
+def _load_config_from_disk() -> dict:
+    """Read monitor_config.json and deep-merge with defaults."""
+    if os.path.exists(CONFIG_FILE):
+        try:
+            with open(CONFIG_FILE) as f:
+                stored = json.load(f)
+            merged = json.loads(json.dumps(_DEFAULT_CONFIG))
+            for section, values in stored.items():
+                if section == "pairs":
+                    merged["pairs"] = values
+                elif isinstance(values, dict) and section in merged:
+                    merged[section].update(values)
+                else:
+                    merged[section] = values
+            return merged
+        except Exception as exc:
+            print(f"⚠️  Could not read {CONFIG_FILE}: {exc} — using defaults")
+    return json.loads(json.dumps(_DEFAULT_CONFIG))
+
+
+def apply_config():
+    """
+    Load config from disk and apply every value to module-level globals.
+    Called once at startup and again at the top of each run_cycle so that
+    dashboard edits take effect on the next cycle without a restart.
+    """
+    global PAIRS, DEPTH_LIMIT, KLINE_CANDLE_MINUTES, KLINE_LOOKBACK_MINUTES
+    global ANOMALY_ALERT_AFTER_MINUTES, ALERT_COOLDOWN_MINUTES, CYCLE_SLEEP_SECONDS
+    global MIN_ORDERBOOK_LAYERS, THIN_DEPTH_THRESHOLD, DEPTH_IMBALANCE_RATIO
+    global STALE_OB_CYCLES, MID_PRICE_ALERT_THRESHOLD, DWS_POOR_THRESHOLD
+    global MIN_ABS_SPREAD_DIFF_PCT, MAX_CONCURRENT_PAIRS, MONITOR_ONLY_SYMBOLS
+
+    cfg = _load_config_from_disk()
+
+    # Pairs
+    PAIRS = [(str(sym).lower(), tgt) for sym, tgt in cfg["pairs"]]
+
+    # K-line
+    DEPTH_LIMIT            = int(cfg["orderbook"]["depth_limit"])
+    KLINE_CANDLE_MINUTES   = int(cfg["kline"]["candle_minutes"])
+    KLINE_LOOKBACK_MINUTES = int(cfg["kline"]["lookback_minutes"])
+
+    # Timing
+    ANOMALY_ALERT_AFTER_MINUTES = float(cfg["timing"]["anomaly_alert_after_minutes"])
+    ALERT_COOLDOWN_MINUTES      = float(cfg["timing"]["alert_cooldown_minutes"])
+    CYCLE_SLEEP_SECONDS         = float(cfg["timing"]["cycle_sleep_seconds"])
+
+    # Orderbook thresholds
+    MIN_ORDERBOOK_LAYERS        = int(cfg["orderbook"]["min_orderbook_layers"])
+    THIN_DEPTH_THRESHOLD        = float(cfg["orderbook"]["thin_depth_threshold"])
+    DEPTH_IMBALANCE_RATIO       = float(cfg["orderbook"]["depth_imbalance_ratio"])
+    STALE_OB_CYCLES             = int(cfg["orderbook"]["stale_ob_cycles"])
+    MID_PRICE_ALERT_THRESHOLD   = float(cfg["orderbook"]["mid_price_alert_threshold"])
+    DWS_POOR_THRESHOLD          = float(cfg["orderbook"]["dws_poor_threshold"])
+    MIN_ABS_SPREAD_DIFF_PCT     = float(cfg["orderbook"]["min_abs_spread_diff_pct"])
+
+    # Derived
+    MAX_CONCURRENT_PAIRS = 10   # not user-facing yet; keep fixed
+    MONITOR_ONLY_SYMBOLS = {sym for sym, tgt in PAIRS if tgt is None}
+
+
+# Initialise with defaults (or saved config if it already exists)
+PAIRS:                       list = []
+DEPTH_LIMIT:                 int   = 200
+KLINE_CANDLE_MINUTES:        int   = 1
+KLINE_LOOKBACK_MINUTES:      int   = 60
+ANOMALY_ALERT_AFTER_MINUTES: float = 10
+ALERT_COOLDOWN_MINUTES:      float = 30
+CYCLE_SLEEP_SECONDS:         float = 60
+MIN_ORDERBOOK_LAYERS:        int   = 10
+THIN_DEPTH_THRESHOLD:        float = 5_000
+DEPTH_IMBALANCE_RATIO:       float = 5.0
+STALE_OB_CYCLES:             int   = 3
+MID_PRICE_ALERT_THRESHOLD:   float = 25
+DWS_POOR_THRESHOLD:          float = 0.5
+MIN_ABS_SPREAD_DIFF_PCT:     float = 0.05
+MAX_CONCURRENT_PAIRS:        int   = 10
+MONITOR_ONLY_SYMBOLS:        set   = set()
+apply_config()  # populate from disk immediately
 
 # ══════════════════════════════════════════════════════════════════════════════
 # CONSTANTS / HELPERS
@@ -159,11 +242,6 @@ def split_symbol(sym: str) -> tuple[str, str]:
     # Unknown quote currency — fall back to the old 3-char assumption
     # rather than crashing, but this symbol should be added above.
     return lower[:-3], lower[-3:]
-
-
-# Pairs explicitly marked monitor-only (no spread target) also skip
-# volume-spike alerting — they're flagged that way for a reason.
-MONITOR_ONLY_SYMBOLS = {sym for sym, target in PAIRS if target is None}
 
 
 def get_threshold(sym: str) -> Optional[float]:
@@ -735,6 +813,7 @@ _last_outage_alert: Optional[datetime] = None
 
 
 async def run_cycle(shared_state: dict, session: aiohttp.ClientSession, cycle_num: int):
+    apply_config()   # pick up any dashboard edits without restarting
     semaphore   = asyncio.Semaphore(MAX_CONCURRENT_PAIRS)
     cycle_start = ngt_now()
 
