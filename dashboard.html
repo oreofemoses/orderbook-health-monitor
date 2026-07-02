@@ -1,0 +1,2041 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Quidax Market Monitor</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@2.47.0/tabler-icons.min.css" />
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
+<script>
+// Apply saved theme before first paint to avoid a flash of the wrong theme.
+(function () {
+  try {
+    var saved = localStorage.getItem("ohm-theme");
+    var dark = saved ? saved === "dark"
+                     : window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
+    if (dark) document.documentElement.setAttribute("data-theme", "dark");
+  } catch (e) {}
+})();
+</script>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+:root {
+  --bg-base: #f0f2f7;
+  --bg-sidebar: #ffffff;
+  --bg-card: #ffffff;
+  --bg-card-hover: #f8f9fc;
+  --text-primary: #1a1d2e;
+  --text-secondary: #6b7280;
+  --text-muted: #9ca3af;
+  --border: rgba(0,0,0,0.07);
+  --border-strong: rgba(0,0,0,0.12);
+  --accent: #7c3aed;
+  --accent-light: #ede9fe;
+  --accent-mid: #a78bfa;
+  --green: #10b981;
+  --green-bg: #d1fae5;
+  --green-text: #065f46;
+  --amber: #f59e0b;
+  --amber-bg: #fef3c7;
+  --amber-text: #78350f;
+  --red: #ef4444;
+  --red-bg: #fee2e2;
+  --red-text: #7f1d1d;
+  --blue: #3b82f6;
+  --blue-bg: #dbeafe;
+  --blue-text: #1e3a8a;
+  --sidebar-w: 220px;
+  --radius: 12px;
+  --radius-sm: 8px;
+  --shadow: 0 1px 3px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04);
+  --shadow-md: 0 4px 16px rgba(0,0,0,0.08);
+  --font: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  --mono: 'JetBrains Mono', monospace;
+  --chart-grid: rgba(0,0,0,0.05);
+  --chart-tick: #9ca3af;
+}
+
+[data-theme="dark"] {
+  --bg-base: #0f1117;
+  --bg-sidebar: #161922;
+  --bg-card: #1a1e29;
+  --bg-card-hover: #20242f;
+  --text-primary: #e5e7eb;
+  --text-secondary: #9ca3af;
+  --text-muted: #6b7280;
+  --border: rgba(255,255,255,0.08);
+  --border-strong: rgba(255,255,255,0.15);
+  --accent: #8b5cf6;
+  --accent-light: rgba(139,92,246,0.18);
+  --accent-mid: #a78bfa;
+  --green: #34d399;
+  --green-bg: rgba(16,185,129,0.16);
+  --green-text: #6ee7b7;
+  --amber: #fbbf24;
+  --amber-bg: rgba(245,158,11,0.16);
+  --amber-text: #fcd34d;
+  --red: #f87171;
+  --red-bg: rgba(239,68,68,0.16);
+  --red-text: #fca5a5;
+  --blue: #60a5fa;
+  --blue-bg: rgba(59,130,246,0.16);
+  --blue-text: #93c5fd;
+  --shadow: 0 1px 3px rgba(0,0,0,0.5), 0 1px 2px rgba(0,0,0,0.4);
+  --shadow-md: 0 4px 16px rgba(0,0,0,0.55);
+  --chart-grid: rgba(255,255,255,0.07);
+  --chart-tick: #6b7280;
+}
+/* Hardcoded pass-row colours need a dark override (others use vars) */
+[data-theme="dark"] .check-row.pass { background: rgba(16,185,129,0.16); color: #6ee7b7; border-color: rgba(16,185,129,0.35); }
+
+body { font-family: var(--font); background: var(--bg-base); color: var(--text-primary); font-size: 14px; min-height: 100vh; display: flex; transition: background .2s ease, color .2s ease; }
+
+/* ─── Sidebar ───────────────────────────────────── */
+.sidebar {
+  width: var(--sidebar-w);
+  background: var(--bg-sidebar);
+  height: 100vh;
+  position: fixed;
+  left: 0; top: 0;
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--border);
+  z-index: 100;
+  padding: 0;
+}
+
+.sidebar-logo {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 20px 20px 16px;
+  border-bottom: 1px solid var(--border);
+}
+.logo-icon {
+  width: 32px; height: 32px;
+  background: var(--accent);
+  border-radius: 8px;
+  display: flex; align-items: center; justify-content: center;
+  color: #fff; font-size: 16px;
+}
+.sidebar-logo-text { font-size: 14px; font-weight: 600; color: var(--text-primary); }
+.sidebar-logo-sub  { font-size: 11px; color: var(--text-muted); }
+
+.sidebar-nav { flex: 1; padding: 12px 10px; overflow-y: auto; }
+.nav-section-label { font-size: 10px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: .06em; padding: 8px 10px 4px; }
+.nav-item {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 12px; border-radius: var(--radius-sm);
+  color: var(--text-secondary); font-size: 13px; font-weight: 500;
+  cursor: pointer; transition: all .15s;
+  text-decoration: none; user-select: none;
+}
+.nav-item:hover { background: var(--bg-base); color: var(--text-primary); }
+.nav-item.active { background: var(--accent-light); color: var(--accent); }
+.nav-item i { font-size: 16px; flex-shrink: 0; }
+.nav-badge { margin-left: auto; font-size: 10px; background: var(--red-bg); color: var(--red-text); padding: 1px 6px; border-radius: 10px; font-weight: 600; }
+.nav-badge.ok { background: var(--green-bg); color: var(--green-text); }
+
+.sidebar-bottom { padding: 12px 10px 20px; border-top: 1px solid var(--border); }
+.sidebar-status { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-radius: var(--radius-sm); background: var(--bg-base); }
+.pulse { width: 8px; height: 8px; border-radius: 50%; background: var(--green); flex-shrink: 0; animation: blink 2s infinite; }
+.pulse.stale { background: var(--amber); }
+@keyframes blink { 0%,100%{opacity:1} 50%{opacity:.3} }
+.sidebar-status-text { font-size: 11px; color: var(--text-secondary); line-height: 1.3; }
+.sidebar-status-text b { color: var(--text-primary); font-weight: 600; }
+
+/* ─── Main ──────────────────────────────────────── */
+.main {
+  margin-left: var(--sidebar-w);
+  flex: 1;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.topbar {
+  background: var(--bg-card);
+  border-bottom: 1px solid var(--border);
+  padding: 0 24px;
+  height: 56px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  position: sticky; top: 0; z-index: 50;
+}
+.topbar-title { font-size: 15px; font-weight: 600; }
+.topbar-right { display: flex; align-items: center; gap: 12px; }
+.topbar-clock { font-family: var(--mono); font-size: 12px; color: var(--text-muted); background: var(--bg-base); padding: 4px 10px; border-radius: 6px; }
+.btn {
+  font-size: 12px; cursor: pointer; background: var(--bg-base);
+  border: 1px solid var(--border-strong); border-radius: var(--radius-sm);
+  padding: 6px 14px; color: var(--text-secondary); font-family: var(--font);
+  display: inline-flex; align-items: center; gap: 6px;
+  transition: all .15s; font-weight: 500;
+}
+.btn:hover { background: var(--border); color: var(--text-primary); }
+.btn-accent { background: var(--accent); color: #fff; border-color: var(--accent); }
+.btn-accent:hover { background: #6d28d9; color: #fff; }
+
+.content { padding: 24px; flex: 1; }
+
+.error-banner {
+  background: var(--red-bg); color: var(--red-text);
+  border: 1px solid rgba(239,68,68,.2); border-radius: var(--radius-sm);
+  padding: 10px 14px; font-size: 13px; margin-bottom: 20px; display: none;
+  align-items: center; gap: 8px;
+}
+
+/* ─── Stat Cards ────────────────────────────────── */
+.stats-row {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 16px;
+  margin-bottom: 24px;
+}
+.stat-card {
+  background: var(--bg-card);
+  border-radius: var(--radius);
+  padding: 20px;
+  box-shadow: var(--shadow);
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+}
+.stat-icon {
+  width: 42px; height: 42px; border-radius: 10px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 20px; flex-shrink: 0;
+}
+.stat-icon.purple { background: var(--accent-light); color: var(--accent); }
+.stat-icon.green  { background: var(--green-bg);    color: var(--green); }
+.stat-icon.amber  { background: var(--amber-bg);    color: var(--amber); }
+.stat-icon.red    { background: var(--red-bg);      color: var(--red); }
+.stat-body { flex: 1; min-width: 0; }
+.stat-label { font-size: 11px; color: var(--text-muted); font-weight: 500; margin-bottom: 4px; text-transform: uppercase; letter-spacing: .04em; }
+.stat-value { font-size: 28px; font-weight: 600; line-height: 1; font-family: var(--mono); }
+.stat-value.purple { color: var(--accent); }
+.stat-value.green  { color: var(--green); }
+.stat-value.amber  { color: var(--amber); }
+.stat-value.red    { color: var(--red); }
+
+/* ─── Section header ────────────────────────────── */
+.section-header {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 14px;
+}
+.section-title { font-size: 14px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+.section-title .count { font-size: 11px; background: var(--bg-base); color: var(--text-muted); padding: 2px 8px; border-radius: 20px; font-weight: 500; }
+
+.two-col { display: grid; grid-template-columns: 1fr 340px; gap: 20px; align-items: start; margin-bottom: 24px; }
+
+/* ─── Market Grid (left col) ────────────────────── */
+.market-grid { display: flex; flex-direction: column; gap: 8px; }
+
+.market-row {
+  background: var(--bg-card);
+  border-radius: var(--radius);
+  padding: 14px 18px;
+  box-shadow: var(--shadow);
+  cursor: pointer;
+  transition: box-shadow .15s, transform .1s;
+  border: 1.5px solid transparent;
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+.market-row::before {
+  content: '';
+  position: absolute;
+  left: 0; top: 0; bottom: 0;
+  width: 3px;
+  background: transparent;
+  transition: background .15s;
+}
+.market-row:hover { box-shadow: var(--shadow-md); transform: translateY(-1px); border-color: var(--border-strong); }
+.market-row.warn::before  { background: var(--amber); }
+.market-row.crit::before  { background: var(--red); }
+.market-row.ok::before    { background: var(--green); }
+.market-row.flag::before  { background: var(--border-strong); }
+.market-row.selected { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-light), var(--shadow); }
+
+.mr-sym { flex: 0 0 90px; }
+.mr-sym-name { font-size: 14px; font-weight: 600; }
+.mr-sym-base { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+.mr-price { flex: 0 0 100px; }
+.mr-price-val { font-family: var(--mono); font-size: 13px; font-weight: 500; }
+.mr-price-label { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+.mr-spread { flex: 0 0 80px; }
+.mr-spread-val { font-family: var(--mono); font-size: 13px; font-weight: 500; }
+.mr-spread-label { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+.mr-issues { flex: 1; display: flex; flex-wrap: wrap; gap: 5px; justify-content: flex-end; align-items: center; }
+.mr-badge {
+  font-size: 10px; padding: 2px 8px; border-radius: 20px; font-weight: 600; white-space: nowrap;
+}
+.mr-badge.ok   { background: var(--green-bg); color: var(--green-text); }
+.mr-badge.warn { background: var(--amber-bg); color: var(--amber-text); }
+.mr-badge.crit { background: var(--red-bg);   color: var(--red-text);   }
+.mr-badge.blue { background: var(--blue-bg);  color: var(--blue-text);  }
+.mr-badge.muted{ background: var(--bg-base);  color: var(--text-muted); border: 1px solid var(--border-strong); }
+
+.mr-chevron { color: var(--text-muted); font-size: 16px; flex-shrink: 0; transition: transform .15s; }
+.market-row:hover .mr-chevron { transform: translateX(2px); color: var(--text-secondary); }
+.market-row.selected .mr-chevron { color: var(--accent); transform: rotate(90deg); }
+
+/* ─── Detail Panel (right col) ──────────────────── */
+.detail-panel {
+  background: var(--bg-card);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 20px;
+  position: sticky;
+  top: 76px;
+}
+.detail-empty {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  padding: 40px 20px; color: var(--text-muted); text-align: center; gap: 12px;
+}
+.detail-empty i { font-size: 32px; }
+.detail-empty p { font-size: 13px; line-height: 1.5; }
+
+.detail-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; gap: 8px; }
+.detail-sym { font-size: 18px; font-weight: 700; }
+.detail-time { font-size: 11px; color: var(--text-muted); font-family: var(--mono); }
+
+.detail-metrics {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 16px;
+}
+.dm {
+  background: var(--bg-base); border-radius: var(--radius-sm); padding: 10px 12px;
+}
+.dm .k { font-size: 10px; color: var(--text-muted); font-weight: 600; text-transform: uppercase; letter-spacing: .04em; margin-bottom: 4px; }
+.dm .v { font-size: 15px; font-weight: 600; font-family: var(--mono); }
+.dm .v.ok   { color: var(--green); }
+.dm .v.warn { color: var(--amber); }
+.dm .v.crit { color: var(--red); }
+.dm .v.muted{ color: var(--text-secondary); }
+
+.detail-alerts-title { font-size: 12px; font-weight: 600; color: var(--text-secondary); text-transform: uppercase; letter-spacing: .04em; margin-bottom: 10px; }
+
+.alert-checks { display: flex; flex-direction: column; gap: 6px; }
+.check-row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 9px 12px; border-radius: var(--radius-sm); font-size: 12px;
+  border: 1px solid transparent;
+}
+.check-row.pass  { background: #f0fdf4; color: #166534; border-color: #bbf7d0; }
+.check-row.warn  { background: var(--amber-bg); color: var(--amber-text); border-color: #fcd34d; }
+.check-row.crit  { background: var(--red-bg); color: var(--red-text); border-color: #fca5a5; }
+.check-row.info  { background: var(--blue-bg); color: var(--blue-text); border-color: #93c5fd; }
+.check-row.na    { background: var(--bg-base); color: var(--text-muted); border-color: transparent; }
+.check-icon { font-size: 14px; flex-shrink: 0; }
+.check-body { flex: 1; }
+.check-name { font-weight: 600; }
+.check-desc { font-size: 11px; opacity: .85; margin-top: 1px; }
+.check-sev { font-size: 10px; font-weight: 700; flex-shrink: 0; padding: 1px 6px; border-radius: 4px; background: rgba(0,0,0,.08); }
+
+/* ─── Chart Card ────────────────────────────────── */
+.chart-card {
+  background: var(--bg-card);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 20px;
+  margin-bottom: 24px;
+}
+.chart-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
+.chart-title { font-size: 14px; font-weight: 600; }
+.chart-selector { display: flex; gap: 6px; flex-wrap: wrap; }
+.chart-pill {
+  font-size: 11px; padding: 3px 10px; border-radius: 20px; cursor: pointer;
+  border: 1px solid var(--border-strong); background: var(--bg-base);
+  color: var(--text-secondary); font-weight: 500; transition: all .15s;
+}
+.chart-pill.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+.legend { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 10px; font-size: 11px; color: var(--text-secondary); }
+.legend span { display: flex; align-items: center; gap: 4px; }
+.swatch { width: 10px; height: 10px; border-radius: 2px; flex-shrink: 0; }
+
+/* ─── Alert log ─────────────────────────────────── */
+.log-card {
+  background: var(--bg-card);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 20px;
+}
+.log-row {
+  display: flex; gap: 12px; padding: 9px 0;
+  border-bottom: 1px solid var(--border);
+  align-items: flex-start; font-size: 12px;
+}
+.log-row:last-child { border-bottom: none; }
+.log-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--amber); flex-shrink: 0; margin-top: 4px; }
+.log-time { color: var(--text-muted); white-space: nowrap; min-width: 56px; font-family: var(--mono); font-size: 11px; }
+.log-msg  { color: var(--text-primary); line-height: 1.5; }
+.empty-state { font-size: 13px; color: var(--text-muted); padding: 20px 0; }
+.empty-state-green { color: var(--green); display: flex; align-items: center; gap: 6px; }
+
+/* ─── Responsive ────────────────────────────────── */
+@media (max-width: 900px) {
+  .sidebar { width: 56px; }
+  .sidebar-logo-text, .sidebar-logo-sub, .nav-item span, .nav-badge, .sidebar-status-text b { display: none; }
+  .nav-item { justify-content: center; padding: 10px; }
+  .sidebar-status { justify-content: center; }
+  .main { margin-left: 56px; }
+  .stats-row { grid-template-columns: 1fr 1fr; }
+  .two-col { grid-template-columns: 1fr; }
+  .detail-panel { position: static; }
+}
+@media (max-width: 600px) {
+  .stats-row { grid-template-columns: 1fr 1fr; }
+  .content { padding: 16px; }
+  .topbar { padding: 0 16px; }
+}
+@media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+
+/* ─── Config panel ──────────────────────────────── */
+.config-overlay {
+  display: none;
+  position: fixed; inset: 0; z-index: 200;
+  background: rgba(0,0,0,0.4);
+  align-items: flex-start;
+  justify-content: flex-end;
+}
+.config-overlay.open { display: flex; }
+.config-drawer {
+  background: var(--bg-card);
+  width: 640px; max-width: 96vw;
+  height: 100vh;
+  overflow-y: auto;
+  box-shadow: -4px 0 24px rgba(0,0,0,0.15);
+  display: flex; flex-direction: column;
+}
+.config-drawer-header {
+  padding: 20px 24px 16px;
+  border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; justify-content: space-between;
+  position: sticky; top: 0; background: var(--bg-card); z-index: 1;
+}
+.config-drawer-title { font-size: 15px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+.config-drawer-body { padding: 20px 24px; flex: 1; }
+.config-drawer-footer {
+  padding: 16px 24px;
+  border-top: 1px solid var(--border);
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  position: sticky; bottom: 0; background: var(--bg-card);
+}
+.config-section { margin-bottom: 28px; }
+.config-section-title {
+  font-size: 12px; font-weight: 600; color: var(--text-secondary);
+  text-transform: uppercase; letter-spacing: .05em;
+  margin-bottom: 14px; padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; gap: 7px;
+}
+.config-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.config-field { display: flex; flex-direction: column; gap: 5px; }
+.config-field label { font-size: 12px; color: var(--text-secondary); font-weight: 500; }
+.config-field input[type=number], .config-field input[type=text] {
+  border: 1px solid var(--border-strong); border-radius: var(--radius-sm);
+  padding: 7px 10px; font-size: 13px; font-family: var(--mono);
+  color: var(--text-primary); background: var(--bg-base); width: 100%;
+  transition: border-color .15s;
+}
+.config-field input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px rgba(124,58,237,.12); }
+.config-field .hint { font-size: 11px; color: var(--text-muted); line-height: 1.4; }
+
+.pairs-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.pairs-table th {
+  text-align: left; padding: 6px 8px; font-size: 11px; font-weight: 600;
+  color: var(--text-muted); text-transform: uppercase; letter-spacing: .04em;
+  border-bottom: 1px solid var(--border);
+}
+.pairs-table td { padding: 4px 6px; }
+.pairs-table tr:hover td { background: var(--bg-base); }
+.pairs-table input[type=text], .pairs-table input[type=number] {
+  border: 1px solid transparent; border-radius: 5px;
+  padding: 4px 7px; font-size: 12px; font-family: var(--mono);
+  color: var(--text-primary); background: transparent; width: 100%;
+  transition: border-color .12s;
+}
+.pairs-table input:focus { outline: none; border-color: var(--accent); background: var(--bg-card); box-shadow: 0 0 0 2px rgba(124,58,237,.1); }
+.pairs-table .del-btn {
+  background: none; border: none; cursor: pointer; color: var(--text-muted);
+  font-size: 16px; padding: 2px 6px; border-radius: 4px; line-height: 1;
+  transition: color .12s, background .12s;
+}
+.pairs-table .del-btn:hover { color: var(--red); background: var(--red-bg); }
+.add-pair-row { display: flex; gap: 8px; margin-top: 10px; align-items: center; }
+.add-pair-row input { flex: 1; }
+
+.config-toast {
+  position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
+  background: var(--green); color: #fff; font-size: 13px; font-weight: 500;
+  padding: 10px 20px; border-radius: var(--radius); z-index: 9999;
+  box-shadow: 0 4px 16px rgba(0,0,0,.18);
+  opacity: 0; transition: opacity .3s; pointer-events: none;
+}
+.config-toast.show { opacity: 1; }
+.config-toast.error-toast { background: var(--red); }
+
+/* ─── Daily Log ─────────────────────────────────── */
+.daily-log-card {
+  background: var(--bg-card);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 20px;
+  margin-bottom: 24px;
+}
+.daily-log-controls {
+  display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-bottom: 16px;
+}
+.daily-log-controls select, .daily-log-controls input[type=text] {
+  font-size: 12px; font-family: var(--font);
+  border: 1px solid var(--border-strong); border-radius: var(--radius-sm);
+  padding: 6px 10px; background: var(--bg-base); color: var(--text-primary);
+  cursor: pointer;
+}
+.daily-log-controls select:focus, .daily-log-controls input:focus {
+  outline: none; border-color: var(--accent);
+}
+.dl-table-wrap { overflow-x: auto; }
+.dl-table {
+  width: 100%; border-collapse: collapse; font-size: 12px;
+}
+.dl-table th {
+  text-align: left; padding: 7px 10px;
+  font-size: 11px; font-weight: 600; color: var(--text-muted);
+  text-transform: uppercase; letter-spacing: .04em;
+  border-bottom: 2px solid var(--border); white-space: nowrap;
+  background: var(--bg-base);
+}
+.dl-table td {
+  padding: 7px 10px; border-bottom: 1px solid var(--border);
+  vertical-align: middle;
+}
+.dl-table tr:last-child td { border-bottom: none; }
+.dl-table tr:hover td { background: var(--bg-base); }
+.dl-ts { font-family: var(--mono); color: var(--text-muted); white-space: nowrap; }
+.dl-market { font-family: var(--mono); font-weight: 600; }
+.dl-status {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: 10px; font-weight: 700; padding: 2px 8px;
+  border-radius: 20px; white-space: nowrap;
+}
+.dl-status.ok     { background: var(--green-bg); color: var(--green-text); }
+.dl-status.warn   { background: var(--amber-bg); color: var(--amber-text); }
+.dl-status.skip   { background: var(--bg-base);  color: var(--text-muted); }
+.dl-issues { font-family: var(--mono); font-size: 11px; color: var(--text-secondary); }
+.dl-depth  { font-family: var(--mono); font-size: 11px; color: var(--text-muted); }
+.dl-pagination {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-top: 14px; font-size: 12px; color: var(--text-muted);
+}
+.dl-pagination-btns { display: flex; gap: 6px; }
+.dl-issue-badge {
+  display: inline-block; font-size: 10px; padding: 1px 6px;
+  border-radius: 4px; font-weight: 600; margin-right: 3px; margin-bottom: 2px;
+}
+.dl-issue-badge.CRITICAL { background: var(--red-bg);   color: var(--red-text); }
+.dl-issue-badge.HIGH     { background: var(--amber-bg); color: var(--amber-text); }
+.dl-issue-badge.MEDIUM   { background: var(--blue-bg);  color: var(--blue-text); }
+</style>
+</head>
+<body>
+
+<!-- ═══ Sidebar ═══════════════════════════════════════════════════════════════ -->
+<aside class="sidebar">
+  <div class="sidebar-logo">
+    <div class="logo-icon"><i class="ti ti-activity-heartbeat"></i></div>
+    <div>
+      <div class="sidebar-logo-text">Quidax OHM</div>
+      <div class="sidebar-logo-sub">Market Monitor</div>
+    </div>
+  </div>
+
+  <nav class="sidebar-nav">
+    <div class="nav-section-label">Monitor</div>
+    <div class="nav-item active">
+      <i class="ti ti-layout-dashboard"></i>
+      <span>Overview</span>
+    </div>
+    <div class="nav-item" onclick="scrollToSection('markets')">
+      <i class="ti ti-currency-bitcoin"></i>
+      <span>Markets</span>
+      <span class="nav-badge" id="nav-warn-count" style="display:none">0</span>
+    </div>
+    <div class="nav-item" onclick="scrollToSection('chart-section')">
+      <i class="ti ti-chart-line"></i>
+      <span>Spread chart</span>
+    </div>
+    <div class="nav-item" onclick="scrollToSection('log-section')">
+      <i class="ti ti-bell"></i>
+      <span>Alert log</span>
+    </div>
+    <div class="nav-item" onclick="scrollToSection('daily-log-section')">
+      <i class="ti ti-table"></i>
+      <span>Daily log</span>
+    </div>
+
+    <!-- <div class="nav-section-label" style="margin-top:8px">Alerts</div>
+    <div class="nav-item">
+      <i class="ti ti-git-branch"></i>
+      <span>Order book</span>
+    </div>
+    <div class="nav-item">
+      <i class="ti ti-trending-up"></i>
+      <span>Price moves</span>
+    </div>
+    <div class="nav-item">
+      <i class="ti ti-flame"></i>
+      <span>Volume spikes</span>
+    </div> -->
+
+    <div class="nav-section-label" style="margin-top:8px">Settings</div>
+    <div class="nav-item" onclick="toggleConfigPanel()">
+      <i class="ti ti-adjustments-horizontal"></i>
+      <span>Configuration</span>
+    </div>
+  </nav>
+
+  <div class="sidebar-bottom">
+    <div class="sidebar-status">
+      <span class="pulse" id="pulse"></span>
+      <div class="sidebar-status-text">
+        <b id="sidebar-status-text">Live</b>
+        <div id="sidebar-ts" style="font-size:10px;color:var(--text-muted)">—</div>
+      </div>
+    </div>
+  </div>
+</aside>
+
+<!-- ═══ Main ══════════════════════════════════════════════════════════════════ -->
+<div class="main">
+  <header class="topbar">
+    <div class="topbar-title">Market Overview</div>
+    <div class="topbar-right">
+      <div class="topbar-clock" id="clock">—</div>
+      <button class="btn" id="theme-toggle" onclick="toggleTheme()" title="Toggle dark mode" aria-label="Toggle dark mode">
+        <i class="ti ti-moon" id="theme-icon"></i>
+      </button>
+      <button class="btn" onclick="fetchAndRender()">
+        <i class="ti ti-refresh"></i> Refresh
+      </button>
+    </div>
+  </header>
+
+  <div class="content">
+    <!-- Error banner -->
+    <div class="error-banner" id="error-banner" style="display:flex">
+      <i class="ti ti-alert-circle"></i>
+      <span id="error-text">Connecting to API…</span>
+    </div>
+
+    <!-- Stat cards -->
+    <div class="stats-row">
+      <div class="stat-card">
+        <div class="stat-icon purple"><i class="ti ti-chart-dots-3"></i></div>
+        <div class="stat-body">
+          <div class="stat-label">Pairs monitored</div>
+          <div class="stat-value purple" id="m-pairs">—</div>
+        </div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-icon green"><i class="ti ti-circle-check"></i></div>
+        <div class="stat-body">
+          <div class="stat-label">Healthy</div>
+          <div class="stat-value green" id="m-healthy">—</div>
+        </div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-icon amber"><i class="ti ti-alert-triangle"></i></div>
+        <div class="stat-body">
+          <div class="stat-label">Warnings</div>
+          <div class="stat-value amber" id="m-warn">—</div>
+        </div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-icon red"><i class="ti ti-bell-ringing"></i></div>
+        <div class="stat-body">
+          <div class="stat-label">Alerts fired</div>
+          <div class="stat-value red" id="m-crit">—</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Markets + Detail panel -->
+    <div id="markets" class="two-col">
+
+      <!-- Left: market rows -->
+      <div>
+        <div class="section-header">
+          <div class="section-title">
+            <i class="ti ti-currency-bitcoin" style="font-size:16px;color:var(--accent)"></i>
+            Markets
+            <span class="count" id="pairs-count-label">—</span>
+          </div>
+          <button class="btn" id="toggle-btn" onclick="toggleFilter()">Show all</button>
+        </div>
+        <div class="market-grid" id="pairs-container">
+          <p class="empty-state">Loading…</p>
+        </div>
+      </div>
+
+      <!-- Right: detail panel -->
+      <div class="detail-panel" id="detail-panel">
+        <div class="detail-empty" id="detail-empty">
+          <i class="ti ti-cursor-text" style="color:var(--accent-mid)"></i>
+          <p>Click any market to see its full health status across all alert checks.</p>
+        </div>
+        <div id="detail-content" style="display:none"></div>
+      </div>
+    </div>
+
+    <!-- Spread chart -->
+    <div id="chart-section" class="chart-card">
+      <div class="chart-header">
+        <div class="chart-title" id="chart-title">Spread % — last 30 cycles</div>
+        <div class="chart-selector" id="chart-selector"></div>
+      </div>
+      <div class="legend">
+        <span><span class="swatch" style="background:var(--accent)"></span>Spread %</span>
+        <span><span class="swatch" style="background:var(--red);opacity:.5"></span>Target</span>
+      </div>
+      <div style="position:relative;height:200px">
+        <canvas id="spreadChart" role="img" aria-label="Spread history chart"></canvas>
+      </div>
+    </div>
+
+    <!-- Alert log -->
+    <div id="log-section">
+      <div class="section-header">
+        <div class="section-title">
+          <i class="ti ti-bell" style="font-size:16px;color:var(--accent)"></i>
+          Alert log
+        </div>
+      </div>
+      <div class="log-card" id="alert-log-container">
+        <p class="empty-state">No alerts this session.</p>
+      </div>
+    </div>
+
+    <!-- Daily log -->
+    <div id="daily-log-section" style="margin-top:24px">
+      <div class="section-header">
+        <div class="section-title">
+          <i class="ti ti-table" style="font-size:16px;color:var(--accent)"></i>
+          Daily log
+          <span class="count" id="dl-count-label">—</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+          <input type="date" id="dl-date-picker"
+            style="font-size:12px;font-family:var(--font);border:1px solid var(--border-strong);
+                   border-radius:var(--radius-sm);padding:5px 9px;background:var(--bg-base);
+                   color:var(--text-primary);cursor:pointer;"
+            onchange="fetchDailyLog()" />
+          <button class="btn" onclick="fetchDailyLog()">
+            <i class="ti ti-refresh"></i> Reload
+          </button>
+          <button class="btn" onclick="downloadDailyLog(false)" title="Download filtered rows as CSV">
+            <i class="ti ti-download"></i> Filtered
+          </button>
+          <button class="btn" onclick="downloadDailyLog(true)" title="Download full day as CSV">
+            <i class="ti ti-file-download"></i> Full day
+          </button>
+        </div>
+      </div>
+      <div class="daily-log-card">
+        <div class="daily-log-controls">
+          <select id="dl-filter-market">
+            <option value="">All markets</option>
+          </select>
+          <select id="dl-filter-status">
+            <option value="">All statuses</option>
+            <option value="WARNING">Warning only</option>
+            <option value="CHECKED">Healthy only</option>
+            <option value="SKIPPED">Skipped only</option>
+          </select>
+          <select id="dl-page-size">
+            <option value="50">50 rows</option>
+            <option value="100">100 rows</option>
+            <option value="200">200 rows</option>
+            <option value="500">500 rows</option>
+          </select>
+          <span style="font-size:12px;color:var(--text-muted);margin-left:auto" id="dl-date-label">—</span>
+        </div>
+        <div class="dl-table-wrap">
+          <table class="dl-table">
+            <thead>
+              <tr>
+                <th>Time</th>
+                <th>Market</th>
+                <th>Status</th>
+                <th>Issues</th>
+                <th>Depth</th>
+              </tr>
+            </thead>
+            <tbody id="dl-tbody">
+              <tr><td colspan="5" style="color:var(--text-muted);padding:20px 10px">Loading…</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="dl-pagination">
+          <span id="dl-page-info">—</span>
+          <div class="dl-pagination-btns">
+            <button class="btn" id="dl-prev" onclick="dlChangePage(-1)" disabled>
+              <i class="ti ti-chevron-left"></i> Prev
+            </button>
+            <button class="btn" id="dl-next" onclick="dlChangePage(1)">
+              Next <i class="ti ti-chevron-right"></i>
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ Config drawer ═══════════════════════════════════════════════════════ -->
+<div class="config-overlay" id="config-overlay" onclick="handleOverlayClick(event)">
+  <div class="config-drawer" id="config-drawer">
+    <div class="config-drawer-header">
+      <div class="config-drawer-title">
+        <i class="ti ti-adjustments-horizontal" style="font-size:18px;color:var(--accent)"></i>
+        Monitor configuration
+      </div>
+      <button class="btn" onclick="toggleConfigPanel()" style="padding:5px 10px">
+        <i class="ti ti-x"></i>
+      </button>
+    </div>
+
+    <div class="config-drawer-body">
+
+      <!-- Timing -->
+      <div class="config-section">
+        <div class="config-section-title">
+          <i class="ti ti-clock" style="font-size:14px"></i>
+          Timing
+        </div>
+        <div class="config-grid">
+          <div class="config-field">
+            <label>Cycle interval (seconds)</label>
+            <input type="number" id="cfg-cycle-sleep" min="10" step="5" />
+            <span class="hint">Sleep time between full scan cycles. Every issue detected in a cycle fires immediately — there is no alert delay or cooldown.</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Order book thresholds -->
+      <div class="config-section">
+        <div class="config-section-title">
+          <i class="ti ti-book" style="font-size:14px"></i>
+          Order book thresholds
+        </div>
+        <div class="config-grid">
+          <div class="config-field">
+            <label>Min order book layers</label>
+            <input type="number" id="cfg-min-ob-layers" min="1" step="1" />
+            <span class="hint">Fewer layers on either side triggers a shallow book warning.</span>
+          </div>
+          <div class="config-field">
+            <label>Thin depth threshold ($)</label>
+            <input type="number" id="cfg-thin-depth" min="0" step="100" />
+            <span class="hint">USD-equiv total depth within spread band below which A4 fires.</span>
+          </div>
+          <div class="config-field">
+            <label>DWS poor threshold</label>
+            <input type="number" id="cfg-dws-poor" min="0" step="0.01" />
+            <span class="hint">Dynamic Weighted Spread above this is considered "poor" quality.</span>
+          </div>
+          <div class="config-field">
+            <label>Min abs spread diff (pp)</label>
+            <input type="number" id="cfg-min-abs-spread" min="0" step="0.001" />
+            <span class="hint">Minimum percentage-point spread deviation before A2 triggers. Protects tiny-target pairs.</span>
+          </div>
+          <div class="config-field">
+            <label>Depth limit (levels)</label>
+            <input type="number" id="cfg-depth-limit" min="1" step="1" />
+            <span class="hint">Max order book levels per side fetched from the API.</span>
+          </div>
+          <div class="config-field">
+            <label>Depth imbalance ratio</label>
+            <input type="number" id="cfg-imbalance-ratio" min="1" step="0.1" />
+            <span class="hint">A5 fires when one side's depth is this many times heavier than the other.</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Pricing & circuit breaker -->
+      <div class="config-section">
+        <div class="config-section-title">
+          <i class="ti ti-currency-dollar" style="font-size:14px"></i>
+          Pricing &amp; circuit breaker
+        </div>
+        <div class="config-grid">
+          <div class="config-field">
+            <label>Price discrepancy tolerance (%)</label>
+            <input type="number" id="cfg-price-discrepancy" min="0" step="0.01" />
+            <span class="hint">B1 — extra tolerance beyond each pair's own expected offset (target_spread/2) from the MEXC/KuCoin reference. The bot doesn't quote symmetrically on the reference, so some offset is normal; this is the EXTRA room allowed on top of that before B1 fires. USDT-quoted pairs only.</span>
+          </div>
+          <div class="config-field">
+            <label>Source divergence (%)</label>
+            <input type="number" id="cfg-source-divergence" min="0" step="0.01" />
+            <span class="hint">B2 — % diff between MEXC and KuCoin themselves before one is flagged an outlier.</span>
+          </div>
+          <div class="config-field">
+            <label>Stale reference cycles (unavailable)</label>
+            <input type="number" id="cfg-stale-ref-cycles" min="1" step="1" />
+            <span class="hint">B3 — consecutive <b>failed-to-resolve</b> reads before a dead feed fires (Tier 2). API error / unlisted / wrong alias.</span>
+          </div>
+          <div class="config-field">
+            <label>Stale unchanged cycles</label>
+            <input type="number" id="cfg-stale-unchanged-cycles" min="1" step="1" />
+            <span class="hint">B3 — consecutive <b>unchanged</b> reads before the cross-source liveness check runs. Fires Telegram only if the peer source is still moving; otherwise (calm market / single-source) it's dashboard-only.</span>
+          </div>
+          <div class="config-field">
+            <label>Stale movement epsilon (%)</label>
+            <input type="number" id="cfg-stale-movement-epsilon" min="0" step="0.001" />
+            <span class="hint">B3 — a move ≤ this % counts as "unchanged"; the same threshold decides whether a peer is "moving". 0 = exact equality (original behaviour). Raise slightly to absorb sub-tick wiggle.</span>
+          </div>
+          <div class="config-field">
+            <label>Circuit breaker (%)</label>
+            <input type="number" id="cfg-circuit-breaker-pct" min="0" step="0.1" />
+            <span class="hint">B4 — total price move % within the k-line window treated as breaker-risk territory.</span>
+          </div>
+          <div class="config-field">
+            <label>Circuit breaker warn ratio</label>
+            <input type="number" id="cfg-circuit-breaker-warn" min="0" max="1" step="0.05" />
+            <span class="hint">B4 — fires HIGH at this fraction of the breaker %, CRITICAL at 100%+.</span>
+          </div>
+          <div class="config-field">
+            <label>Arb gap threshold (%)</label>
+            <input type="number" id="cfg-arb-gap" min="0" step="0.01" />
+            <span class="hint">F1 — % gap between a pair's quoted price and its implied cross-rate before flagging.</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- K-line -->
+      <div class="config-section">
+        <div class="config-section-title">
+          <i class="ti ti-chart-candle" style="font-size:14px"></i>
+          K-line / volume
+        </div>
+        <div class="config-grid">
+          <div class="config-field">
+            <label>Candle size (minutes)</label>
+            <input type="number" id="cfg-kline-candle" min="1" step="1" />
+            <span class="hint">Candle period requested from the API (usually 1).</span>
+          </div>
+          <div class="config-field">
+            <label>Lookback window (minutes)</label>
+            <input type="number" id="cfg-kline-lookback" min="1" step="1" />
+            <span class="hint">Rolling window for volume-spike detection. Fetches this many candles.</span>
+          </div>
+          <div class="config-field">
+            <label>Volume baseline windows</label>
+            <input type="number" id="cfg-vol-baseline-buckets" min="2" step="1" />
+            <span class="hint">D1 — how many prior lookback-windows to average for "is this spike unusual for THIS pair" context. Built entirely from Quidax's own k-line history — no external data.</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Volume spike (D1) -->
+      <div class="config-section">
+        <div class="config-section-title">
+          <i class="ti ti-flame" style="font-size:14px"></i>
+          Volume spike (D1)
+        </div>
+        <div class="config-grid">
+          <div class="config-field">
+            <label>Trigger mode</label>
+            <select id="cfg-vol-spike-mode">
+              <option value="baseline_relative">Baseline-relative (spike vs this pair's own normal)</option>
+              <option value="absolute">Absolute (legacy flat threshold)</option>
+            </select>
+            <span class="hint">Baseline-relative fires on an unusual surge for THIS pair (with the absolute threshold kept as a floor). Absolute reverts to firing whenever volume clears the flat per-pair threshold — use to roll back instantly without a redeploy.</span>
+          </div>
+          <div class="config-field">
+            <label>Spike ratio (×baseline)</label>
+            <input type="number" id="cfg-vol-spike-ratio" min="1" step="0.1" />
+            <span class="hint">Baseline-relative only. Fires when window volume ≥ this multiple of the pair's baseline (and still clears the absolute floor). Higher = only big surges alert.</span>
+          </div>
+          <div class="config-field">
+            <label>Min baseline windows (trust gate)</label>
+            <input type="number" id="cfg-vol-spike-min-buckets" min="2" step="1" />
+            <span class="hint">How many recorded windows the baseline needs before it's trusted to gate the trigger. Distinct from "Volume baseline windows" above (which is how many to average). Keep ≤ that value, or the baseline never becomes ready. Warm-up ≈ this × lookback minutes after a cold start.</span>
+          </div>
+          <div class="config-field">
+            <label>Warm-up fallback</label>
+            <select id="cfg-vol-spike-warmup">
+              <option value="absolute">Absolute floor (no blind spot after restart)</option>
+              <option value="suppress">Suppress (no D1 until baseline ready)</option>
+            </select>
+            <span class="hint">Behaviour before the baseline is trusted (incl. just after an OOM reset). Absolute keeps firing on the flat threshold; suppress goes silent until enough history exists.</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Layer churn (A6) -->
+      <div class="config-section">
+        <div class="config-section-title">
+          <i class="ti ti-refresh" style="font-size:14px"></i>
+          Layer churn (A6)
+        </div>
+        <div class="config-grid">
+          <div class="config-field">
+            <label>Near-touch layer %</label>
+            <input type="number" id="cfg-layer-churn-top-pct" min="0.05" max="1" step="0.05" />
+            <span class="hint">Fraction of each side's layers (nearest to mid) considered "near-touch" for churn comparison.</span>
+          </div>
+          <div class="config-field">
+            <label>Baseline window (cycles)</label>
+            <input type="number" id="cfg-layer-churn-baseline-buckets" min="2" step="1" />
+            <span class="hint">How many prior cycles' churn scores to average for this pair's own self-baseline.</span>
+          </div>
+          <div class="config-field">
+            <label>Churn ratio threshold</label>
+            <input type="number" id="cfg-layer-churn-ratio-threshold" min="0" max="1" step="0.05" />
+            <span class="hint">A6 fires when this cycle's churn drops below this fraction of the pair's own baseline.</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Pairs -->
+      <div class="config-section">
+        <div class="config-section-title">
+          <i class="ti ti-currency-bitcoin" style="font-size:14px"></i>
+          Pairs &amp; spread targets
+          <span style="margin-left:auto;font-size:10px;font-weight:400;color:var(--text-muted);text-transform:none;letter-spacing:0" id="pairs-count-cfg">— pairs</span>
+        </div>
+        <table class="pairs-table" id="pairs-cfg-table">
+          <thead>
+            <tr>
+              <th style="width:22%">Symbol</th>
+              <th style="width:14%">Target spread %</th>
+              <th style="width:14%">B2 div %</th>
+              <th style="width:18%">MEXC alias</th>
+              <th style="width:18%">KuCoin alias</th>
+              <th style="width:14%"></th>
+            </tr>
+          </thead>
+          <tbody id="pairs-cfg-tbody"></tbody>
+        </table>
+        <div style="font-size:11px;color:var(--text-muted);margin-top:6px;line-height:1.4">
+          MEXC/KuCoin aliases are optional — only needed when a USDT-quoted asset's ticker on that
+          exchange differs from Quidax's (e.g. RNDR is listed as RENDER on MEXC but still RNDR on
+          KuCoin). Leave blank to use the symbol's base ticker as-is.
+          <br><b>B2 div %</b> is the per-pair source-divergence threshold (USDT pairs only). Leave
+          blank to use the global default; set it tight for majors (e.g. 0.05 for BTC) and loose
+          for thin low-caps that legitimately differ between exchanges.
+        </div>
+        <div class="add-pair-row">
+          <input type="text" id="new-pair-sym" placeholder="symbol (e.g. solusdt)" style="font-family:var(--mono);font-size:12px;border:1px solid var(--border-strong);border-radius:6px;padding:6px 10px;background:var(--bg-base);color:var(--text-primary)" />
+          <input type="number" id="new-pair-target" placeholder="target % (blank = monitor only)" min="0" step="0.01" style="font-family:var(--mono);font-size:12px;border:1px solid var(--border-strong);border-radius:6px;padding:6px 10px;background:var(--bg-base);color:var(--text-primary)" />
+          <input type="number" id="new-pair-b2div" placeholder="B2 div % (blank = global)" min="0" step="0.01" style="font-family:var(--mono);font-size:12px;border:1px solid var(--border-strong);border-radius:6px;padding:6px 10px;background:var(--bg-base);color:var(--text-primary)" />
+          <input type="text" id="new-pair-mexc-alias" placeholder="MEXC alias (optional)" style="font-family:var(--mono);font-size:12px;border:1px solid var(--border-strong);border-radius:6px;padding:6px 10px;background:var(--bg-base);color:var(--text-primary)" />
+          <input type="text" id="new-pair-kucoin-alias" placeholder="KuCoin alias (optional)" style="font-family:var(--mono);font-size:12px;border:1px solid var(--border-strong);border-radius:6px;padding:6px 10px;background:var(--bg-base);color:var(--text-primary)" />
+          <button class="btn btn-accent" onclick="addPairRow()" style="white-space:nowrap">
+            <i class="ti ti-plus"></i> Add pair
+          </button>
+        </div>
+      </div>
+
+    </div><!-- end body -->
+
+    <div class="config-drawer-footer">
+      <div style="font-size:12px;color:var(--text-muted)" id="cfg-save-status">Changes take effect on the next monitor cycle.</div>
+      <div style="display:flex;gap:8px">
+        <button class="btn" onclick="resetConfigToDefaults()">Reset to defaults</button>
+        <button class="btn btn-accent" onclick="saveConfig()">
+          <i class="ti ti-device-floppy"></i> Save configuration
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="config-toast" id="config-toast"></div>
+
+<script>
+const API_BASE = "";
+let spreadChart;
+let spreadHistoryMap = {};
+let targetMap = {};
+let alertLog = [];
+let lastData = null;
+let showAll = false;
+let selectedSym = null;
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+function ngtTime() {
+  return new Date().toLocaleTimeString("en-GB", { timeZone: "Africa/Lagos", hour12: false });
+}
+setInterval(() => {
+  const clockEl = document.getElementById("clock");
+  if (clockEl) clockEl.textContent = ngtTime() + " WAT";
+}, 1000);
+const clockEl = document.getElementById("clock");
+if (clockEl) clockEl.textContent = ngtTime() + " WAT";
+
+function scrollToSection(id) {
+  const el = document.getElementById(id);
+  if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+function fmt(val, decimals = 4, suffix = "%") {
+  return val != null && val !== "N/A" ? parseFloat(val).toFixed(decimals) + suffix : "—";
+}
+function fmtPrice(val) {
+  if (val == null) return "—";
+  return Number(val).toLocaleString(undefined, { maximumFractionDigits: 4 });
+}
+function symParts(symbol) {
+  if (!symbol) return { base: "—", quote: "" };
+  const s = symbol.toUpperCase();
+  const l = s.toLowerCase();
+  let base, quote;
+  if (l.endsWith("usdt"))     { base = s.slice(0, -4); quote = "USDT"; }
+  else if (l.endsWith("ngn")) { base = s.slice(0, -3); quote = "NGN";  }
+  else if (l.endsWith("ghs")) { base = s.slice(0, -3); quote = "GHS";  }
+  else                         { base = s.slice(0, -3); quote = s.slice(-3); }
+  return { base: base + "/" + quote, raw: s };
+}
+
+// ── Fetch ─────────────────────────────────────────────────────────────────────
+async function fetchAndRender() {
+  const pulse  = document.getElementById("pulse");
+  const banner = document.getElementById("error-banner");
+  try {
+    const res = await fetch(`${API_BASE}/api/status`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    lastData = data;
+    banner.style.display = "none";
+    pulse.classList.remove("stale");
+    document.getElementById("sidebar-status-text").textContent = "Live";
+    renderDashboard(data);
+    fetchHistory(data);
+  } catch (err) {
+    pulse.classList.add("stale");
+    banner.style.display = "flex";
+    document.getElementById("error-text").textContent =
+      `Cannot reach ${API_BASE}/api/status — ${err.message}. Is uvicorn running?`;
+    document.getElementById("sidebar-status-text").textContent = "Offline";
+  }
+}
+
+async function fetchHistory(statusData) {
+  try {
+    const res = await fetch(`${API_BASE}/api/history`);
+    if (!res.ok) return;
+    const data = await res.json();
+    buildSpreadHistory(data.rows, statusData);
+  } catch (_) {}
+}
+
+function buildSpreadHistory(rows, statusData) {
+  if (statusData && statusData.pairs) {
+    statusData.pairs.forEach(pair => {
+      const sym = pair.symbol;
+      if (!spreadHistoryMap[sym]) spreadHistoryMap[sym] = [];
+      if (pair.current_spread != null) {
+        spreadHistoryMap[sym].push(parseFloat(pair.current_spread));
+        if (spreadHistoryMap[sym].length > 30) spreadHistoryMap[sym].shift();
+      }
+      if (pair.target_spread && pair.target_spread !== "N/A") {
+        targetMap[sym] = parseFloat(pair.target_spread);
+      }
+    });
+  }
+  rebuildChartSelector(statusData);
+  if (selectedSym && spreadHistoryMap[selectedSym]) {
+    updateChart(selectedSym);
+  } else {
+    const first = statusData && statusData.pairs
+      ? (statusData.pairs.find(p => !p.monitor_only && spreadHistoryMap[p.symbol]) || statusData.pairs[0] || {}).symbol
+      : Object.keys(spreadHistoryMap)[0];
+    if (first) updateChart(first);
+  }
+}
+
+// ── Render dashboard ──────────────────────────────────────────────────────────
+function renderDashboard(data) {
+  const { summary, pairs } = data;
+  document.getElementById("m-pairs").textContent   = summary.total_pairs ?? "—";
+  document.getElementById("m-healthy").textContent = summary.healthy ?? "—";
+  document.getElementById("m-warn").textContent    = summary.warnings ?? "—";
+  document.getElementById("m-crit").textContent    = summary.alerts_fired ?? "—";
+  document.getElementById("sidebar-ts").textContent = summary.last_updated
+    ? summary.last_updated.split(" ").pop() : "—";
+
+  const warnCount = pairs.filter(p => (p.status || "").toLowerCase() === "warning" || (p.issues || "").includes("CRITICAL")).length;
+  const navBadge = document.getElementById("nav-warn-count");
+  if (warnCount > 0) { navBadge.style.display = ""; navBadge.textContent = warnCount; navBadge.className = "nav-badge"; }
+  else               { navBadge.style.display = "none"; }
+
+  renderPairs(pairs);
+
+  pairs.forEach(p => {
+    if (p.telegram_fired) {
+      const entry = { time: ngtTime(), sym: p.symbol.toUpperCase(), spread: p.current_spread, target: p.target_spread, diff: p.percent_diff, dws: p.dws };
+      const key = `${p.symbol}-${p.timestamp}`;
+      if (!alertLog.find(a => a._key === key)) {
+        entry._key = key;
+        alertLog.unshift(entry);
+        if (alertLog.length > 30) alertLog.pop();
+      }
+    }
+  });
+  renderAlertLog();
+}
+
+function toggleFilter() {
+  showAll = !showAll;
+  document.getElementById("toggle-btn").textContent = showAll ? "Warnings only" : "Show all";
+  if (lastData) renderPairs(lastData.pairs);
+}
+
+function renderPairs(pairs) {
+  const container = document.getElementById("pairs-container");
+  if (!pairs || !pairs.length) {
+    container.innerHTML = `<p class="empty-state">No data yet — run a monitor cycle first.</p>`;
+    return;
+  }
+  // Default view: Tier 1 / Tier 2 issues (actionable) plus any pair with a live
+  // D1 volume spike — D1 fires to Telegram immediately and is surfaced via its own
+  // d1_spike field, so it must show here even when the pair has no other issue.
+  // "Show all" reveals Tier 3 flags and healthy pairs too
+  const visible = showAll
+    ? pairs
+    : pairs.filter(p => (p.alert_tier === 1 || p.alert_tier === 2 || p.d1_spike));
+  document.getElementById("pairs-count-label").textContent = visible.length + " of " + pairs.length;
+  if (!visible.length) {
+    container.innerHTML = `<p class="empty-state empty-state-green"><i class="ti ti-circle-check" style="font-size:15px"></i> All ${pairs.length} pairs healthy or flagged only</p>`;
+    return;
+  }
+  container.innerHTML = visible.map(p => renderMarketRow(p)).join("");
+}
+
+function renderMarketRow(p) {
+  const tier     = p.alert_tier ?? 0;
+  const alerted  = p.should_alert;
+  const { base } = symParts(p.symbol);
+  const spread   = fmt(p.current_spread, 4);
+  const mid      = fmtPrice(p.mid_price);
+  const isSelected = p.symbol === selectedSym;
+
+  // Row left-border colour driven by tier
+  const rowCls = tier === 1 ? "crit"
+               : tier === 2 ? "warn"
+               : tier === 3 ? "flag"
+               : "ok";
+
+  // Primary status badge
+  let primaryBadge = "";
+  if (tier === 1)      primaryBadge = `<span class="mr-badge crit">Tier 1</span>`;
+  else if (tier === 2) primaryBadge = `<span class="mr-badge warn">Tier 2</span>`;
+  else if (tier === 3) primaryBadge = `<span class="mr-badge muted">Flagged</span>`;
+  else                 primaryBadge = `<span class="mr-badge ok">Healthy</span>`;
+
+  // Issue code badges (up to 2 then +N)
+  let issuesBadgesHtml = "";
+  if (p.issues) {
+    const codes = p.issues.split("|").filter(Boolean).map(part => part.split(":")[0]);
+    codes.slice(0, 2).forEach(c => { issuesBadgesHtml += `<span class="mr-badge blue">${c}</span>`; });
+    if (codes.length > 2) issuesBadgesHtml += `<span class="mr-badge blue">+${codes.length - 2}</span>`;
+  }
+
+  return `<div class="market-row ${rowCls}${isSelected ? " selected" : ""}" onclick="selectMarket('${p.symbol}')">
+    <div class="mr-sym">
+      <div class="mr-sym-name">${base}</div>
+      <div class="mr-sym-base">${p.monitor_only ? "Monitor only" : "Managed"}</div>
+    </div>
+    <div class="mr-price">
+      <div class="mr-price-val">${mid}</div>
+      <div class="mr-price-label">Mid price</div>
+    </div>
+    <div class="mr-spread">
+      <div class="mr-spread-val">${spread}</div>
+      <div class="mr-price-label">Spread</div>
+    </div>
+    <div class="mr-issues">${primaryBadge}${issuesBadgesHtml}</div>
+    <i class="ti ti-chevron-right mr-chevron"></i>
+  </div>`;
+}
+
+// ── Market Detail Panel ───────────────────────────────────────────────────────
+function selectMarket(symbol) {
+  if (selectedSym === symbol) {
+    selectedSym = null;
+    document.getElementById("detail-empty").style.display = "";
+    document.getElementById("detail-content").style.display = "none";
+    if (lastData) renderPairs(lastData.pairs);
+    return;
+  }
+  selectedSym = symbol;
+  if (lastData) {
+    renderPairs(lastData.pairs);
+    const pair = lastData.pairs.find(p => p.symbol === symbol);
+    if (pair) renderDetailPanel(pair);
+  }
+  if (spreadHistoryMap[symbol]) updateChart(symbol);
+}
+
+function formatTelegramDetail(detail) {
+  if (!detail) return "";
+  return detail.split("|").filter(Boolean).map(part => {
+    const [id, state] = part.split(":");
+    if (!state) return id;
+    if (state === "flag-only") return `${id} dashboard-only`;
+    if (state === "fired") return `${id} sent`;
+    if (state === "cooldown") return `${id} in cooldown`;
+    if (state.endsWith("cyc")) return `${id} ${state.replace("cyc", "")} cycles`;
+    return `${id} ${state}`;
+  }).join(" · ");
+}
+
+function renderDetailPanel(p) {
+  const { base } = symParts(p.symbol);
+  const isCrit = p.issues && p.issues.includes("CRITICAL");
+  const isWarn = (p.status || "").toLowerCase() === "warning";
+  const statusBadgeCls = p.telegram_fired ? "crit" : isCrit ? "crit" : isWarn ? "warn" : "ok";
+  const statusText     = p.telegram_fired ? "Alert fired" : isCrit ? "Critical" : isWarn ? "Warning" : "Healthy";
+  const telegramCaption = (!p.telegram_fired && p.telegram_detail) ? formatTelegramDetail(p.telegram_detail) : "";
+
+  // Parse active issues
+  const activeIssues = {};
+  if (p.issues) {
+    p.issues.split("|").filter(Boolean).forEach(part => {
+      const [id, sev] = part.split(":");
+      activeIssues[id.trim()] = sev ? sev.trim() : "HIGH";
+    });
+  }
+
+  // Build check rows
+  const checks = [
+    {
+      id: "A1", name: "Crossed Book",
+      desc: "Best bid ≥ best ask",
+      severity: "CRITICAL",
+      test: () => activeIssues["A1"] ? "crit" : "pass",
+      passDesc: "Bid < Ask — normal spread",
+    },
+    {
+      id: "A2-Spread", name: "Spread Widening",
+      desc: `Target: ${p.target_spread && p.target_spread !== "N/A" ? p.target_spread + "%" : "N/A"} | Current: ${fmt(p.current_spread, 4)} | Diff: ${fmt(p.percent_diff, 1)}`,
+      severity: "HIGH",
+      test: () => p.monitor_only ? "na" : activeIssues["A2"] ? "warn" : "pass",
+      passDesc: "Spread within tolerance",
+      naDesc: "Monitor-only — no target",
+    },
+    {
+      id: "A2-Depth", name: "Shallow Book",
+      desc: `Ask layers: ${p.ask_layers ?? "—"} | Bid layers: ${p.bid_layers ?? "—"} (min 10)`,
+      severity: "HIGH",
+      test: () => activeIssues["A2-Depth"] || (p.ask_layers != null && p.ask_layers < 10) || (p.bid_layers != null && p.bid_layers < 10) ? "warn" : "pass",
+      passDesc: "Sufficient depth on both sides",
+    },
+    {
+      id: "A3", name: "One-Sided Market",
+      desc: "Either ask or bid side is completely empty",
+      severity: "CRITICAL",
+      test: () => activeIssues["A3"] ? "crit" : "pass",
+      passDesc: "Both sides have orders",
+    },
+    {
+      id: "A4", name: "Thin Mid-Market",
+      desc: "Liquidity within spread band below threshold",
+      severity: "MEDIUM",
+      test: () => activeIssues["A4"] ? "info" : "pass",
+      passDesc: "Adequate mid-market liquidity",
+    },
+    {
+      id: "A5", name: "Depth Imbalance",
+      desc: `Ratio: ${p.imbalance_ratio ?? "—"}${p.heavier_side ? " — " + p.heavier_side + " heavier" : ""}`,
+      severity: "MEDIUM",
+      test: () => activeIssues["A5"] ? "warn" : "pass",
+      passDesc: "Depth roughly balanced both sides",
+    },
+    {
+      id: "A6", name: "Layer Churn Stall",
+      desc: `Churn: ${p.layer_churn_pct != null && p.layer_churn_pct !== "N/A" ? p.layer_churn_pct + "%" : "—"} | Typical for this pair: ${p.layer_churn_baseline_pct != null && p.layer_churn_baseline_pct !== "N/A" ? p.layer_churn_baseline_pct + "%" : "building history…"}`,
+      severity: "HIGH",
+      test: () => activeIssues["A6"] ? "warn" : ((p.layer_churn_baseline_pct == null || p.layer_churn_baseline_pct === "N/A") ? "na" : "pass"),
+      passDesc: "Near-touch layers refreshing normally for this pair",
+      naDesc: "Self-baseline still building — not enough cycle history yet",
+    },
+    {
+      id: "B1", name: "Price Discrepancy",
+      desc: `Quidax: ${fmtPrice(p.mid_price)} | Reference: ${p.trusted_ref && p.trusted_ref !== "N/A" ? fmtPrice(p.trusted_ref) : "—"}`,
+      severity: "HIGH",
+      test: () => (p.trusted_ref == null || p.trusted_ref === "N/A") ? "na" : activeIssues["B1"] ? "warn" : "pass",
+      passDesc: "Tracking reference exchange price",
+      naDesc: "No external reference (NGN/GHS pair — see F1)",
+    },
+    {
+      id: "B2", name: "Source Divergence",
+      desc: "MEXC vs KuCoin agreement for this asset",
+      severity: "HIGH",
+      test: () => activeIssues["B2"] ? "warn" : ((p.trusted_ref == null || p.trusted_ref === "N/A") ? "na" : "pass"),
+      passDesc: "MEXC and KuCoin agree",
+      naDesc: "No external reference for this pair",
+    },
+    {
+      id: "B3", name: "Stale Reference Feed",
+      desc: "MEXC/KuCoin feed freshness for this asset",
+      severity: "HIGH",
+      test: () => activeIssues["B3"] ? "warn" : ((p.trusted_ref == null || p.trusted_ref === "N/A") ? "na" : "pass"),
+      passDesc: "Reference feed updating normally",
+      naDesc: "No external reference for this pair",
+    },
+    {
+      id: "B4", name: "Circuit Breaker Proximity",
+      desc: "Price move within k-line window vs configured breaker %",
+      severity: "HIGH",
+      test: () => activeIssues["B4"] ? "warn" : "pass",
+      passDesc: "Within normal trading range",
+    },
+    {
+      id: "DWS", name: "Dynamic Weighted Spread",
+      desc: `DWS: ${fmt(p.dws, 4, "")} ${p.dws_poor ? "⚠ above threshold" : "— within range"}`,
+      severity: "HIGH",
+      test: () => p.dws_poor ? "warn" : "pass",
+      passDesc: "DWS within acceptable range",
+    },
+    {
+      id: "F1", name: "Cross-Pair Arbitrage Gap",
+      desc: "Quoted price vs implied cross-rate from linked pairs",
+      severity: "MEDIUM",
+      test: () => activeIssues["F1"] ? "warn" : "pass",
+      passDesc: "No exploitable gap vs implied cross-rate",
+    },
+    {
+      id: "D1", name: "Volume Spike",
+      desc: `Window: ${p.d1_window_volume != null ? (p.d1_currency || "") + Number(p.d1_window_volume).toLocaleString(undefined, {maximumFractionDigits: 0}) : "—"} | Threshold: ${p.d1_threshold != null ? (p.d1_currency || "") + Number(p.d1_threshold).toLocaleString(undefined, {maximumFractionDigits: 0}) : "—"}${p.d1_context ? " — " + p.d1_context : ""}`,
+      severity: "HIGH",
+      test: () => (p.d1_threshold == null) ? "na" : (p.d1_spike ? "warn" : "pass"),
+      passDesc: "Window volume below spike threshold for this pair",
+      naDesc: "Monitor-only — no volume threshold",
+    },
+    {
+      id: "DEPTH", name: "Depth Liquidity",
+      desc: `1.25×: ${p.depth_1_25x || p["depth_1.25x"] || "—"} | 1.5×: ${p.depth_1_5x || p["depth_1.5x"] || "—"}`,
+      severity: "INFO",
+      test: () => "info",
+      passDesc: "",
+    },
+  ];
+
+  const checkIcons = { pass: "ti-circle-check", warn: "ti-alert-triangle", crit: "ti-alert-circle", info: "ti-info-circle", na: "ti-minus" };
+
+  const checksHtml = checks.map(c => {
+    const state = c.test();
+    const icon  = checkIcons[state] || "ti-circle";
+    let desc = c.desc;
+    if (state === "pass" && c.passDesc) desc = c.passDesc;
+    if (state === "na"   && c.naDesc)  desc = c.naDesc;
+    const sevLabel = state !== "pass" && state !== "na" ? `<span class="check-sev">${c.severity}</span>` : "";
+    return `<div class="check-row ${state}">
+      <i class="ti ${icon} check-icon"></i>
+      <div class="check-body">
+        <div class="check-name">[${c.id}] ${c.name}</div>
+        <div class="check-desc">${desc}</div>
+      </div>
+      ${sevLabel}
+    </div>`;
+  }).join("");
+
+  document.getElementById("detail-empty").style.display = "none";
+  document.getElementById("detail-content").style.display = "";
+  document.getElementById("detail-content").innerHTML = `
+    <div class="detail-header">
+      <div>
+        <div class="detail-sym">${base}</div>
+        <div class="detail-time">${p.timestamp ? p.timestamp.split(" ").pop() : ngtTime()} WAT</div>
+      </div>
+      <span class="mr-badge ${statusBadgeCls}" style="font-size:12px;padding:4px 12px">${statusText}</span>
+    </div>
+    ${telegramCaption ? `<div style="font-size:11px;color:var(--text-muted);margin:-6px 0 14px">${telegramCaption}</div>` : ""}
+    <div class="detail-metrics">
+      <div class="dm"><div class="k">Mid price</div><div class="v muted">${fmtPrice(p.mid_price)}</div></div>
+      <div class="dm"><div class="k">Spread</div><div class="v ${(p.status||"").toLowerCase() === "warning" ? "warn" : "ok"}">${fmt(p.current_spread, 4)}</div></div>
+      <div class="dm"><div class="k">Target spread</div><div class="v muted">${p.target_spread && p.target_spread !== "N/A" ? p.target_spread + "%" : "N/A"}</div></div>
+      <div class="dm"><div class="k">Spread diff</div><div class="v ${parseFloat(p.percent_diff) > 0 ? "warn" : "ok"}">${fmt(p.percent_diff, 1)}</div></div>
+      <div class="dm"><div class="k">Reference price</div><div class="v muted">${p.trusted_ref && p.trusted_ref !== "N/A" ? fmtPrice(p.trusted_ref) : "—"}</div></div>
+      <div class="dm"><div class="k">vs reference</div><div class="v ${activeIssues["B1"] ? "warn" : "ok"}">${p.trusted_ref && p.trusted_ref !== "N/A" ? (((p.mid_price - p.trusted_ref) / p.trusted_ref) * 100).toFixed(2) + "%" : "—"}</div></div>
+    </div>
+    <div class="detail-alerts-title">Alert checks</div>
+    <div class="alert-checks">${checksHtml}</div>
+  `;
+}
+
+// ── Alert Log ─────────────────────────────────────────────────────────────────
+function renderAlertLog() {
+  const el = document.getElementById("alert-log-container");
+  if (!alertLog.length) {
+    el.innerHTML = `<p class="empty-state">No alerts this session.</p>`;
+    return;
+  }
+  el.innerHTML = alertLog.map(a => `
+    <div class="log-row">
+      <div class="log-dot"></div>
+      <div class="log-time">${a.time}</div>
+      <div class="log-msg">
+        <b>${a.sym}</b> — spread ${a.spread != null ? parseFloat(a.spread).toFixed(4) + "%" : "—"}
+        (target ${a.target !== "N/A" ? a.target + "%" : "N/A"},
+        diff ${a.diff != null ? (parseFloat(a.diff) > 0 ? "+" : "") + parseFloat(a.diff).toFixed(1) + "%" : "—"})
+        &nbsp;·&nbsp; DWS ${a.dws != null ? parseFloat(a.dws).toFixed(4) : "—"}
+      </div>
+    </div>`).join("");
+}
+
+// ── Chart ─────────────────────────────────────────────────────────────────────
+function initChart() {
+  const canvas = document.getElementById("spreadChart");
+  if (!canvas) return;
+  const ctx = canvas.getContext("2d");
+
+  const cssVar = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  const grid = cssVar("--chart-grid");
+  const tick = cssVar("--chart-tick");
+
+  spreadChart = new Chart(ctx, {
+    type: "line",
+    data: { labels: [], datasets: [
+      { label: "Spread %", data: [], borderColor: "#7c3aed", backgroundColor: "rgba(124,58,237,0.07)", pointRadius: 3, pointBackgroundColor: "#7c3aed", fill: true, tension: 0.3, borderWidth: 1.5 },
+      { label: "Target",   data: [], borderColor: "rgba(239,68,68,.5)", borderDash: [4, 3], pointRadius: 0, borderWidth: 1, fill: false, tension: 0 },
+    ]},
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
+      scales: {
+        x: { display: true, ticks: { font: { size: 10 }, color: tick, maxRotation: 0 }, grid: { color: grid } },
+        y: { grid: { color: grid }, ticks: { font: { size: 11 }, color: tick, callback: v => v.toFixed(3) + "%" } },
+      },
+      animation: { duration: 300 },
+    },
+  });
+}
+
+// Re-apply themeable colours to an already-built chart (called on theme toggle)
+function themeChart() {
+  if (!spreadChart) return;
+  const cssVar = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  const grid = cssVar("--chart-grid");
+  const tick = cssVar("--chart-tick");
+  const s = spreadChart.options.scales;
+  s.x.ticks.color = tick; s.x.grid.color = grid;
+  s.y.ticks.color = tick; s.y.grid.color = grid;
+  spreadChart.update("none");
+}
+
+function rebuildChartSelector(statusData) {
+  if (!statusData || !statusData.pairs) return;
+  const container = document.getElementById("chart-selector");
+  const syms = statusData.pairs.map(p => p.symbol).filter(s => spreadHistoryMap[s] && spreadHistoryMap[s].length > 1);
+  const active = selectedSym && syms.includes(selectedSym) ? selectedSym : syms[0];
+  container.innerHTML = syms.slice(0, 6).map(s => {
+    const { base } = symParts(s);
+    return `<div class="chart-pill${s === active ? " active" : ""}" data-symbol="${s}" onclick="selectChartSym('${s}')">${base}</div>`;
+  }).join("");
+}
+
+function selectChartSym(sym) {
+  document.querySelectorAll(".chart-pill").forEach(el => {
+    el.classList.remove("active");
+  });
+
+  const activePill = [...document.querySelectorAll(".chart-pill")]
+    .find(el => el.dataset.symbol === sym);
+
+  if (activePill) {
+    activePill.classList.add("active");
+  }
+
+  updateChart(sym);
+}
+
+function updateChart(sym) {
+  if (!spreadChart || !spreadHistoryMap[sym]) return;
+  const history = spreadHistoryMap[sym];
+  const target  = targetMap[sym] ?? null;
+  document.getElementById("chart-title").textContent = `${sym.toUpperCase()} — spread % last ${history.length} cycles`;
+  spreadChart.data.labels = history.map((_, i) => `C${i + 1}`);
+  spreadChart.data.datasets[0].data = history;
+  spreadChart.data.datasets[1].data = target !== null ? history.map(() => target) : [];
+  spreadChart.update();
+}
+
+// ── Config panel ──────────────────────────────────────────────────────────────
+let configOpen = false;
+let _currentConfig = null;
+
+function toggleConfigPanel() {
+  configOpen = !configOpen;
+  document.getElementById("config-overlay").classList.toggle("open", configOpen);
+  if (configOpen) loadConfigIntoPanel();
+}
+
+function handleOverlayClick(e) {
+  if (e.target === document.getElementById("config-overlay")) toggleConfigPanel();
+}
+
+async function loadConfigIntoPanel() {
+  try {
+    const res = await fetch(`${API_BASE}/api/config`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    _currentConfig = await res.json();
+    populateConfigFields(_currentConfig);
+  } catch (err) {
+    showToast("Could not load config: " + err.message, true);
+  }
+}
+
+function populateConfigFields(cfg) {
+  const t = cfg.timing    || {};
+  const o = cfg.orderbook || {};
+  const p = cfg.pricing   || {};
+  const k = cfg.kline     || {};
+  const lc = cfg.layer_churn || {};
+  const vs = cfg.volume_spike || {};
+
+  const set = (id, val) => {
+    const el = document.getElementById(id);
+    if (el && val !== undefined && val !== null) el.value = val;
+  };
+
+  set("cfg-cycle-sleep", t.cycle_sleep_seconds);
+
+  set("cfg-depth-limit",     o.depth_limit);
+  set("cfg-min-ob-layers",   o.min_orderbook_layers);
+  set("cfg-thin-depth",      o.thin_depth_threshold);
+  set("cfg-imbalance-ratio", o.depth_imbalance_ratio);
+  set("cfg-dws-poor",        o.dws_poor_threshold);
+  set("cfg-min-abs-spread",  o.min_abs_spread_diff_pct);
+
+  set("cfg-price-discrepancy",   p.price_discrepancy_pct);
+  set("cfg-source-divergence",   p.source_divergence_pct);
+  set("cfg-stale-ref-cycles",    p.stale_reference_cycles);
+  set("cfg-stale-unchanged-cycles", p.stale_unchanged_cycles);
+  set("cfg-stale-movement-epsilon", p.stale_movement_epsilon_pct);
+  set("cfg-circuit-breaker-pct", p.circuit_breaker_pct);
+  set("cfg-circuit-breaker-warn", p.circuit_breaker_warn_ratio);
+  set("cfg-arb-gap",             p.arb_gap_pct);
+
+  set("cfg-kline-candle",   k.candle_minutes);
+  set("cfg-kline-lookback", k.lookback_minutes);
+  set("cfg-vol-baseline-buckets", k.volume_baseline_buckets);
+
+  set("cfg-vol-spike-mode",        vs.mode);
+  set("cfg-vol-spike-ratio",       vs.spike_ratio);
+  set("cfg-vol-spike-min-buckets", vs.min_baseline_buckets);
+  set("cfg-vol-spike-warmup",      vs.warmup_fallback);
+
+  set("cfg-layer-churn-top-pct",          lc.top_pct);
+  set("cfg-layer-churn-baseline-buckets", lc.baseline_buckets);
+  set("cfg-layer-churn-ratio-threshold",  lc.ratio_threshold);
+
+  renderPairsTable(cfg.pairs || [], (cfg.pricing || {}).source_divergence_overrides || {});
+}
+
+function renderPairsTable(pairs, overrides) {
+  overrides = overrides || ((_currentConfig && _currentConfig.pricing && _currentConfig.pricing.source_divergence_overrides) || {});
+  const tbody = document.getElementById("pairs-cfg-tbody");
+  document.getElementById("pairs-count-cfg").textContent = pairs.length + " pairs";
+  tbody.innerHTML = pairs.map((p, i) => {
+    const sym = Array.isArray(p) ? p[0] : p.symbol;
+    const tgt = Array.isArray(p) ? p[1] : p.target;
+    const aliases = (Array.isArray(p) ? p[2] : p.aliases) || {};
+    const tgtVal = tgt !== null && tgt !== undefined ? tgt : "";
+    // B2 override is USDT-only (B2 doesn't run on NGN/GHS). Non-USDT rows show a
+    // muted dash so it's clear the field doesn't apply rather than looking blank-editable.
+    const symKey = String(sym || "").toLowerCase();
+    const isUsdt = symKey.endsWith("usdt");
+    const ovRaw = overrides[symKey];
+    const ovVal = (ovRaw !== null && ovRaw !== undefined) ? ovRaw : "";
+    const b2Cell = isUsdt
+      ? `<input type="number" value="${ovVal}" placeholder="global" min="0" step="0.01" data-row="${i}" data-col="b2div" />`
+      : `<span style="color:var(--text-muted);font-size:12px">—</span>`;
+    return `<tr>
+      <td><input type="text" value="${sym}" data-row="${i}" data-col="sym" /></td>
+      <td><input type="number" value="${tgtVal}" placeholder="monitor only" min="0" step="0.01" data-row="${i}" data-col="tgt" /></td>
+      <td>${b2Cell}</td>
+      <td><input type="text" value="${aliases.mexc || ""}" placeholder="same as symbol" data-row="${i}" data-col="mexc_alias" /></td>
+      <td><input type="text" value="${aliases.kucoin || ""}" placeholder="same as symbol" data-row="${i}" data-col="kucoin_alias" /></td>
+      <td style="text-align:center"><button class="del-btn" onclick="deletePairRow(this)" aria-label="Remove pair"><i class="ti ti-trash"></i></button></td>
+    </tr>`;
+  }).join("");
+}
+
+function getPairsFromTable() {
+  const rows = document.querySelectorAll("#pairs-cfg-tbody tr");
+  const pairs = [];
+  rows.forEach(row => {
+    const symInput = row.querySelector("input[data-col='sym']");
+    const tgtInput = row.querySelector("input[data-col='tgt']");
+    const mexcInput = row.querySelector("input[data-col='mexc_alias']");
+    const kucoinInput = row.querySelector("input[data-col='kucoin_alias']");
+    if (!symInput) return;
+    const sym = symInput.value.trim().toLowerCase();
+    if (!sym) return;
+    const tgtRaw = tgtInput ? tgtInput.value.trim() : "";
+    const tgt = tgtRaw === "" ? null : parseFloat(tgtRaw);
+    const mexcAlias = mexcInput ? mexcInput.value.trim().toUpperCase() : "";
+    const kucoinAlias = kucoinInput ? kucoinInput.value.trim().toUpperCase() : "";
+    const aliases = {};
+    if (mexcAlias) aliases.mexc = mexcAlias;
+    if (kucoinAlias) aliases.kucoin = kucoinAlias;
+    const row_ = [sym, isNaN(tgt) ? null : tgt];
+    if (Object.keys(aliases).length) row_.push(aliases);
+    pairs.push(row_);
+  });
+  return pairs;
+}
+
+function getDivergenceOverridesFromTable() {
+  // Build the {symbol: pct} B2 override map from the table. USDT-quoted rows only;
+  // a blank or non-numeric cell means "use the global default" (no entry emitted).
+  const rows = document.querySelectorAll("#pairs-cfg-tbody tr");
+  const overrides = {};
+  rows.forEach(row => {
+    const symInput = row.querySelector("input[data-col='sym']");
+    const b2Input = row.querySelector("input[data-col='b2div']");
+    if (!symInput || !b2Input) return;
+    const sym = symInput.value.trim().toLowerCase();
+    if (!sym || !sym.endsWith("usdt")) return;
+    const raw = b2Input.value.trim();
+    if (raw === "") return;
+    const val = parseFloat(raw);
+    if (isNaN(val) || val < 0) return;
+    overrides[sym] = val;
+  });
+  return overrides;
+}
+
+function deletePairRow(btn) {
+  // btn is the delete button element; walk up to its <tr> and remove it
+  const tr = btn.closest("tr");
+  if (tr) tr.remove();
+  const count = document.querySelectorAll("#pairs-cfg-tbody tr").length;
+  document.getElementById("pairs-count-cfg").textContent = count + " pairs";
+}
+
+function addPairRow() {
+  const symInput = document.getElementById("new-pair-sym");
+  const tgtInput = document.getElementById("new-pair-target");
+  const b2Input = document.getElementById("new-pair-b2div");
+  const mexcInput = document.getElementById("new-pair-mexc-alias");
+  const kucoinInput = document.getElementById("new-pair-kucoin-alias");
+  const sym = symInput.value.trim().toLowerCase();
+  if (!sym) { showToast("Enter a symbol first", true); return; }
+  const tgtRaw = tgtInput.value.trim();
+  const tgt = tgtRaw === "" ? null : parseFloat(tgtRaw);
+  const mexcAlias = mexcInput.value.trim().toUpperCase();
+  const kucoinAlias = kucoinInput.value.trim().toUpperCase();
+  const aliases = {};
+  if (mexcAlias) aliases.mexc = mexcAlias;
+  if (kucoinAlias) aliases.kucoin = kucoinAlias;
+  if (!_currentConfig) _currentConfig = { pairs: [] };
+  if (!_currentConfig.pricing) _currentConfig.pricing = {};
+  // Snapshot any in-progress B2 edits already in the table so they survive the
+  // full re-render below (matches how the rest of the row state is handled).
+  const overrides = getDivergenceOverridesFromTable();
+  const b2Raw = b2Input.value.trim();
+  if (b2Raw !== "" && sym.endsWith("usdt")) {
+    const b2 = parseFloat(b2Raw);
+    if (!isNaN(b2) && b2 >= 0) overrides[sym] = b2;
+  }
+  _currentConfig.pricing.source_divergence_overrides = overrides;
+  const newRow = [sym, isNaN(tgt) ? null : tgt];
+  if (Object.keys(aliases).length) newRow.push(aliases);
+  _currentConfig.pairs.push(newRow);
+  renderPairsTable(_currentConfig.pairs, overrides);
+  symInput.value = "";
+  tgtInput.value = "";
+  b2Input.value = "";
+  mexcInput.value = "";
+  kucoinInput.value = "";
+}
+
+function buildConfigPayload() {
+  const num = id => { const el = document.getElementById(id); return el ? parseFloat(el.value) : null; };
+  return {
+    timing: {
+      cycle_sleep_seconds: num("cfg-cycle-sleep"),
+    },
+    orderbook: {
+      depth_limit:               num("cfg-depth-limit"),
+      min_orderbook_layers:      num("cfg-min-ob-layers"),
+      thin_depth_threshold:      num("cfg-thin-depth"),
+      depth_imbalance_ratio:     num("cfg-imbalance-ratio"),
+      dws_poor_threshold:        num("cfg-dws-poor"),
+      min_abs_spread_diff_pct:   num("cfg-min-abs-spread"),
+    },
+    pricing: {
+      price_discrepancy_pct:      num("cfg-price-discrepancy"),
+      source_divergence_pct:      num("cfg-source-divergence"),
+      source_divergence_overrides: getDivergenceOverridesFromTable(),
+      stale_reference_cycles:     num("cfg-stale-ref-cycles"),
+      stale_unchanged_cycles:     num("cfg-stale-unchanged-cycles"),
+      stale_movement_epsilon_pct: num("cfg-stale-movement-epsilon"),
+      circuit_breaker_pct:        num("cfg-circuit-breaker-pct"),
+      circuit_breaker_warn_ratio: num("cfg-circuit-breaker-warn"),
+      arb_gap_pct:                num("cfg-arb-gap"),
+    },
+    kline: {
+      candle_minutes:          num("cfg-kline-candle"),
+      lookback_minutes:        num("cfg-kline-lookback"),
+      volume_baseline_buckets: num("cfg-vol-baseline-buckets"),
+    },
+    volume_spike: {
+      mode:                 (document.getElementById("cfg-vol-spike-mode") || {}).value || "baseline_relative",
+      spike_ratio:          num("cfg-vol-spike-ratio"),
+      min_baseline_buckets: num("cfg-vol-spike-min-buckets"),
+      warmup_fallback:      (document.getElementById("cfg-vol-spike-warmup") || {}).value || "absolute",
+    },
+    layer_churn: {
+      top_pct:          num("cfg-layer-churn-top-pct"),
+      baseline_buckets: num("cfg-layer-churn-baseline-buckets"),
+      ratio_threshold:  num("cfg-layer-churn-ratio-threshold"),
+    },
+    pairs: getPairsFromTable(),
+  };
+}
+
+async function saveConfig() {
+  const payload = buildConfigPayload();
+  const statusEl = document.getElementById("cfg-save-status");
+  statusEl.textContent = "Saving…";
+  try {
+    const res = await fetch(`${API_BASE}/api/config`, {
+      method:  "POST",
+      headers: { "Content-Type": "application/json" },
+      body:    JSON.stringify(payload),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: res.statusText }));
+      throw new Error(err.detail || res.statusText);
+    }
+    const data = await res.json();
+    _currentConfig = data.config;
+    populateConfigFields(_currentConfig);
+    statusEl.textContent = "Saved at " + ngtTime() + " WAT";
+    showToast("Configuration saved — takes effect on next cycle");
+  } catch (err) {
+    statusEl.textContent = "Save failed: " + err.message;
+    showToast("Save failed: " + err.message, true);
+  }
+}
+
+async function resetConfigToDefaults() {
+  if (!confirm("Reset all settings to their defaults? This cannot be undone.")) return;
+  try {
+    const res = await fetch(`${API_BASE}/api/config`, {
+      method:  "POST",
+      headers: { "Content-Type": "application/json" },
+      body:    JSON.stringify({ _reset: true }),
+    });
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || res.statusText);
+    const data = await res.json();
+    _currentConfig = data.config;
+    populateConfigFields(_currentConfig);
+    showToast("Reset to defaults");
+  } catch (err) {
+    showToast("Reset failed: " + err.message, true);
+  }
+}
+
+function showToast(msg, isError = false) {
+  const el = document.getElementById("config-toast");
+  el.textContent = msg;
+  el.className = "config-toast" + (isError ? " error-toast" : "");
+  el.classList.add("show");
+  setTimeout(() => el.classList.remove("show"), 3500);
+}
+
+// ── Daily Log ─────────────────────────────────────────────────────────────────
+let _dlAllRows   = [];   // full dataset from /api/history
+let _dlFiltered  = [];   // after market + status filter applied
+let _dlPage      = 0;
+let _dlPageSize  = 50;
+
+async function fetchDailyLog() {
+  // Read selected date from picker; default to today in NGT
+  const picker = document.getElementById("dl-date-picker");
+  const todayNgt = new Date().toLocaleDateString("en-CA", { timeZone: "Africa/Lagos" });
+  if (!picker.value) picker.value = todayNgt;
+
+  // Clamp: never request future dates or dates >30 days back
+  const minDate = new Date(new Date(todayNgt) - 29 * 864e5).toISOString().slice(0, 10);
+  picker.min = minDate;
+  picker.max = todayNgt;
+  const selectedDate = picker.value;
+
+  try {
+    const url = `${API_BASE}/api/history${selectedDate !== todayNgt ? `?date=${selectedDate}` : ""}`;
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    document.getElementById("dl-date-label").textContent = `Date — ${data.date || "—"}`;
+    _dlAllRows = (data.rows || []).reverse();  // newest first
+    _dlPage    = 0;
+    populateDlMarketFilter(_dlAllRows);
+    applyDlFilters();
+  } catch (err) {
+    document.getElementById("dl-tbody").innerHTML =
+      `<tr><td colspan="5" style="color:var(--red);padding:20px 10px">Failed to load: ${err.message}</td></tr>`;
+  }
+}
+
+function downloadDailyLog(fullDay = false) {
+  const rows = fullDay ? _dlAllRows : _dlFiltered;
+  if (!rows || !rows.length) {
+    showToast("No rows to download", true);
+    return;
+  }
+
+  // Build CSV from the row objects — use the same columns the daily_log files have
+  const cols = ["Timestamp", "Market", "Status", "Issues", "Depth"];
+  const escape = v => {
+    const s = String(v ?? "");
+    return s.includes(",") || s.includes('"') || s.includes("\n")
+      ? `"${s.replace(/"/g, '""')}"` : s;
+  };
+  const lines = [
+    cols.join(","),
+    ...rows.map(r =>
+      cols.map(c => escape(r[c] ?? r[c.toLowerCase()] ?? "")).join(",")
+    ),
+  ];
+  const csv  = lines.join("\r\n");
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement("a");
+  const picker = document.getElementById("dl-date-picker");
+  const date   = picker?.value || new Date().toLocaleDateString("en-CA", { timeZone: "Africa/Lagos" });
+  a.href     = url;
+  a.download = `daily_log_${date}${fullDay ? "" : "_filtered"}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+
+function populateDlMarketFilter(rows) {
+  const markets = [...new Set(rows.map(r => r.Market || r.market || ""))].filter(Boolean).sort();
+  const sel = document.getElementById("dl-filter-market");
+  const prev = sel.value;
+  sel.innerHTML = `<option value="">All markets</option>` +
+    markets.map(m => `<option value="${m}"${m === prev ? " selected" : ""}>${m.toUpperCase()}</option>`).join("");
+}
+
+function applyDlFilters() {
+  const market  = document.getElementById("dl-filter-market").value;
+  const status  = document.getElementById("dl-filter-status").value;
+  _dlPageSize   = parseInt(document.getElementById("dl-page-size").value) || 50;
+  _dlFiltered   = _dlAllRows.filter(r => {
+    const mVal = (r.Market || r.market || "").toLowerCase();
+    const sVal = (r.Status || r.status || "").toUpperCase();
+    if (market && mVal !== market.toLowerCase()) return false;
+    if (status && sVal !== status) return false;
+    return true;
+  });
+  _dlPage = 0;
+  renderDlPage();
+}
+
+function dlChangePage(dir) {
+  const maxPage = Math.max(0, Math.ceil(_dlFiltered.length / _dlPageSize) - 1);
+  _dlPage = Math.max(0, Math.min(_dlPage + dir, maxPage));
+  renderDlPage();
+}
+
+function renderDlPage() {
+  const total   = _dlFiltered.length;
+  const start   = _dlPage * _dlPageSize;
+  const end     = Math.min(start + _dlPageSize, total);
+  const page    = _dlFiltered.slice(start, end);
+  const maxPage = Math.max(0, Math.ceil(total / _dlPageSize) - 1);
+
+  document.getElementById("dl-count-label").textContent = total.toLocaleString() + " rows";
+  document.getElementById("dl-page-info").textContent =
+    total === 0 ? "No rows" : `${start + 1}–${end} of ${total.toLocaleString()}`;
+  document.getElementById("dl-prev").disabled = _dlPage === 0;
+  document.getElementById("dl-next").disabled = _dlPage >= maxPage;
+
+  if (!page.length) {
+    document.getElementById("dl-tbody").innerHTML =
+      `<tr><td colspan="5" style="color:var(--text-muted);padding:20px 10px">No rows match the current filters.</td></tr>`;
+    return;
+  }
+
+  document.getElementById("dl-tbody").innerHTML = page.map(r => {
+    const ts     = r.Timestamp || r.timestamp || "—";
+    const market = (r.Market   || r.market   || "—").toUpperCase();
+    const status = (r.Status   || r.status   || "—").toUpperCase();
+    const issues = r.Issues    || r.issues   || "";
+    const depth  = r.Depth     || r.depth    || "";
+
+    const statusCls = status === "WARNING" ? "warn" : status === "SKIPPED" ? "skip" : "ok";
+    const statusIcon = status === "WARNING" ? "⚠️" : status === "SKIPPED" ? "—" : "✓";
+
+    // Render issue codes as colour-coded badges
+    let issueHtml = "—";
+    if (issues) {
+      issueHtml = issues.split("|").filter(Boolean).map(part => {
+        const [id, sev] = part.split(":");
+        const sevCls = sev === "CRITICAL" ? "CRITICAL" : sev === "HIGH" ? "HIGH" : "MEDIUM";
+        return `<span class="dl-issue-badge ${sevCls}">${id}</span>`;
+      }).join("");
+    }
+
+    return `<tr>
+      <td class="dl-ts">${ts}</td>
+      <td class="dl-market">${market}</td>
+      <td><span class="dl-status ${statusCls}">${statusIcon} ${status}</span></td>
+      <td class="dl-issues">${issueHtml}</td>
+      <td class="dl-depth">${depth || "—"}</td>
+    </tr>`;
+  }).join("");
+}
+
+// Wire up filter controls
+document.getElementById("dl-filter-market").addEventListener("change", applyDlFilters);
+document.getElementById("dl-filter-status").addEventListener("change", applyDlFilters);
+document.getElementById("dl-page-size").addEventListener("change", applyDlFilters);
+
+// ── Theme toggle ───────────────────────────────────────────────────────────────
+function syncThemeIcon() {
+  const dark = document.documentElement.getAttribute("data-theme") === "dark";
+  const icon = document.getElementById("theme-icon");
+  if (icon) icon.className = "ti " + (dark ? "ti-sun" : "ti-moon");
+}
+
+function toggleTheme() {
+  const root = document.documentElement;
+  const dark = root.getAttribute("data-theme") === "dark";
+  if (dark) root.removeAttribute("data-theme");
+  else      root.setAttribute("data-theme", "dark");
+  try { localStorage.setItem("ohm-theme", dark ? "light" : "dark"); } catch (e) {}
+  syncThemeIcon();
+  themeChart();
+}
+
+// ── Boot ──────────────────────────────────────────────────────────────────────
+syncThemeIcon();
+initChart();
+fetchAndRender();
+fetchDailyLog();
+setInterval(fetchAndRender, 60_000);
+setInterval(fetchDailyLog, 60_000);
+</script>
+</body>
+</html>
