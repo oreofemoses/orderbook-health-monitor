@@ -9,6 +9,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@2.47.0/tabler-icons.min.css" />
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
+<<<<<<< HEAD
 <script>
 // Apply saved theme before first paint to avoid a flash of the wrong theme.
 (function () {
@@ -20,6 +21,8 @@
   } catch (e) {}
 })();
 </script>
+=======
+>>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
 <style>
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 :root {
@@ -54,6 +57,7 @@
   --shadow-md: 0 4px 16px rgba(0,0,0,0.08);
   --font: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
   --mono: 'JetBrains Mono', monospace;
+<<<<<<< HEAD
   --chart-grid: rgba(0,0,0,0.05);
   --chart-tick: #9ca3af;
 }
@@ -92,6 +96,11 @@
 [data-theme="dark"] .check-row.pass { background: rgba(16,185,129,0.16); color: #6ee7b7; border-color: rgba(16,185,129,0.35); }
 
 body { font-family: var(--font); background: var(--bg-base); color: var(--text-primary); font-size: 14px; min-height: 100vh; display: flex; transition: background .2s ease, color .2s ease; }
+=======
+}
+
+body { font-family: var(--font); background: var(--bg-base); color: var(--text-primary); font-size: 14px; min-height: 100vh; display: flex; }
+>>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
 
 /* ─── Sidebar ───────────────────────────────────── */
 .sidebar {
@@ -262,7 +271,10 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
 .market-row.warn::before  { background: var(--amber); }
 .market-row.crit::before  { background: var(--red); }
 .market-row.ok::before    { background: var(--green); }
+<<<<<<< HEAD
 .market-row.flag::before  { background: var(--border-strong); }
+=======
+>>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
 .market-row.selected { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-light), var(--shadow); }
 
 .mr-sym { flex: 0 0 90px; }
@@ -282,7 +294,10 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
 .mr-badge.warn { background: var(--amber-bg); color: var(--amber-text); }
 .mr-badge.crit { background: var(--red-bg);   color: var(--red-text);   }
 .mr-badge.blue { background: var(--blue-bg);  color: var(--blue-text);  }
+<<<<<<< HEAD
 .mr-badge.muted{ background: var(--bg-base);  color: var(--text-muted); border: 1px solid var(--border-strong); }
+=======
+>>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
 
 .mr-chevron { color: var(--text-muted); font-size: 16px; flex-shrink: 0; transition: transform .15s; }
 .market-row:hover .mr-chevron { transform: translateX(2px); color: var(--text-secondary); }
@@ -482,6 +497,7 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
 }
 .config-toast.show { opacity: 1; }
 .config-toast.error-toast { background: var(--red); }
+<<<<<<< HEAD
 
 /* ─── Daily Log ─────────────────────────────────── */
 .daily-log-card {
@@ -544,6 +560,8 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
 .dl-issue-badge.CRITICAL { background: var(--red-bg);   color: var(--red-text); }
 .dl-issue-badge.HIGH     { background: var(--amber-bg); color: var(--amber-text); }
 .dl-issue-badge.MEDIUM   { background: var(--blue-bg);  color: var(--blue-text); }
+=======
+>>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
 </style>
 </head>
 <body>
@@ -577,12 +595,17 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
       <i class="ti ti-bell"></i>
       <span>Alert log</span>
     </div>
+<<<<<<< HEAD
     <div class="nav-item" onclick="scrollToSection('daily-log-section')">
       <i class="ti ti-table"></i>
       <span>Daily log</span>
     </div>
 
     <!-- <div class="nav-section-label" style="margin-top:8px">Alerts</div>
+=======
+
+    <div class="nav-section-label" style="margin-top:8px">Alerts</div>
+>>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
     <div class="nav-item">
       <i class="ti ti-git-branch"></i>
       <span>Order book</span>
@@ -594,7 +617,11 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
     <div class="nav-item">
       <i class="ti ti-flame"></i>
       <span>Volume spikes</span>
+<<<<<<< HEAD
     </div> -->
+=======
+    </div>
+>>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
 
     <div class="nav-section-label" style="margin-top:8px">Settings</div>
     <div class="nav-item" onclick="toggleConfigPanel()">
@@ -620,9 +647,12 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
     <div class="topbar-title">Market Overview</div>
     <div class="topbar-right">
       <div class="topbar-clock" id="clock">—</div>
+<<<<<<< HEAD
       <button class="btn" id="theme-toggle" onclick="toggleTheme()" title="Toggle dark mode" aria-label="Toggle dark mode">
         <i class="ti ti-moon" id="theme-icon"></i>
       </button>
+=======
+>>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
       <button class="btn" onclick="fetchAndRender()">
         <i class="ti ti-refresh"></i> Refresh
       </button>
@@ -723,6 +753,7 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
         <p class="empty-state">No alerts this session.</p>
       </div>
     </div>
+<<<<<<< HEAD
 
     <!-- Daily log -->
     <div id="daily-log-section" style="margin-top:24px">
@@ -797,6 +828,8 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
         </div>
       </div>
     </div>
+=======
+>>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
   </div>
 </div>
 
@@ -823,9 +856,25 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
         </div>
         <div class="config-grid">
           <div class="config-field">
+<<<<<<< HEAD
             <label>Cycle interval (seconds)</label>
             <input type="number" id="cfg-cycle-sleep" min="10" step="5" />
             <span class="hint">Sleep time between full scan cycles. Every issue detected in a cycle fires immediately — there is no alert delay or cooldown.</span>
+=======
+            <label>Alert delay (minutes)</label>
+            <input type="number" id="cfg-anomaly-alert-after" min="1" step="1" />
+            <span class="hint">How long an anomaly must persist before firing a Telegram alert.</span>
+          </div>
+          <div class="config-field">
+            <label>Alert cooldown (minutes)</label>
+            <input type="number" id="cfg-alert-cooldown" min="1" step="1" />
+            <span class="hint">Minimum gap between repeat alerts for the same pair.</span>
+          </div>
+          <div class="config-field">
+            <label>Cycle interval (seconds)</label>
+            <input type="number" id="cfg-cycle-sleep" min="10" step="5" />
+            <span class="hint">Sleep time between full scan cycles.</span>
+>>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
           </div>
         </div>
       </div>
@@ -848,6 +897,19 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
             <span class="hint">USD-equiv total depth within spread band below which A4 fires.</span>
           </div>
           <div class="config-field">
+<<<<<<< HEAD
+=======
+            <label>Stale OB cycles</label>
+            <input type="number" id="cfg-stale-ob-cycles" min="1" step="1" />
+            <span class="hint">Consecutive cycles with identical top-of-book before stale alert.</span>
+          </div>
+          <div class="config-field">
+            <label>Mid-price alert threshold (%)</label>
+            <input type="number" id="cfg-mid-price-alert" min="1" step="1" />
+            <span class="hint">% change in mid-price between cycles that triggers a price-move alert.</span>
+          </div>
+          <div class="config-field">
+>>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
             <label>DWS poor threshold</label>
             <input type="number" id="cfg-dws-poor" min="0" step="0.01" />
             <span class="hint">Dynamic Weighted Spread above this is considered "poor" quality.</span>
@@ -865,6 +927,7 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
           <div class="config-field">
             <label>Depth imbalance ratio</label>
             <input type="number" id="cfg-imbalance-ratio" min="1" step="0.1" />
+<<<<<<< HEAD
             <span class="hint">A5 fires when one side's depth is this many times heavier than the other.</span>
           </div>
         </div>
@@ -916,6 +979,9 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
             <label>Arb gap threshold (%)</label>
             <input type="number" id="cfg-arb-gap" min="0" step="0.01" />
             <span class="hint">F1 — % gap between a pair's quoted price and its implied cross-rate before flagging.</span>
+=======
+            <span class="hint">Captured for reference; imbalance above this ratio is recorded.</span>
+>>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
           </div>
         </div>
       </div>
@@ -937,6 +1003,7 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
             <input type="number" id="cfg-kline-lookback" min="1" step="1" />
             <span class="hint">Rolling window for volume-spike detection. Fetches this many candles.</span>
           </div>
+<<<<<<< HEAD
           <div class="config-field">
             <label>Volume baseline windows</label>
             <input type="number" id="cfg-vol-baseline-buckets" min="2" step="1" />
@@ -1003,6 +1070,8 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
             <input type="number" id="cfg-layer-churn-ratio-threshold" min="0" max="1" step="0.05" />
             <span class="hint">A6 fires when this cycle's churn drops below this fraction of the pair's own baseline.</span>
           </div>
+=======
+>>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
         </div>
       </div>
 
@@ -1016,16 +1085,23 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
         <table class="pairs-table" id="pairs-cfg-table">
           <thead>
             <tr>
+<<<<<<< HEAD
               <th style="width:22%">Symbol</th>
               <th style="width:14%">Target spread %</th>
               <th style="width:14%">B2 div %</th>
               <th style="width:18%">MEXC alias</th>
               <th style="width:18%">KuCoin alias</th>
               <th style="width:14%"></th>
+=======
+              <th style="width:48%">Symbol</th>
+              <th style="width:34%">Target spread %</th>
+              <th style="width:18%"></th>
+>>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
             </tr>
           </thead>
           <tbody id="pairs-cfg-tbody"></tbody>
         </table>
+<<<<<<< HEAD
         <div style="font-size:11px;color:var(--text-muted);margin-top:6px;line-height:1.4">
           MEXC/KuCoin aliases are optional — only needed when a USDT-quoted asset's ticker on that
           exchange differs from Quidax's (e.g. RNDR is listed as RENDER on MEXC but still RNDR on
@@ -1040,6 +1116,11 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
           <input type="number" id="new-pair-b2div" placeholder="B2 div % (blank = global)" min="0" step="0.01" style="font-family:var(--mono);font-size:12px;border:1px solid var(--border-strong);border-radius:6px;padding:6px 10px;background:var(--bg-base);color:var(--text-primary)" />
           <input type="text" id="new-pair-mexc-alias" placeholder="MEXC alias (optional)" style="font-family:var(--mono);font-size:12px;border:1px solid var(--border-strong);border-radius:6px;padding:6px 10px;background:var(--bg-base);color:var(--text-primary)" />
           <input type="text" id="new-pair-kucoin-alias" placeholder="KuCoin alias (optional)" style="font-family:var(--mono);font-size:12px;border:1px solid var(--border-strong);border-radius:6px;padding:6px 10px;background:var(--bg-base);color:var(--text-primary)" />
+=======
+        <div class="add-pair-row">
+          <input type="text" id="new-pair-sym" placeholder="symbol (e.g. solusdt)" style="font-family:var(--mono);font-size:12px;border:1px solid var(--border-strong);border-radius:6px;padding:6px 10px;background:var(--bg-base);color:var(--text-primary)" />
+          <input type="number" id="new-pair-target" placeholder="target % (blank = monitor only)" min="0" step="0.01" style="font-family:var(--mono);font-size:12px;border:1px solid var(--border-strong);border-radius:6px;padding:6px 10px;background:var(--bg-base);color:var(--text-primary)" />
+>>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
           <button class="btn btn-accent" onclick="addPairRow()" style="white-space:nowrap">
             <i class="ti ti-plus"></i> Add pair
           </button>
@@ -1182,7 +1263,11 @@ function renderDashboard(data) {
   renderPairs(pairs);
 
   pairs.forEach(p => {
+<<<<<<< HEAD
     if (p.telegram_fired) {
+=======
+    if (p.should_alert) {
+>>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
       const entry = { time: ngtTime(), sym: p.symbol.toUpperCase(), spread: p.current_spread, target: p.target_spread, diff: p.percent_diff, dws: p.dws };
       const key = `${p.symbol}-${p.timestamp}`;
       if (!alertLog.find(a => a._key === key)) {
@@ -1207,6 +1292,7 @@ function renderPairs(pairs) {
     container.innerHTML = `<p class="empty-state">No data yet — run a monitor cycle first.</p>`;
     return;
   }
+<<<<<<< HEAD
   // Default view: Tier 1 / Tier 2 issues (actionable) plus any pair with a live
   // D1 volume spike — D1 fires to Telegram immediately and is surfaced via its own
   // d1_spike field, so it must show here even when the pair has no other issue.
@@ -1217,12 +1303,19 @@ function renderPairs(pairs) {
   document.getElementById("pairs-count-label").textContent = visible.length + " of " + pairs.length;
   if (!visible.length) {
     container.innerHTML = `<p class="empty-state empty-state-green"><i class="ti ti-circle-check" style="font-size:15px"></i> All ${pairs.length} pairs healthy or flagged only</p>`;
+=======
+  const visible = showAll ? pairs : pairs.filter(p => (p.status || "").toLowerCase() === "warning");
+  document.getElementById("pairs-count-label").textContent = visible.length + " of " + pairs.length;
+  if (!visible.length) {
+    container.innerHTML = `<p class="empty-state empty-state-green"><i class="ti ti-circle-check" style="font-size:15px"></i> All ${pairs.length} pairs healthy</p>`;
+>>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
     return;
   }
   container.innerHTML = visible.map(p => renderMarketRow(p)).join("");
 }
 
 function renderMarketRow(p) {
+<<<<<<< HEAD
   const tier     = p.alert_tier ?? 0;
   const alerted  = p.should_alert;
   const { base } = symParts(p.symbol);
@@ -1249,6 +1342,27 @@ function renderMarketRow(p) {
     const codes = p.issues.split("|").filter(Boolean).map(part => part.split(":")[0]);
     codes.slice(0, 2).forEach(c => { issuesBadgesHtml += `<span class="mr-badge blue">${c}</span>`; });
     if (codes.length > 2) issuesBadgesHtml += `<span class="mr-badge blue">+${codes.length - 2}</span>`;
+=======
+  const isCrit  = p.issues && p.issues.includes("CRITICAL");
+  const isWarn  = (p.status || "").toLowerCase() === "warning";
+  const alerted = p.should_alert;
+  const rowCls  = isCrit ? "crit" : isWarn ? "warn" : "ok";
+  const { base } = symParts(p.symbol);
+  const spread = fmt(p.current_spread, 4);
+  const mid = fmtPrice(p.mid_price);
+  const isSelected = p.symbol === selectedSym;
+
+  let badgesHtml = "";
+  if (alerted) badgesHtml += `<span class="mr-badge crit">Alert fired</span>`;
+  else if (isCrit) badgesHtml += `<span class="mr-badge crit">Critical</span>`;
+  else if (isWarn) badgesHtml += `<span class="mr-badge warn">Warning</span>`;
+  else             badgesHtml += `<span class="mr-badge ok">Healthy</span>`;
+
+  if (p.issues) {
+    const codes = p.issues.split("|").filter(Boolean).map(part => part.split(":")[0]);
+    codes.slice(0, 2).forEach(c => { badgesHtml += `<span class="mr-badge blue">${c}</span>`; });
+    if (codes.length > 2) badgesHtml += `<span class="mr-badge blue">+${codes.length - 2}</span>`;
+>>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
   }
 
   return `<div class="market-row ${rowCls}${isSelected ? " selected" : ""}" onclick="selectMarket('${p.symbol}')">
@@ -1264,7 +1378,11 @@ function renderMarketRow(p) {
       <div class="mr-spread-val">${spread}</div>
       <div class="mr-price-label">Spread</div>
     </div>
+<<<<<<< HEAD
     <div class="mr-issues">${primaryBadge}${issuesBadgesHtml}</div>
+=======
+    <div class="mr-issues">${badgesHtml}</div>
+>>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
     <i class="ti ti-chevron-right mr-chevron"></i>
   </div>`;
 }
@@ -1287,6 +1405,7 @@ function selectMarket(symbol) {
   if (spreadHistoryMap[symbol]) updateChart(symbol);
 }
 
+<<<<<<< HEAD
 function formatTelegramDetail(detail) {
   if (!detail) return "";
   return detail.split("|").filter(Boolean).map(part => {
@@ -1300,13 +1419,20 @@ function formatTelegramDetail(detail) {
   }).join(" · ");
 }
 
+=======
+>>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
 function renderDetailPanel(p) {
   const { base } = symParts(p.symbol);
   const isCrit = p.issues && p.issues.includes("CRITICAL");
   const isWarn = (p.status || "").toLowerCase() === "warning";
+<<<<<<< HEAD
   const statusBadgeCls = p.telegram_fired ? "crit" : isCrit ? "crit" : isWarn ? "warn" : "ok";
   const statusText     = p.telegram_fired ? "Alert fired" : isCrit ? "Critical" : isWarn ? "Warning" : "Healthy";
   const telegramCaption = (!p.telegram_fired && p.telegram_detail) ? formatTelegramDetail(p.telegram_detail) : "";
+=======
+  const statusBadgeCls = p.should_alert ? "crit" : isCrit ? "crit" : isWarn ? "warn" : "ok";
+  const statusText     = p.should_alert ? "Alert fired" : isCrit ? "Critical" : isWarn ? "Warning" : "Healthy";
+>>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
 
   // Parse active issues
   const activeIssues = {};
@@ -1350,12 +1476,17 @@ function renderDetailPanel(p) {
     },
     {
       id: "A4", name: "Thin Mid-Market",
+<<<<<<< HEAD
       desc: "Liquidity within spread band below threshold",
+=======
+      desc: "Liquidity within spread band < $5,000",
+>>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
       severity: "MEDIUM",
       test: () => activeIssues["A4"] ? "info" : "pass",
       passDesc: "Adequate mid-market liquidity",
     },
     {
+<<<<<<< HEAD
       id: "A5", name: "Depth Imbalance",
       desc: `Ratio: ${p.imbalance_ratio ?? "—"}${p.heavier_side ? " — " + p.heavier_side + " heavier" : ""}`,
       severity: "MEDIUM",
@@ -1400,6 +1531,13 @@ function renderDetailPanel(p) {
       severity: "HIGH",
       test: () => activeIssues["B4"] ? "warn" : "pass",
       passDesc: "Within normal trading range",
+=======
+      id: "STALE", name: "Stale Order Book",
+      desc: "Top-of-book unchanged for 3+ consecutive cycles",
+      severity: "HIGH",
+      test: () => activeIssues["STALE"] ? "warn" : "pass",
+      passDesc: "Order book is updating",
+>>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
     },
     {
       id: "DWS", name: "Dynamic Weighted Spread",
@@ -1409,6 +1547,7 @@ function renderDetailPanel(p) {
       passDesc: "DWS within acceptable range",
     },
     {
+<<<<<<< HEAD
       id: "F1", name: "Cross-Pair Arbitrage Gap",
       desc: "Quoted price vs implied cross-rate from linked pairs",
       severity: "MEDIUM",
@@ -1424,6 +1563,8 @@ function renderDetailPanel(p) {
       naDesc: "Monitor-only — no volume threshold",
     },
     {
+=======
+>>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
       id: "DEPTH", name: "Depth Liquidity",
       desc: `1.25×: ${p.depth_1_25x || p["depth_1.25x"] || "—"} | 1.5×: ${p.depth_1_5x || p["depth_1.5x"] || "—"}`,
       severity: "INFO",
@@ -1461,14 +1602,20 @@ function renderDetailPanel(p) {
       </div>
       <span class="mr-badge ${statusBadgeCls}" style="font-size:12px;padding:4px 12px">${statusText}</span>
     </div>
+<<<<<<< HEAD
     ${telegramCaption ? `<div style="font-size:11px;color:var(--text-muted);margin:-6px 0 14px">${telegramCaption}</div>` : ""}
+=======
+>>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
     <div class="detail-metrics">
       <div class="dm"><div class="k">Mid price</div><div class="v muted">${fmtPrice(p.mid_price)}</div></div>
       <div class="dm"><div class="k">Spread</div><div class="v ${(p.status||"").toLowerCase() === "warning" ? "warn" : "ok"}">${fmt(p.current_spread, 4)}</div></div>
       <div class="dm"><div class="k">Target spread</div><div class="v muted">${p.target_spread && p.target_spread !== "N/A" ? p.target_spread + "%" : "N/A"}</div></div>
       <div class="dm"><div class="k">Spread diff</div><div class="v ${parseFloat(p.percent_diff) > 0 ? "warn" : "ok"}">${fmt(p.percent_diff, 1)}</div></div>
+<<<<<<< HEAD
       <div class="dm"><div class="k">Reference price</div><div class="v muted">${p.trusted_ref && p.trusted_ref !== "N/A" ? fmtPrice(p.trusted_ref) : "—"}</div></div>
       <div class="dm"><div class="k">vs reference</div><div class="v ${activeIssues["B1"] ? "warn" : "ok"}">${p.trusted_ref && p.trusted_ref !== "N/A" ? (((p.mid_price - p.trusted_ref) / p.trusted_ref) * 100).toFixed(2) + "%" : "—"}</div></div>
+=======
+>>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
     </div>
     <div class="detail-alerts-title">Alert checks</div>
     <div class="alert-checks">${checksHtml}</div>
@@ -1501,10 +1648,13 @@ function initChart() {
   if (!canvas) return;
   const ctx = canvas.getContext("2d");
 
+<<<<<<< HEAD
   const cssVar = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
   const grid = cssVar("--chart-grid");
   const tick = cssVar("--chart-tick");
 
+=======
+>>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
   spreadChart = new Chart(ctx, {
     type: "line",
     data: { labels: [], datasets: [
@@ -1516,14 +1666,20 @@ function initChart() {
       maintainAspectRatio: false,
       plugins: { legend: { display: false } },
       scales: {
+<<<<<<< HEAD
         x: { display: true, ticks: { font: { size: 10 }, color: tick, maxRotation: 0 }, grid: { color: grid } },
         y: { grid: { color: grid }, ticks: { font: { size: 11 }, color: tick, callback: v => v.toFixed(3) + "%" } },
+=======
+        x: { display: true, ticks: { font: { size: 10 }, color: "#9ca3af", maxRotation: 0 }, grid: { color: "rgba(0,0,0,0.04)" } },
+        y: { grid: { color: "rgba(0,0,0,0.05)" }, ticks: { font: { size: 11 }, color: "#9ca3af", callback: v => v.toFixed(3) + "%" } },
+>>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
       },
       animation: { duration: 300 },
     },
   });
 }
 
+<<<<<<< HEAD
 // Re-apply themeable colours to an already-built chart (called on theme toggle)
 function themeChart() {
   if (!spreadChart) return;
@@ -1536,6 +1692,8 @@ function themeChart() {
   spreadChart.update("none");
 }
 
+=======
+>>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
 function rebuildChartSelector(statusData) {
   if (!statusData || !statusData.pairs) return;
   const container = document.getElementById("chart-selector");
@@ -1601,22 +1759,33 @@ async function loadConfigIntoPanel() {
 function populateConfigFields(cfg) {
   const t = cfg.timing    || {};
   const o = cfg.orderbook || {};
+<<<<<<< HEAD
   const p = cfg.pricing   || {};
   const k = cfg.kline     || {};
   const lc = cfg.layer_churn || {};
   const vs = cfg.volume_spike || {};
+=======
+  const k = cfg.kline     || {};
+>>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
 
   const set = (id, val) => {
     const el = document.getElementById(id);
     if (el && val !== undefined && val !== null) el.value = val;
   };
 
+<<<<<<< HEAD
   set("cfg-cycle-sleep", t.cycle_sleep_seconds);
+=======
+  set("cfg-anomaly-alert-after", t.anomaly_alert_after_minutes);
+  set("cfg-alert-cooldown",       t.alert_cooldown_minutes);
+  set("cfg-cycle-sleep",          t.cycle_sleep_seconds);
+>>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
 
   set("cfg-depth-limit",     o.depth_limit);
   set("cfg-min-ob-layers",   o.min_orderbook_layers);
   set("cfg-thin-depth",      o.thin_depth_threshold);
   set("cfg-imbalance-ratio", o.depth_imbalance_ratio);
+<<<<<<< HEAD
   set("cfg-dws-poor",        o.dws_poor_threshold);
   set("cfg-min-abs-spread",  o.min_abs_spread_diff_pct);
 
@@ -1647,11 +1816,26 @@ function populateConfigFields(cfg) {
 
 function renderPairsTable(pairs, overrides) {
   overrides = overrides || ((_currentConfig && _currentConfig.pricing && _currentConfig.pricing.source_divergence_overrides) || {});
+=======
+  set("cfg-stale-ob-cycles", o.stale_ob_cycles);
+  set("cfg-mid-price-alert", o.mid_price_alert_threshold);
+  set("cfg-dws-poor",        o.dws_poor_threshold);
+  set("cfg-min-abs-spread",  o.min_abs_spread_diff_pct);
+
+  set("cfg-kline-candle",   k.candle_minutes);
+  set("cfg-kline-lookback", k.lookback_minutes);
+
+  renderPairsTable(cfg.pairs || []);
+}
+
+function renderPairsTable(pairs) {
+>>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
   const tbody = document.getElementById("pairs-cfg-tbody");
   document.getElementById("pairs-count-cfg").textContent = pairs.length + " pairs";
   tbody.innerHTML = pairs.map((p, i) => {
     const sym = Array.isArray(p) ? p[0] : p.symbol;
     const tgt = Array.isArray(p) ? p[1] : p.target;
+<<<<<<< HEAD
     const aliases = (Array.isArray(p) ? p[2] : p.aliases) || {};
     const tgtVal = tgt !== null && tgt !== undefined ? tgt : "";
     // B2 override is USDT-only (B2 doesn't run on NGN/GHS). Non-USDT rows show a
@@ -1669,6 +1853,12 @@ function renderPairsTable(pairs, overrides) {
       <td>${b2Cell}</td>
       <td><input type="text" value="${aliases.mexc || ""}" placeholder="same as symbol" data-row="${i}" data-col="mexc_alias" /></td>
       <td><input type="text" value="${aliases.kucoin || ""}" placeholder="same as symbol" data-row="${i}" data-col="kucoin_alias" /></td>
+=======
+    const tgtVal = tgt !== null && tgt !== undefined ? tgt : "";
+    return `<tr>
+      <td><input type="text" value="${sym}" data-row="${i}" data-col="sym" /></td>
+      <td><input type="number" value="${tgtVal}" placeholder="monitor only" min="0" step="0.01" data-row="${i}" data-col="tgt" /></td>
+>>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
       <td style="text-align:center"><button class="del-btn" onclick="deletePairRow(this)" aria-label="Remove pair"><i class="ti ti-trash"></i></button></td>
     </tr>`;
   }).join("");
@@ -1680,6 +1870,7 @@ function getPairsFromTable() {
   rows.forEach(row => {
     const symInput = row.querySelector("input[data-col='sym']");
     const tgtInput = row.querySelector("input[data-col='tgt']");
+<<<<<<< HEAD
     const mexcInput = row.querySelector("input[data-col='mexc_alias']");
     const kucoinInput = row.querySelector("input[data-col='kucoin_alias']");
     if (!symInput) return;
@@ -1695,10 +1886,18 @@ function getPairsFromTable() {
     const row_ = [sym, isNaN(tgt) ? null : tgt];
     if (Object.keys(aliases).length) row_.push(aliases);
     pairs.push(row_);
+=======
+    if (!symInput) return;
+    const sym = symInput.value.trim().toLowerCase();
+    const tgtRaw = tgtInput ? tgtInput.value.trim() : "";
+    const tgt = tgtRaw === "" ? null : parseFloat(tgtRaw);
+    if (sym) pairs.push([sym, isNaN(tgt) ? null : tgt]);
+>>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
   });
   return pairs;
 }
 
+<<<<<<< HEAD
 function getDivergenceOverridesFromTable() {
   // Build the {symbol: pct} B2 override map from the table. USDT-quoted rows only;
   // a blank or non-numeric cell means "use the global default" (no entry emitted).
@@ -1719,6 +1918,8 @@ function getDivergenceOverridesFromTable() {
   return overrides;
 }
 
+=======
+>>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
 function deletePairRow(btn) {
   // btn is the delete button element; walk up to its <tr> and remove it
   const tr = btn.closest("tr");
@@ -1730,13 +1931,17 @@ function deletePairRow(btn) {
 function addPairRow() {
   const symInput = document.getElementById("new-pair-sym");
   const tgtInput = document.getElementById("new-pair-target");
+<<<<<<< HEAD
   const b2Input = document.getElementById("new-pair-b2div");
   const mexcInput = document.getElementById("new-pair-mexc-alias");
   const kucoinInput = document.getElementById("new-pair-kucoin-alias");
+=======
+>>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
   const sym = symInput.value.trim().toLowerCase();
   if (!sym) { showToast("Enter a symbol first", true); return; }
   const tgtRaw = tgtInput.value.trim();
   const tgt = tgtRaw === "" ? null : parseFloat(tgtRaw);
+<<<<<<< HEAD
   const mexcAlias = mexcInput.value.trim().toUpperCase();
   const kucoinAlias = kucoinInput.value.trim().toUpperCase();
   const aliases = {};
@@ -1762,19 +1967,33 @@ function addPairRow() {
   b2Input.value = "";
   mexcInput.value = "";
   kucoinInput.value = "";
+=======
+  if (!_currentConfig) _currentConfig = { pairs: [] };
+  _currentConfig.pairs.push([sym, isNaN(tgt) ? null : tgt]);
+  renderPairsTable(_currentConfig.pairs);
+  symInput.value = "";
+  tgtInput.value = "";
+>>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
 }
 
 function buildConfigPayload() {
   const num = id => { const el = document.getElementById(id); return el ? parseFloat(el.value) : null; };
   return {
     timing: {
+<<<<<<< HEAD
       cycle_sleep_seconds: num("cfg-cycle-sleep"),
+=======
+      anomaly_alert_after_minutes: num("cfg-anomaly-alert-after"),
+      alert_cooldown_minutes:      num("cfg-alert-cooldown"),
+      cycle_sleep_seconds:         num("cfg-cycle-sleep"),
+>>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
     },
     orderbook: {
       depth_limit:               num("cfg-depth-limit"),
       min_orderbook_layers:      num("cfg-min-ob-layers"),
       thin_depth_threshold:      num("cfg-thin-depth"),
       depth_imbalance_ratio:     num("cfg-imbalance-ratio"),
+<<<<<<< HEAD
       dws_poor_threshold:        num("cfg-dws-poor"),
       min_abs_spread_diff_pct:   num("cfg-min-abs-spread"),
     },
@@ -1804,6 +2023,16 @@ function buildConfigPayload() {
       top_pct:          num("cfg-layer-churn-top-pct"),
       baseline_buckets: num("cfg-layer-churn-baseline-buckets"),
       ratio_threshold:  num("cfg-layer-churn-ratio-threshold"),
+=======
+      stale_ob_cycles:           num("cfg-stale-ob-cycles"),
+      mid_price_alert_threshold: num("cfg-mid-price-alert"),
+      dws_poor_threshold:        num("cfg-dws-poor"),
+      min_abs_spread_diff_pct:   num("cfg-min-abs-spread"),
+    },
+    kline: {
+      candle_minutes:   num("cfg-kline-candle"),
+      lookback_minutes: num("cfg-kline-lookback"),
+>>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
     },
     pairs: getPairsFromTable(),
   };
@@ -1860,6 +2089,7 @@ function showToast(msg, isError = false) {
   setTimeout(() => el.classList.remove("show"), 3500);
 }
 
+<<<<<<< HEAD
 // ── Daily Log ─────────────────────────────────────────────────────────────────
 let _dlAllRows   = [];   // full dataset from /api/history
 let _dlFiltered  = [];   // after market + status filter applied
@@ -2036,6 +2266,12 @@ fetchAndRender();
 fetchDailyLog();
 setInterval(fetchAndRender, 60_000);
 setInterval(fetchDailyLog, 60_000);
+=======
+// ── Boot ──────────────────────────────────────────────────────────────────────
+initChart();
+fetchAndRender();
+setInterval(fetchAndRender, 60_000);
+>>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
 </script>
 </body>
 </html>

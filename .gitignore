@@ -1,3 +1,13 @@
+<<<<<<< HEAD
 .env
 __pycache__/
 *.pyc
+=======
+venv/
+data/
+__pycache__/
+*.pyc
+.env
+*.csv
+*.json
+>>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
