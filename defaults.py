@@ -17,6 +17,13 @@ monitor engine's aiohttp/dotenv/apply_config machinery.
 import copy
 
 
+# Fixed liquidity-uptime band half-width, in naira. This is deliberately NOT a
+# config knob — it defines the persisted/graphed uptime series so that the
+# stored history stays comparable over time regardless of dashboard tuning of
+# the shared in-band weight.
+UPTIME_FIXED_STEP_NGN = 1.0
+
+
 # Canonical defaults. Every tunable the dashboard can edit has an entry here;
 # a stored monitor_config.json overrides these per-key via merge_config().
 DEFAULT_CONFIG: dict = {
@@ -61,6 +68,52 @@ DEFAULT_CONFIG: dict = {
         "top_pct":          0.5,  # A6 — fraction of each side's layers treated as "near-touch"
         "baseline_buckets": 20,   # how many prior cycles' churn scores to average for the self-baseline
         "ratio_threshold":  0.2,  # A6 fires when this cycle's churn drops below this fraction of baseline
+    },
+    "alerts": {
+        # Global suspend duration (minutes). When an operator taps "Suspend" next
+        # to a pair in the config drawer, that pair's Telegram alerts are muted for
+        # this many minutes. Single global value — every pair's button uses it.
+        # The pair keeps being monitored and stays visible on the dashboard; only
+        # its Telegram delivery is gagged for the window. Runtime suspend state
+        # (per-pair expiry timestamps) lives in suspensions.json, NOT here — this
+        # is only the default length applied when a suspend is requested.
+        "suspend_minutes": 30,
+    },
+    "depth_walk": {
+        # G1 — USDTNGN depth-walk slippage tracker. Runs as its own 5s task,
+        # independent of the main cycle_sleep_seconds loop. Shared weight for
+        # both the buy-side (asks) and sell-side (bids) walk.
+        "weight_usdt":              100_000,
+        # Mid price is computed from a smaller depth-walk (default 1k USDT
+        # each side, averaged) rather than raw best_ask/best_bid. This gives a
+        # more realistic "fair value" reference for the slippage math — a lone
+        # 5-USDT dust order at the touch won't distort mid the way it does with
+        # top-of-book. Falls back to top-of-book if either side can't supply
+        # even mid_weight_usdt (partial book), and flags the sample.
+        "mid_weight_usdt":          1_000,
+        "poll_interval_seconds":    5,
+        "raw_retention_seconds":    3600,   # length of one in-progress hourly bucket before condensing
+        "condensed_retention_days": 365,    # how long condensed hourly averages are kept
+        # ── Liquidity uptime (rides the same 5s sample) ──────────────────────
+        # Per poll, builds a ±p% band around the same depth-walk mid, where
+        # p = n/s*100 — n is the fixed UPTIME_FIXED_STEP_NGN (1₦) step and s is
+        # `reference_price` (the ACTIVE target price). The band is applied
+        # MULTIPLICATIVELY: ask side counts asks priced <= mid*(1+p/100); bid
+        # side counts bids priced >= mid*(1-p/100). So it equals ±1₦ only when
+        # mid == s and scales with mid otherwise (lower s ⇒ wider band). Each
+        # side scores 1/0 per sample (>= uptime.weight_usdt in band); the hourly
+        # condense averages those into a 0..1 decimal per side, persisted and
+        # graphed. Denominator is dynamic — only usable polls produce a sample,
+        # so a present-but-too-thin book scores 0 (counts as down) while a
+        # genuine no-book poll produces no sample and drops out entirely.
+        #
+        # n (UPTIME_FIXED_STEP_NGN) is a fixed code constant, not a knob. s is
+        # configurable; s <= 0 is rejected at load time by falling back to this
+        # default s (p = n/s is undefined otherwise).
+        "uptime": {
+            "reference_price": 1400,      # s — active band target price
+            "weight_usdt":     100_000,   # in-band threshold, independent of depth_walk.weight_usdt
+        },
     },
     "pairs": [
         ["aaveusdt",     0.3  ],

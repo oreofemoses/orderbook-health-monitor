@@ -8,11 +8,7 @@ Run:
 
 Endpoints:
     GET /api/status          → latest.csv parsed as JSON (all pairs, current cycle)
-<<<<<<< HEAD
     GET /api/history         → daily log CSV as JSON; optional ?date=YYYY-MM-DD (defaults to today)
-=======
-    GET /api/history         → today's daily log CSV as JSON (all checks so far today)
->>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
     GET /api/state           → raw health_state.json (anomaly timers, cooldowns)
     GET /api/pairs           → configured pair symbols + targets from health_state
     GET /health              → simple liveness check
@@ -25,22 +21,15 @@ import os
 import glob
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-<<<<<<< HEAD
 from typing import Any, Optional
-=======
-from typing import Any
->>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
 
 import pandas as pd
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 
-<<<<<<< HEAD
-from defaults import default_config, merge_config  # single source of truth for config
+from defaults import default_config, merge_config, UPTIME_FIXED_STEP_NGN  # single source of truth for config
 
-=======
->>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
 
 def _sanitize(obj):
     """Recursively replace float nan/inf with None so json.dumps never chokes."""
@@ -55,20 +44,24 @@ def _sanitize(obj):
 # ── Paths ─────────────────────────────────────────────────────────────────────
 # Resolve DATA_DIR relative to this script so api.py and debug.py always
 # share the same files regardless of which directory they were launched from.
-<<<<<<< HEAD
 # DATA_DIR    = Path(__file__).parent / "data"
 DATA_DIR = Path("/app/data")
-=======
-DATA_DIR    = Path(__file__).parent / "data"
-# DATA_DIR = Path("/app/data")
->>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
 LATEST_CSV  = DATA_DIR / "latest.csv"
 STATE_FILE  = DATA_DIR / "health_state.json"
 CONFIG_FILE = DATA_DIR / "monitor_config.json"
+# Per-pair Telegram suspensions — {symbol: ISO expiry (NGT)}. This process owns
+# writing it (the dashboard's Suspend/Resume buttons); the monitor process only
+# reads it at its fire gate. Kept separate from health_state.json on purpose: the
+# monitor rewrites health_state.json wholesale each cycle and would clobber a
+# suspend written here mid-cycle. Same api-writes / monitor-reads direction as
+# monitor_config.json, so there's no cross-process write race.
+SUSPENSIONS_FILE = DATA_DIR / "suspensions.json"
+# G1 depth-walk slippage tracker files (written by debug.py's depth_walk_loop)
+DEPTH_WALK_RAW_FILE       = DATA_DIR / "usdtngn_slippage_raw.json"
+DEPTH_WALK_CONDENSED_FILE = DATA_DIR / "usdtngn_slippage_hourly.json"
 STATIC_DIR  = Path(".")          # dashboard.html lives next to api.py
 NIGERIAN_TZ = timezone(timedelta(hours=1))
 
-<<<<<<< HEAD
 # ── Default config ────────────────────────────────────────────────────────────
 # Canonical defaults + merge semantics now live in defaults.py, imported above
 # and shared verbatim with debug.py so the two processes can never drift.
@@ -76,104 +69,14 @@ NIGERIAN_TZ = timezone(timedelta(hours=1))
 
 def load_config() -> dict:
     """Stored monitor_config.json merged over the shared defaults (defaults fill gaps)."""
-=======
-# ── Default config (mirrors debug.py defaults) ────────────────────────────────
-DEFAULT_CONFIG: dict[str, Any] = {
-    "timing": {
-        "anomaly_alert_after_minutes": 10,
-        "alert_cooldown_minutes":      30,
-        "cycle_sleep_seconds":         60,
-    },
-    "orderbook": {
-        "depth_limit":              200,
-        "min_orderbook_layers":     10,
-        "thin_depth_threshold":     5000,
-        "depth_imbalance_ratio":    5.0,
-        "stale_ob_cycles":          3,
-        "mid_price_alert_threshold": 25,
-        "dws_poor_threshold":       0.5,
-        "min_abs_spread_diff_pct":  0.05,
-    },
-    "kline": {
-        "candle_minutes":   1,
-        "lookback_minutes": 60,
-    },
-    "pairs": [
-        ["aaveusdt",     0.3   ],
-        ["adausdt",      2.0   ],
-        ["algousdt",     2.0   ],
-        ["bchusdt",      1.20  ],
-        ["bnbusdt",      0.3   ],
-        ["bonkusdt",     2.0   ],
-        ["btcusdt",      0.2   ],
-        ["cakeusdt",     0.3   ],
-        ["cfxusdt",      2.0   ],
-        ["dashusdt",     2.0   ],
-        ["dotusdt",      0.26  ],
-        ["dogeusdt",     0.26  ],
-        ["ethusdt",      0.25  ],
-        ["fartcoinusdt", 2.0   ],
-        ["flokiusdt",    0.5   ],
-        ["hypeusdt",     2.0   ],
-        ["linkusdt",     0.26  ],
-        ["lskusdt",      1.5   ],
-        ["ltcusdt",      0.3   ],
-        ["pepeusdt",     0.5   ],
-        ["polusdt",      0.5   ],
-        ["rndrusdt",     2.0   ],
-        ["shibusdt",     0.4   ],
-        ["slpusdt",      2.0   ],
-        ["solusdt",      0.25  ],
-        ["suiusdt",      2.0   ],
-        ["tonusdt",      0.3   ],
-        ["trxusdt",      0.3   ],
-        ["usdcusdt",     0.02  ],
-        ["wifusdt",      2.0   ],
-        ["xlmusdt",      0.3   ],
-        ["xrpusdt",      0.3   ],
-        ["xyousdt",      1.0   ],
-        ["usdtcngn",     None  ],
-        ["btcngn",       0.7   ],
-        ["usdtngn",      0.95  ],
-        ["ethngn",       0.75  ],
-        ["trxngn",       0.75  ],
-        ["xrpngn",       0.5   ],
-        ["dashngn",      0.5   ],
-        ["ltcngn",       0.5   ],
-        ["solngn",       0.8   ],
-        ["usdcngn",      1.2   ],
-        ["cngnngn",      None  ],
-        ["usdtghs",      1.3   ],
-    ],
-}
-
-
-def load_config() -> dict:
->>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
     if CONFIG_FILE.exists():
         try:
             with open(CONFIG_FILE) as f:
                 stored = json.load(f)
-<<<<<<< HEAD
             return merge_config(stored)
         except Exception:
             pass
     return default_config()
-=======
-            # Merge: stored values override defaults, missing keys fall back
-            merged = json.loads(json.dumps(DEFAULT_CONFIG))  # deep copy
-            for section, values in stored.items():
-                if section == "pairs":
-                    merged["pairs"] = values
-                elif isinstance(values, dict) and section in merged:
-                    merged[section].update(values)
-                else:
-                    merged[section] = values
-            return merged
-        except Exception:
-            pass
-    return json.loads(json.dumps(DEFAULT_CONFIG))
->>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
 
 
 def save_config(cfg: dict):
@@ -205,11 +108,7 @@ def parse_latest_csv() -> list[dict]:
     df = pd.read_csv(LATEST_CSV)
 
     # Normalise types — booleans arrive as strings from CSV
-<<<<<<< HEAD
     for col in ("monitor_only", "should_alert", "telegram_fired", "dws_poor", "d1_spike"):
-=======
-    for col in ("monitor_only", "should_alert", "dws_poor"):
->>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
         if col in df.columns:
             df[col] = df[col].map(
                 lambda v: str(v).strip().lower() in ("true", "1", "yes")
@@ -219,13 +118,9 @@ def parse_latest_csv() -> list[dict]:
     # Numeric coercion (percent_diff / imbalance_ratio may be "N/A")
     for col in ("current_spread", "spread_abs", "percent_diff",
                 "mid_price", "dws", "imbalance_ratio",
-<<<<<<< HEAD
                 "ask_layers", "bid_layers", "trusted_ref",
                 "layer_churn_pct", "layer_churn_baseline_pct",
                 "d1_window_volume", "d1_threshold"):
-=======
-                "ask_layers", "bid_layers"):
->>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce")
 
@@ -233,7 +128,6 @@ def parse_latest_csv() -> list[dict]:
     return _sanitize(records)
 
 
-<<<<<<< HEAD
 def parse_daily_log(date_str: Optional[str] = None) -> list[dict]:
     if date_str:
         # Validate format and clamp to 30-day window
@@ -248,11 +142,6 @@ def parse_daily_log(date_str: Optional[str] = None) -> list[dict]:
     else:
         target_date = ngt_now().strftime("%Y-%m-%d")
     pattern = str(DATA_DIR / f"daily_log_{target_date}.csv")
-=======
-def parse_daily_log() -> list[dict]:
-    today = ngt_now().strftime("%Y-%m-%d")
-    pattern = str(DATA_DIR / f"daily_log_{today}.csv")
->>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
     files = glob.glob(pattern)
     if not files:
         return []
@@ -267,14 +156,42 @@ def load_state() -> dict:
         return json.load(f)
 
 
+def load_suspensions() -> dict:
+    """Read suspensions.json → {symbol: ISO expiry (NGT)}. Missing/corrupt → {}."""
+    if not SUSPENSIONS_FILE.exists():
+        return {}
+    try:
+        with open(SUSPENSIONS_FILE) as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def save_suspensions(data: dict):
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    with open(SUSPENSIONS_FILE, "w") as f:
+        json.dump(data, f, indent=2)
+
+
+def prune_suspensions(data: dict) -> dict:
+    """Drop entries whose expiry has already passed (or won't parse). Keeps the
+    file from accumulating stale rows and means a GET only ever reports live mutes."""
+    live = {}
+    now = ngt_now()
+    for sym, expiry in data.items():
+        try:
+            if now < datetime.fromisoformat(expiry):
+                live[sym] = expiry
+        except (ValueError, TypeError):
+            continue
+    return live
+
+
 def summary_stats(records: list[dict]) -> dict:
     total    = len(records)
     warnings = sum(1 for r in records if str(r.get("status", "")).lower() == "warning")
-<<<<<<< HEAD
     alerted  = sum(1 for r in records if r.get("telegram_fired"))
-=======
-    alerted  = sum(1 for r in records if r.get("should_alert"))
->>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
     healthy  = total - warnings
     ts       = records[0].get("timestamp") if records else None
     return {
@@ -302,7 +219,6 @@ def serve_dashboard():
     return FileResponse(path)
 
 
-<<<<<<< HEAD
 @app.get("/favicon.ico")
 def serve_favicon():
     path = STATIC_DIR / "favicon.ico"
@@ -311,8 +227,6 @@ def serve_favicon():
     return FileResponse(path)
 
 
-=======
->>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
 @app.get("/api/status")
 def get_status():
     """
@@ -329,7 +243,6 @@ def get_status():
 
 
 @app.get("/api/history")
-<<<<<<< HEAD
 def get_history(date: Optional[str] = None):
     """
     Daily log for a given date, returned as JSON rows.
@@ -340,16 +253,6 @@ def get_history(date: Optional[str] = None):
     rows = parse_daily_log(date)
     return JSONResponse({
         "date": resolved_date,
-=======
-def get_history():
-    """
-    Today's full daily log — every check recorded for each pair, useful
-    for the spread history chart (each STATUS/TIME column = one cycle).
-    """
-    rows = parse_daily_log()
-    return JSONResponse({
-        "date": ngt_now().strftime("%Y-%m-%d"),
->>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
         "rows": rows,
     })
 
@@ -357,7 +260,6 @@ def get_history():
 @app.get("/api/state")
 def get_state():
     """
-<<<<<<< HEAD
     Raw health_state.json. Per pair: an "_alert" sub-key (Tier-2 consecutive
     counters + per-issue cooldown expiries) and the last observed mid price with
     its timestamp (last_mid / last_mid_ts, NGT ISO — a stale timestamp means the
@@ -366,25 +268,6 @@ def get_state():
     baselines (_layer_hist), and global cooldowns (_global).
     """
     return JSONResponse(load_state())
-=======
-    Raw health_state.json — anomaly timers, last alert timestamps,
-    stale OB counters, last mid-price per pair.
-    """
-    state = load_state()
-    # Augment each pair with a human-readable anomaly age
-    now = ngt_now()
-    for sym, data in state.items():
-        if data.get("anomaly_since"):
-            try:
-                since = datetime.fromisoformat(data["anomaly_since"])
-                age_s = (now - since).total_seconds()
-                data["anomaly_age_minutes"] = round(age_s / 60, 1)
-            except Exception:
-                data["anomaly_age_minutes"] = None
-        else:
-            data["anomaly_age_minutes"] = None
-    return JSONResponse(state)
->>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
 
 
 @app.get("/api/pairs")
@@ -396,6 +279,196 @@ def get_pairs():
     state = load_state()
     pairs = list(state.keys())
     return JSONResponse({"pairs": pairs})
+
+
+# ── Per-pair Telegram suspensions ────────────────────────────────────────────
+# A suspended pair keeps being monitored and stays on the dashboard; only its
+# Telegram delivery is muted, and only for its OWN alerts (F1 on other legs is
+# unaffected). Duration is the single global alerts.suspend_minutes from config.
+# The monitor process reads suspensions.json at its fire gate — see debug.py.
+
+@app.get("/api/suspensions")
+def get_suspensions():
+    """
+    Current live suspensions: {symbol: ISO expiry (NGT)} with expired entries
+    pruned, plus the configured default duration so the dashboard can label the
+    button ("Suspend 30m") without a second round-trip. The pruned map is written
+    back so the file self-cleans on read.
+    """
+    live = prune_suspensions(load_suspensions())
+    # Persist the pruned view so stale rows don't linger (best-effort; a failed
+    # write just means they get pruned again next read).
+    try:
+        save_suspensions(live)
+    except Exception:
+        pass
+    minutes = (load_config().get("alerts", {}) or {}).get("suspend_minutes", 30)
+    return JSONResponse({"suspensions": live, "suspend_minutes": minutes})
+
+
+@app.post("/api/suspensions")
+async def post_suspension(request: Request):
+    """
+    Set or clear a pair's Telegram suspension. Body:
+        {"symbol": "btcusdt", "suspend": true}   → mute for alerts.suspend_minutes
+        {"symbol": "btcusdt", "suspend": false}  → resume immediately
+    Optional "minutes" overrides the configured default for this one call (kept
+    for flexibility / future per-pair durations; the dashboard omits it and relies
+    on the global config value). Applies immediately — independent of the config
+    Save flow — so it can't be lost among unsaved config edits.
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON body")
+
+    symbol = body.get("symbol")
+    if not isinstance(symbol, str) or not symbol.strip():
+        raise HTTPException(status_code=400, detail="symbol is required")
+    symbol = symbol.strip().lower()
+
+    suspend = body.get("suspend", True)
+    if not isinstance(suspend, bool):
+        raise HTTPException(status_code=400, detail="suspend must be a boolean")
+
+    data = prune_suspensions(load_suspensions())
+
+    if not suspend:
+        data.pop(symbol, None)
+        save_suspensions(data)
+        return JSONResponse({"status": "resumed", "symbol": symbol,
+                             "suspended_until": None, "suspensions": data})
+
+    # Duration: explicit override, else the global configured default.
+    minutes = body.get("minutes")
+    if minutes is None:
+        minutes = (load_config().get("alerts", {}) or {}).get("suspend_minutes", 30)
+    if not isinstance(minutes, (int, float)) or isinstance(minutes, bool) or minutes <= 0:
+        raise HTTPException(status_code=400, detail="minutes must be a positive number")
+
+    expiry = (ngt_now() + timedelta(minutes=float(minutes))).isoformat()
+    data[symbol] = expiry
+    save_suspensions(data)
+    return JSONResponse({"status": "suspended", "symbol": symbol,
+                         "suspended_until": expiry, "minutes": minutes,
+                         "suspensions": data})
+
+
+# ── G1 USDTNGN depth-walk slippage ──────────────────────────────────────────
+# Two endpoints serve the same conceptual dataset at different resolutions:
+#   /raw     — the in-progress hourly bucket, 5s-resolution samples (last ≤1h)
+#   /history — condensed hourly averages, one point per past hour, up to
+#              condensed_retention_days back
+# The dashboard stitches them together for a selectable time window; the
+# stat card just averages whatever points fall inside the window (raw and
+# hourly samples are treated as equal-weight per user spec).
+
+def _load_json_file(path: Path, fallback):
+    """Read a JSON file or return the fallback if missing/malformed. Isolated so
+    a corrupt file on disk can't take down the API — the dashboard just sees an
+    empty series until the next cycle rewrites the file."""
+    if not path.exists():
+        return fallback
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except Exception:
+        return fallback
+
+
+@app.get("/api/usdtngn-slippage/raw")
+def get_usdtngn_slippage_raw():
+    """
+    Current in-progress raw bucket: bucket_start (ISO NGT) + up to
+    ~1h of 5s samples. Each sample carries ts, mid, weighted_avg_buy/sell,
+    buy/sell_slip_pct, partial_fill flags, and the g1 boolean.
+
+    Also returns the CURRENT config weights (weight_usdt, mid_weight_usdt) so
+    the dashboard can accurately label its axes/legends without a separate
+    /api/config round-trip on every render — and stay in sync when the
+    operator changes those values.
+    """
+    raw = _load_json_file(DEPTH_WALK_RAW_FILE, {"bucket_start": None, "samples": []})
+    cfg = load_config()
+    dw  = cfg.get("depth_walk", {}) or {}
+    up  = dw.get("uptime", {}) or {}
+    # Band half-width is a PERCENT of live mid: p = n/s*100 (n = fixed 1₦ step,
+    # s = target price). Mirror debug.py's s<=0 guard — fall back to the config
+    # default s rather than dividing by zero — and expose the EFFECTIVE s so p
+    # and s stay coherent on the tab labels.
+    try:
+        _up_ref = float(up.get("reference_price"))
+    except (TypeError, ValueError):
+        _up_ref = 0.0
+    if _up_ref <= 0:
+        _up_ref = float(default_config()["depth_walk"]["uptime"]["reference_price"])
+    _band_pct = UPTIME_FIXED_STEP_NGN / _up_ref * 100.0
+    raw["config"] = {
+        "weight_usdt":     dw.get("weight_usdt"),
+        "mid_weight_usdt": dw.get("mid_weight_usdt"),
+        "uptime": {
+            "reference_price": _up_ref,     # effective s (target price)
+            "weight_usdt":     up.get("weight_usdt"),
+            "band_pct":        _band_pct,   # p = n/s*100, the graphed/live band
+        },
+    }
+    return JSONResponse(_sanitize(raw))
+
+
+@app.get("/api/usdtngn-slippage/history")
+def get_usdtngn_slippage_history(start: Optional[str] = None,
+                                   end:   Optional[str] = None):
+    """
+    Condensed hourly averages. Optional ?start=&end= (ISO date or datetime,
+    inclusive on both ends) narrows the returned window; omitted bounds return
+    everything retained on disk. Points are already in chronological order as
+    written by the monitor.
+    """
+    condensed = _load_json_file(DEPTH_WALK_CONDENSED_FILE, [])
+    if not isinstance(condensed, list):
+        condensed = []
+
+    def _parse(bound: Optional[str]) -> Optional[datetime]:
+        if not bound:
+            return None
+        # Query-string decoding turns "+" into " " — e.g. "2026-07-02T00:00:00+01:00"
+        # arrives as "2026-07-02T00:00:00 01:00". Flip it back before ISO parsing so
+        # clients that forget to percent-encode don't silently get an unfiltered result.
+        if " " in bound and "T" in bound:
+            head, sep, tail = bound.rpartition(" ")
+            if ":" in tail and len(tail) <= 6:
+                bound = head + "+" + tail
+        try:
+            dt = datetime.fromisoformat(bound)
+        except ValueError:
+            return None
+        # Bare date/datetime strings arrive without tz — assume NGT for
+        # consistency with how the monitor writes ts values.
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=NIGERIAN_TZ)
+        return dt
+
+    start_dt = _parse(start)
+    end_dt   = _parse(end)
+
+    out = []
+    for pt in condensed:
+        try:
+            ts = datetime.fromisoformat(pt["ts"])
+        except (KeyError, ValueError, TypeError):
+            continue
+        if start_dt and ts < start_dt:
+            continue
+        if end_dt and ts > end_dt:
+            continue
+        out.append(pt)
+
+    return JSONResponse(_sanitize({
+        "start":  start,
+        "end":    end,
+        "points": out,
+    }))
+
 
 @app.get("/api/config")
 def get_config():
@@ -425,37 +498,24 @@ async def post_config(request: Request):
 
     # Special case: reset to defaults
     if body.get("_reset"):
-<<<<<<< HEAD
         fresh = default_config()
         save_config(fresh)
         return JSONResponse({"status": "reset", "config": fresh})
-=======
-        save_config(json.loads(json.dumps(DEFAULT_CONFIG)))
-        return JSONResponse({"status": "reset", "config": DEFAULT_CONFIG})
->>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
 
     if "pairs" in body:
         if not isinstance(body["pairs"], list):
             raise HTTPException(status_code=400, detail="pairs must be a list")
         for item in body["pairs"]:
-<<<<<<< HEAD
             if not (isinstance(item, (list, tuple)) and len(item) in (2, 3)):
                 raise HTTPException(status_code=400,
                     detail="Each pair must be [symbol, target_or_null] or [symbol, target_or_null, aliases]")
             sym, tgt = item[0], item[1]
             aliases = item[2] if len(item) == 3 else None
-=======
-            if not (isinstance(item, (list, tuple)) and len(item) == 2):
-                raise HTTPException(status_code=400,
-                    detail="Each pair must be [symbol, target_or_null]")
-            sym, tgt = item
->>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
             if not isinstance(sym, str) or not sym.strip():
                 raise HTTPException(status_code=400, detail=f"Invalid symbol: {sym!r}")
             if tgt is not None and not isinstance(tgt, (int, float)):
                 raise HTTPException(status_code=400,
                     detail=f"Target for {sym} must be a number or null")
-<<<<<<< HEAD
             if aliases is not None:
                 if not isinstance(aliases, dict):
                     raise HTTPException(status_code=400,
@@ -505,17 +565,39 @@ async def post_config(request: Request):
                     raise HTTPException(status_code=400,
                         detail=f"source_divergence_overrides[{sym}] must be a non-negative number")
 
-    for section in ("timing", "orderbook", "pricing", "kline", "layer_churn"):
+    # alerts.suspend_minutes is a duration, not a threshold — must be strictly
+    # positive (a 0-minute suspend is meaningless). Validated explicitly so it's
+    # skipped by the non-negative numeric loop below.
+    if "alerts" in body and isinstance(body["alerts"], dict):
+        sm = body["alerts"].get("suspend_minutes")
+        if sm is not None:
+            if not isinstance(sm, (int, float)) or isinstance(sm, bool) or sm <= 0:
+                raise HTTPException(status_code=400,
+                    detail="alerts.suspend_minutes must be a positive number")
+
+    # depth_walk.uptime is a nested {reference_price, weight_usdt} object, not a
+    # scalar — validate it explicitly (mirrors volume_spike) and skip it in the
+    # numbers-only loop below.
+    if "depth_walk" in body and isinstance(body["depth_walk"], dict):
+        up = body["depth_walk"].get("uptime")
+        if up is not None:
+            if not isinstance(up, dict):
+                raise HTTPException(status_code=400,
+                    detail="depth_walk.uptime must be an object")
+            for k in ("reference_price", "weight_usdt"):
+                if k in up and up[k] is not None:
+                    v = up[k]
+                    if not isinstance(v, (int, float)) or isinstance(v, bool) or v < 0:
+                        raise HTTPException(status_code=400,
+                            detail=f"depth_walk.uptime.{k} must be a non-negative number")
+
+    for section in ("timing", "orderbook", "pricing", "kline", "layer_churn", "depth_walk"):
         if section in body and isinstance(body[section], dict):
             for k, v in body[section].items():
                 if section == "pricing" and k == "source_divergence_overrides":
                     continue  # nested map, validated explicitly above
-=======
-
-    for section in ("timing", "orderbook", "kline"):
-        if section in body and isinstance(body[section], dict):
-            for k, v in body[section].items():
->>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
+                if section == "depth_walk" and k == "uptime":
+                    continue  # nested object, validated explicitly above
                 if v is not None and not isinstance(v, (int, float)):
                     raise HTTPException(status_code=400,
                         detail=f"{section}.{k} must be a number")
@@ -523,20 +605,9 @@ async def post_config(request: Request):
                     raise HTTPException(status_code=400,
                         detail=f"{section}.{k} must be non-negative")
 
-<<<<<<< HEAD
     # Layer the validated edit over the current config using the same merge
     # semantics as load — shared with debug.py via defaults.merge_config.
     current = merge_config(body, base=load_config())
-=======
-    current = load_config()
-    for section, values in body.items():
-        if section == "pairs":
-            current["pairs"] = values
-        elif isinstance(values, dict) and section in current:
-            current[section].update(values)
-        else:
-            current[section] = values
->>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
 
     save_config(current)
     return JSONResponse({"status": "saved", "config": current})

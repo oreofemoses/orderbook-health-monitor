@@ -9,7 +9,6 @@
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@2.47.0/tabler-icons.min.css" />
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
-<<<<<<< HEAD
 <script>
 // Apply saved theme before first paint to avoid a flash of the wrong theme.
 (function () {
@@ -21,8 +20,6 @@
   } catch (e) {}
 })();
 </script>
-=======
->>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
 <style>
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 :root {
@@ -57,7 +54,6 @@
   --shadow-md: 0 4px 16px rgba(0,0,0,0.08);
   --font: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
   --mono: 'JetBrains Mono', monospace;
-<<<<<<< HEAD
   --chart-grid: rgba(0,0,0,0.05);
   --chart-tick: #9ca3af;
 }
@@ -96,11 +92,6 @@
 [data-theme="dark"] .check-row.pass { background: rgba(16,185,129,0.16); color: #6ee7b7; border-color: rgba(16,185,129,0.35); }
 
 body { font-family: var(--font); background: var(--bg-base); color: var(--text-primary); font-size: 14px; min-height: 100vh; display: flex; transition: background .2s ease, color .2s ease; }
-=======
-}
-
-body { font-family: var(--font); background: var(--bg-base); color: var(--text-primary); font-size: 14px; min-height: 100vh; display: flex; }
->>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
 
 /* ─── Sidebar ───────────────────────────────────── */
 .sidebar {
@@ -199,6 +190,47 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
   align-items: center; gap: 8px;
 }
 
+/* ─── Tab panels ────────────────────────────────── */
+.tab-panel { display: none; }
+.tab-panel.active { display: block; }
+
+/* ─── Slippage tab (USDT/NGN depth-walk) ─────────── */
+.slippage-controls {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  margin-bottom: 20px; padding: 14px 16px;
+  background: var(--bg-card); border-radius: var(--radius); box-shadow: var(--shadow);
+}
+.slippage-controls .range-group { display: flex; gap: 4px; }
+.slippage-controls .range-btn {
+  font-size: 12px; font-family: var(--font); font-weight: 500;
+  padding: 6px 12px; border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm); background: var(--bg-base);
+  color: var(--text-secondary); cursor: pointer;
+}
+.slippage-controls .range-btn.active {
+  background: var(--accent); border-color: var(--accent); color: #fff;
+}
+.slippage-controls .divider {
+  width: 1px; height: 24px; background: var(--border);
+}
+.slippage-controls label { font-size: 12px; color: var(--text-muted); font-weight: 500; }
+.slippage-controls input[type="date"],
+.slippage-controls input[type="number"] {
+  font-size: 12px; font-family: var(--font);
+  border: 1px solid var(--border-strong); border-radius: var(--radius-sm);
+  padding: 5px 9px; background: var(--bg-base); color: var(--text-primary);
+}
+.slippage-controls .live-badge {
+  margin-left: auto; font-size: 11px; color: var(--text-muted);
+  display: flex; align-items: center; gap: 6px;
+}
+.slippage-controls .live-badge .dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--green); box-shadow: 0 0 0 3px var(--green-bg);
+  animation: pulse-dot 2s ease-in-out infinite;
+}
+@keyframes pulse-dot { 0%, 100% { opacity: 1; } 50% { opacity: .5; } }
+
 /* ─── Stat Cards ────────────────────────────────── */
 .stats-row {
   display: grid;
@@ -271,10 +303,7 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
 .market-row.warn::before  { background: var(--amber); }
 .market-row.crit::before  { background: var(--red); }
 .market-row.ok::before    { background: var(--green); }
-<<<<<<< HEAD
 .market-row.flag::before  { background: var(--border-strong); }
-=======
->>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
 .market-row.selected { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-light), var(--shadow); }
 
 .mr-sym { flex: 0 0 90px; }
@@ -294,10 +323,7 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
 .mr-badge.warn { background: var(--amber-bg); color: var(--amber-text); }
 .mr-badge.crit { background: var(--red-bg);   color: var(--red-text);   }
 .mr-badge.blue { background: var(--blue-bg);  color: var(--blue-text);  }
-<<<<<<< HEAD
 .mr-badge.muted{ background: var(--bg-base);  color: var(--text-muted); border: 1px solid var(--border-strong); }
-=======
->>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
 
 .mr-chevron { color: var(--text-muted); font-size: 16px; flex-shrink: 0; transition: transform .15s; }
 .market-row:hover .mr-chevron { transform: translateX(2px); color: var(--text-secondary); }
@@ -485,6 +511,23 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
   transition: color .12s, background .12s;
 }
 .pairs-table .del-btn:hover { color: var(--red); background: var(--red-bg); }
+.pairs-table .suspend-btn {
+  display: inline-flex; align-items: center; gap: 4px; cursor: pointer;
+  font-family: var(--mono); font-size: 11px; font-weight: 500;
+  padding: 3px 8px; border-radius: 5px; line-height: 1; white-space: nowrap;
+  border: 1px solid var(--border-strong); background: var(--bg-base);
+  color: var(--text-secondary); transition: color .12s, background .12s, border-color .12s;
+}
+.pairs-table .suspend-btn:hover { color: var(--text-primary); background: var(--bg-card-hover); }
+.pairs-table .suspend-btn i { font-size: 13px; }
+/* Active = pair is currently muted; button now resumes. Amber, to read as "paused". */
+.pairs-table .suspend-btn.active {
+  border-color: var(--amber, #f59e0b); background: var(--amber-bg, #fef3c7);
+  color: var(--amber-text, #92400e);
+}
+[data-theme="dark"] .pairs-table .suspend-btn.active {
+  background: rgba(245,158,11,.15); color: #fbbf24; border-color: rgba(245,158,11,.4);
+}
 .add-pair-row { display: flex; gap: 8px; margin-top: 10px; align-items: center; }
 .add-pair-row input { flex: 1; }
 
@@ -497,7 +540,6 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
 }
 .config-toast.show { opacity: 1; }
 .config-toast.error-toast { background: var(--red); }
-<<<<<<< HEAD
 
 /* ─── Daily Log ─────────────────────────────────── */
 .daily-log-card {
@@ -560,8 +602,6 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
 .dl-issue-badge.CRITICAL { background: var(--red-bg);   color: var(--red-text); }
 .dl-issue-badge.HIGH     { background: var(--amber-bg); color: var(--amber-text); }
 .dl-issue-badge.MEDIUM   { background: var(--blue-bg);  color: var(--blue-text); }
-=======
->>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
 </style>
 </head>
 <body>
@@ -578,50 +618,33 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
 
   <nav class="sidebar-nav">
     <div class="nav-section-label">Monitor</div>
-    <div class="nav-item active">
+    <div class="nav-item active" data-tab="overview" onclick="showTab('overview')">
       <i class="ti ti-layout-dashboard"></i>
       <span>Overview</span>
     </div>
-    <div class="nav-item" onclick="scrollToSection('markets')">
+    <div class="nav-item" data-tab="overview" onclick="showTab('overview', 'markets')">
       <i class="ti ti-currency-bitcoin"></i>
       <span>Markets</span>
       <span class="nav-badge" id="nav-warn-count" style="display:none">0</span>
     </div>
-    <div class="nav-item" onclick="scrollToSection('chart-section')">
+    <div class="nav-item" data-tab="overview" onclick="showTab('overview', 'chart-section')">
       <i class="ti ti-chart-line"></i>
       <span>Spread chart</span>
     </div>
-    <div class="nav-item" onclick="scrollToSection('log-section')">
+    <div class="nav-item" data-tab="overview" onclick="showTab('overview', 'log-section')">
       <i class="ti ti-bell"></i>
       <span>Alert log</span>
     </div>
-<<<<<<< HEAD
-    <div class="nav-item" onclick="scrollToSection('daily-log-section')">
+    <div class="nav-item" data-tab="overview" onclick="showTab('overview', 'daily-log-section')">
       <i class="ti ti-table"></i>
       <span>Daily log</span>
     </div>
 
-    <!-- <div class="nav-section-label" style="margin-top:8px">Alerts</div>
-=======
-
-    <div class="nav-section-label" style="margin-top:8px">Alerts</div>
->>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
-    <div class="nav-item">
-      <i class="ti ti-git-branch"></i>
-      <span>Order book</span>
+    <div class="nav-section-label" style="margin-top:8px">USDT/NGN</div>
+    <div class="nav-item" data-tab="slippage" onclick="showTab('slippage')">
+      <i class="ti ti-arrows-diff"></i>
+      <span>Depth-walk slippage</span>
     </div>
-    <div class="nav-item">
-      <i class="ti ti-trending-up"></i>
-      <span>Price moves</span>
-    </div>
-    <div class="nav-item">
-      <i class="ti ti-flame"></i>
-      <span>Volume spikes</span>
-<<<<<<< HEAD
-    </div> -->
-=======
-    </div>
->>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
 
     <div class="nav-section-label" style="margin-top:8px">Settings</div>
     <div class="nav-item" onclick="toggleConfigPanel()">
@@ -647,12 +670,9 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
     <div class="topbar-title">Market Overview</div>
     <div class="topbar-right">
       <div class="topbar-clock" id="clock">—</div>
-<<<<<<< HEAD
       <button class="btn" id="theme-toggle" onclick="toggleTheme()" title="Toggle dark mode" aria-label="Toggle dark mode">
         <i class="ti ti-moon" id="theme-icon"></i>
       </button>
-=======
->>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
       <button class="btn" onclick="fetchAndRender()">
         <i class="ti ti-refresh"></i> Refresh
       </button>
@@ -665,6 +685,9 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
       <i class="ti ti-alert-circle"></i>
       <span id="error-text">Connecting to API…</span>
     </div>
+
+    <!-- ═══ Overview tab ══════════════════════════════════════════════════════ -->
+    <div class="tab-panel active" id="tab-overview">
 
     <!-- Stat cards -->
     <div class="stats-row">
@@ -753,7 +776,6 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
         <p class="empty-state">No alerts this session.</p>
       </div>
     </div>
-<<<<<<< HEAD
 
     <!-- Daily log -->
     <div id="daily-log-section" style="margin-top:24px">
@@ -828,8 +850,154 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
         </div>
       </div>
     </div>
-=======
->>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
+
+    </div> <!-- /tab-overview -->
+
+    <!-- ═══ USDT/NGN Depth-walk Slippage tab ═════════════════════════════════ -->
+    <div class="tab-panel" id="tab-slippage">
+
+      <!-- Controls: range, date picker, weight, refresh -->
+      <div class="slippage-controls">
+        <div class="range-group" id="slippage-range-group">
+          <button class="range-btn active" data-range="1h"  onclick="setSlippageRange('1h')">1h</button>
+          <button class="range-btn"        data-range="24h" onclick="setSlippageRange('24h')">24h</button>
+          <button class="range-btn"        data-range="7d"  onclick="setSlippageRange('7d')">7d</button>
+          <button class="range-btn"        data-range="30d" onclick="setSlippageRange('30d')">30d</button>
+        </div>
+        <div class="divider"></div>
+        <label for="slippage-date-start">Archive:</label>
+        <input type="date" id="slippage-date-start" onchange="setSlippageDateRange()" />
+        <span style="font-size:11px;color:var(--text-muted)">to</span>
+        <input type="date" id="slippage-date-end" onchange="setSlippageDateRange()" />
+        <button class="btn" onclick="clearSlippageDateRange()" title="Clear date filter, back to range preset">
+          <i class="ti ti-x"></i>
+        </button>
+        <div class="divider"></div>
+        <button class="btn" onclick="fetchSlippageData()">
+          <i class="ti ti-refresh"></i> Reload
+        </button>
+        <div class="live-badge" id="slippage-live-badge">
+          <span class="dot"></span><span id="slippage-live-text">Live · updates every 5s</span>
+        </div>
+      </div>
+
+      <!-- Stat cards: period averages + G1 count + samples in window -->
+      <div class="stats-row">
+        <div class="stat-card">
+          <div class="stat-icon green"><i class="ti ti-arrow-up-right"></i></div>
+          <div class="stat-body">
+            <div class="stat-label">Avg buy slippage</div>
+            <div class="stat-value green" id="slip-avg-buy">—</div>
+            <div style="font-size:11px;color:var(--text-muted);margin-top:2px" id="slip-avg-buy-sub">weighted‑avg buy vs mid</div>
+          </div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-icon red"><i class="ti ti-arrow-down-right"></i></div>
+          <div class="stat-body">
+            <div class="stat-label">Avg sell slippage</div>
+            <div class="stat-value red" id="slip-avg-sell">—</div>
+            <div style="font-size:11px;color:var(--text-muted);margin-top:2px" id="slip-avg-sell-sub">weighted‑avg sell vs mid</div>
+          </div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-icon amber"><i class="ti ti-alert-triangle"></i></div>
+          <div class="stat-body">
+            <div class="stat-label">G1 partial-fill points</div>
+            <div class="stat-value amber" id="slip-g1-count">—</div>
+            <div style="font-size:11px;color:var(--text-muted);margin-top:2px" id="slip-g1-sub">book couldn't fill weight</div>
+          </div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-icon purple"><i class="ti ti-chart-dots-3"></i></div>
+          <div class="stat-body">
+            <div class="stat-label">Samples in window</div>
+            <div class="stat-value purple" id="slip-samples">—</div>
+            <div style="font-size:11px;color:var(--text-muted);margin-top:2px" id="slip-samples-sub">raw + condensed</div>
+          </div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-icon green"><i class="ti ti-arrow-up-right"></i></div>
+          <div class="stat-body">
+            <div class="stat-label">Ask uptime · <span id="uptime-ask-1n-label">1₦</span></div>
+            <div class="stat-value green" id="uptime-ask-1n">—</div>
+            <div style="font-size:11px;color:var(--text-muted);margin-top:2px" id="uptime-ask-1n-sub">this hour · graphed</div>
+          </div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-icon red"><i class="ti ti-arrow-down-right"></i></div>
+          <div class="stat-body">
+            <div class="stat-label">Bid uptime · <span id="uptime-bid-1n-label">1₦</span></div>
+            <div class="stat-value red" id="uptime-bid-1n">—</div>
+            <div style="font-size:11px;color:var(--text-muted);margin-top:2px" id="uptime-bid-1n-sub">this hour · graphed</div>
+          </div>
+        </div>
+      </div>
+      </div>
+
+      <!-- Slippage over time chart -->
+      <div class="chart-card">
+        <div class="chart-header">
+          <div class="chart-title" id="slippage-chart-title">USDTNGN — buy/sell slippage vs mid</div>
+        </div>
+        <div class="legend">
+          <span><span class="swatch" style="background:var(--green)"></span><span id="slip-legend-buy">Buy slippage %</span></span>
+          <span><span class="swatch" style="background:var(--red)"></span><span id="slip-legend-sell">Sell slippage %</span></span>
+          <span><span class="swatch" style="background:var(--amber);border-radius:50%"></span>G1 partial-fill</span>
+        </div>
+        <div style="position:relative;height:320px">
+          <canvas id="slippageChart" role="img" aria-label="USDTNGN slippage over time"></canvas>
+        </div>
+        <div style="font-size:11px;color:var(--text-muted);margin-top:10px;line-height:1.5">
+          Buy slip % = ((weighted avg buy price ÷ mid) − 1) × 100.
+          Sell slip % = ((weighted avg sell price ÷ mid) − 1) × 100.
+          Each point walks the visible orderbook cumulatively until <b><span id="slip-explainer-weight">100k USDT</span></b>
+          is consumed, clipping the boundary layer.
+          Mid is itself a small depth walk — the average of <b><span id="slip-explainer-mid-weight">1k USDT</span></b> walked
+          on each side, not raw best_ask/best_bid — so a lone dust order at the touch can't distort the reference.
+          Points inside the last hour are 5-second snapshots; older points are hourly averages.
+        </div>
+      </div>
+
+      <!-- Liquidity uptime chart -->
+      <div class="chart-card">
+        <div class="chart-header">
+          <div class="chart-title">USDTNGN — liquidity uptime</div>
+        </div>
+        <div class="legend">
+          <span><span class="swatch" style="background:var(--green)"></span><span id="uptime-legend-ask">Ask uptime %</span></span>
+          <span><span class="swatch" style="background:var(--red)"></span><span id="uptime-legend-bid">Bid uptime %</span></span>
+        </div>
+        <div style="position:relative;height:280px">
+          <canvas id="uptimeChart" role="img" aria-label="USDTNGN liquidity uptime over time"></canvas>
+        </div>
+        <div style="font-size:11px;color:var(--text-muted);margin-top:10px;line-height:1.5">
+          The graph is the <b>persisted</b> series: a <b>±<span id="uptime-explainer-pct">0.071</span>%</b> band
+          around live mid — that percent is <b>1₦ ÷ <span id="uptime-explainer-ref">1400</span>₦</b> target price,
+          applied multiplicatively so the band tracks mid. Per 5-second poll, a side scores 1 if at least
+          <b><span id="uptime-explainer-weight">100k USDT</span></b> of resting size sits within its band, else 0.
+          Each hourly point is the fraction of that hour's usable polls that passed, per side. The highlighted point
+          is the current in-progress hour — the same value shown live in the ±<span id="uptime-explainer-pct2">0.071</span>% stat cards above,
+          so you don't have to wait for the hour to close. A poll where the book was empty on a side produces no sample and doesn't count either way.
+        </div>
+      </div>
+
+      <!-- Weighted avg prices chart (raw price levels, for reference) -->
+      <div class="chart-card">
+        <div class="chart-header">
+          <div class="chart-title">USDTNGN — weighted avg prices vs mid</div>
+        </div>
+        <div class="legend">
+          <span><span class="swatch" style="background:var(--accent-mid)"></span><span id="slip-legend-mid">Mid</span></span>
+          <span><span class="swatch" style="background:var(--green)"></span><span id="slip-legend-wavg-buy">Weighted avg buy</span></span>
+          <span><span class="swatch" style="background:var(--red)"></span><span id="slip-legend-wavg-sell">Weighted avg sell</span></span>
+        </div>
+        <div style="position:relative;height:260px">
+          <canvas id="slippagePriceChart" role="img" aria-label="USDTNGN weighted prices"></canvas>
+        </div>
+      </div>
+
+    </div> <!-- /tab-slippage -->
+
   </div>
 </div>
 
@@ -856,25 +1024,9 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
         </div>
         <div class="config-grid">
           <div class="config-field">
-<<<<<<< HEAD
             <label>Cycle interval (seconds)</label>
             <input type="number" id="cfg-cycle-sleep" min="10" step="5" />
             <span class="hint">Sleep time between full scan cycles. Every issue detected in a cycle fires immediately — there is no alert delay or cooldown.</span>
-=======
-            <label>Alert delay (minutes)</label>
-            <input type="number" id="cfg-anomaly-alert-after" min="1" step="1" />
-            <span class="hint">How long an anomaly must persist before firing a Telegram alert.</span>
-          </div>
-          <div class="config-field">
-            <label>Alert cooldown (minutes)</label>
-            <input type="number" id="cfg-alert-cooldown" min="1" step="1" />
-            <span class="hint">Minimum gap between repeat alerts for the same pair.</span>
-          </div>
-          <div class="config-field">
-            <label>Cycle interval (seconds)</label>
-            <input type="number" id="cfg-cycle-sleep" min="10" step="5" />
-            <span class="hint">Sleep time between full scan cycles.</span>
->>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
           </div>
         </div>
       </div>
@@ -897,19 +1049,6 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
             <span class="hint">USD-equiv total depth within spread band below which A4 fires.</span>
           </div>
           <div class="config-field">
-<<<<<<< HEAD
-=======
-            <label>Stale OB cycles</label>
-            <input type="number" id="cfg-stale-ob-cycles" min="1" step="1" />
-            <span class="hint">Consecutive cycles with identical top-of-book before stale alert.</span>
-          </div>
-          <div class="config-field">
-            <label>Mid-price alert threshold (%)</label>
-            <input type="number" id="cfg-mid-price-alert" min="1" step="1" />
-            <span class="hint">% change in mid-price between cycles that triggers a price-move alert.</span>
-          </div>
-          <div class="config-field">
->>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
             <label>DWS poor threshold</label>
             <input type="number" id="cfg-dws-poor" min="0" step="0.01" />
             <span class="hint">Dynamic Weighted Spread above this is considered "poor" quality.</span>
@@ -927,7 +1066,6 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
           <div class="config-field">
             <label>Depth imbalance ratio</label>
             <input type="number" id="cfg-imbalance-ratio" min="1" step="0.1" />
-<<<<<<< HEAD
             <span class="hint">A5 fires when one side's depth is this many times heavier than the other.</span>
           </div>
         </div>
@@ -979,9 +1117,6 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
             <label>Arb gap threshold (%)</label>
             <input type="number" id="cfg-arb-gap" min="0" step="0.01" />
             <span class="hint">F1 — % gap between a pair's quoted price and its implied cross-rate before flagging.</span>
-=======
-            <span class="hint">Captured for reference; imbalance above this ratio is recorded.</span>
->>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
           </div>
         </div>
       </div>
@@ -1003,7 +1138,6 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
             <input type="number" id="cfg-kline-lookback" min="1" step="1" />
             <span class="hint">Rolling window for volume-spike detection. Fetches this many candles.</span>
           </div>
-<<<<<<< HEAD
           <div class="config-field">
             <label>Volume baseline windows</label>
             <input type="number" id="cfg-vol-baseline-buckets" min="2" step="1" />
@@ -1070,8 +1204,76 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
             <input type="number" id="cfg-layer-churn-ratio-threshold" min="0" max="1" step="0.05" />
             <span class="hint">A6 fires when this cycle's churn drops below this fraction of the pair's own baseline.</span>
           </div>
-=======
->>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
+        </div>
+      </div>
+
+      <!-- Depth-walk (G1) -->
+      <div class="config-section">
+        <div class="config-section-title">
+          <i class="ti ti-arrows-diff" style="font-size:14px"></i>
+          Depth-walk slippage (G1) — USDTNGN only
+        </div>
+        <div class="config-grid">
+          <div class="config-field">
+            <label>Walk weight (USDT)</label>
+            <input type="number" id="cfg-depth-walk-weight" min="0" step="1000" />
+            <span class="hint">Base-asset quantity walked cumulatively down each side of the book. The boundary layer is clipped to only the remainder needed. Shared by buy and sell walks.</span>
+          </div>
+          <div class="config-field">
+            <label>Mid walk weight (USDT)</label>
+            <input type="number" id="cfg-depth-walk-mid-weight" min="0" step="100" />
+            <span class="hint">Mid price is the average of two small walks (this weight on each side), not raw best_ask/best_bid — a lone dust order at the touch can't distort the reference. Falls back to top-of-book if either side can't supply this weight; that sample is flagged.</span>
+          </div>
+          <div class="config-field">
+            <label>Poll interval (seconds)</label>
+            <input type="number" id="cfg-depth-walk-poll" min="1" step="1" />
+            <span class="hint">How often the depth-walk task fetches USDTNGN and records a sample. Independent of the main cycle sleep — this loop runs on its own.</span>
+          </div>
+          <div class="config-field">
+            <label>Raw bucket length (seconds)</label>
+            <input type="number" id="cfg-depth-walk-raw-retention" min="60" step="60" />
+            <span class="hint">How long one raw 5s-sample bucket stays open before being condensed to a single hourly-average point. Default 3600 = one hour per bucket.</span>
+          </div>
+          <div class="config-field">
+            <label>Condensed retention (days)</label>
+            <input type="number" id="cfg-depth-walk-condensed-retention" min="1" step="1" />
+            <span class="hint">How long the hourly averages are retained on disk before being pruned. The chart date-picker archive can go back this far.</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Liquidity uptime (rides the G1 depth-walk task) -->
+      <div class="config-section">
+        <div class="config-section-title">
+          <i class="ti ti-heartbeat" style="font-size:14px"></i>
+          Liquidity uptime — USDTNGN only
+        </div>
+        <div class="config-grid">
+          <div class="config-field">
+            <label>Target price · s (₦)</label>
+            <input type="number" id="cfg-uptime-reference" min="0" step="1" />
+            <span class="hint">Active band anchor. The band half-width is a percent p = 1₦ ÷ s × 100, applied to live mid as mid×(1±p/100) — so it equals ±1₦ only when mid = s and scales with mid otherwise. Lower s ⇒ wider band. Values ≤ 0 fall back to the config default s.</span>
+          </div>
+          <div class="config-field">
+            <label>In-band weight (USDT)</label>
+            <input type="number" id="cfg-uptime-weight" min="0" step="1000" />
+            <span class="hint">A side scores 1 for a poll when at least this much resting size sits within the ±p% band, else 0. Independent of the G1 walk weight above. Hourly uptime is the fraction of that hour's usable polls that passed, per side.</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Alerts -->
+      <div class="config-section">
+        <div class="config-section-title">
+          <i class="ti ti-bell-off" style="font-size:14px"></i>
+          Alerts
+        </div>
+        <div class="config-grid">
+          <div class="config-field">
+            <label>Suspend duration (minutes)</label>
+            <input type="number" id="cfg-alert-suspend-minutes" min="1" step="1" />
+            <span class="hint">How long a pair's Telegram alerts stay muted when you tap <b>Suspend</b> beside it below. One global value — every pair's button uses it. The pair keeps being monitored and stays on the dashboard; only its Telegram delivery is paused for the window (F1 alerts on other pairs are unaffected). Save the config first if you change this — the button uses the saved value.</span>
+          </div>
         </div>
       </div>
 
@@ -1085,23 +1287,17 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
         <table class="pairs-table" id="pairs-cfg-table">
           <thead>
             <tr>
-<<<<<<< HEAD
-              <th style="width:22%">Symbol</th>
-              <th style="width:14%">Target spread %</th>
-              <th style="width:14%">B2 div %</th>
-              <th style="width:18%">MEXC alias</th>
-              <th style="width:18%">KuCoin alias</th>
-              <th style="width:14%"></th>
-=======
-              <th style="width:48%">Symbol</th>
-              <th style="width:34%">Target spread %</th>
-              <th style="width:18%"></th>
->>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
+              <th style="width:20%">Symbol</th>
+              <th style="width:13%">Target spread %</th>
+              <th style="width:12%">B2 div %</th>
+              <th style="width:16%">MEXC alias</th>
+              <th style="width:16%">KuCoin alias</th>
+              <th style="width:15%;text-align:center">Alerts</th>
+              <th style="width:8%"></th>
             </tr>
           </thead>
           <tbody id="pairs-cfg-tbody"></tbody>
         </table>
-<<<<<<< HEAD
         <div style="font-size:11px;color:var(--text-muted);margin-top:6px;line-height:1.4">
           MEXC/KuCoin aliases are optional — only needed when a USDT-quoted asset's ticker on that
           exchange differs from Quidax's (e.g. RNDR is listed as RENDER on MEXC but still RNDR on
@@ -1116,11 +1312,6 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
           <input type="number" id="new-pair-b2div" placeholder="B2 div % (blank = global)" min="0" step="0.01" style="font-family:var(--mono);font-size:12px;border:1px solid var(--border-strong);border-radius:6px;padding:6px 10px;background:var(--bg-base);color:var(--text-primary)" />
           <input type="text" id="new-pair-mexc-alias" placeholder="MEXC alias (optional)" style="font-family:var(--mono);font-size:12px;border:1px solid var(--border-strong);border-radius:6px;padding:6px 10px;background:var(--bg-base);color:var(--text-primary)" />
           <input type="text" id="new-pair-kucoin-alias" placeholder="KuCoin alias (optional)" style="font-family:var(--mono);font-size:12px;border:1px solid var(--border-strong);border-radius:6px;padding:6px 10px;background:var(--bg-base);color:var(--text-primary)" />
-=======
-        <div class="add-pair-row">
-          <input type="text" id="new-pair-sym" placeholder="symbol (e.g. solusdt)" style="font-family:var(--mono);font-size:12px;border:1px solid var(--border-strong);border-radius:6px;padding:6px 10px;background:var(--bg-base);color:var(--text-primary)" />
-          <input type="number" id="new-pair-target" placeholder="target % (blank = monitor only)" min="0" step="0.01" style="font-family:var(--mono);font-size:12px;border:1px solid var(--border-strong);border-radius:6px;padding:6px 10px;background:var(--bg-base);color:var(--text-primary)" />
->>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
           <button class="btn btn-accent" onclick="addPairRow()" style="white-space:nowrap">
             <i class="ti ti-plus"></i> Add pair
           </button>
@@ -1153,6 +1344,23 @@ let lastData = null;
 let showAll = false;
 let selectedSym = null;
 
+// ── Slippage tab state ────────────────────────────────────────────────────────
+let slippageChart, slippagePriceChart, uptimeChart;
+let slippageRange = "1h";       // "1h" | "24h" | "7d" | "30d"
+let slippageDateStart = null;    // ISO date string (overrides range preset)
+let slippageDateEnd   = null;
+let slippagePollTimer = null;    // 5s refresh timer, active only when tab is visible
+let activeTab = "overview";
+const SLIPPAGE_POLL_MS = 5000;
+// Live-config weights, refreshed from the raw endpoint each poll. Defaults
+// match defaults.py so labels look reasonable on first render before the API
+// returns.
+let slippageWeightUsdt    = 100_000;
+let slippageMidWeightUsdt = 1_000;
+let uptimeReferencePrice  = 1400;
+let uptimeBandPct         = 1 / 1400 * 100;   // p = n/s*100 (n = fixed 1₦)
+let uptimeWeightUsdt      = 100_000;
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 function ngtTime() {
   return new Date().toLocaleTimeString("en-GB", { timeZone: "Africa/Lagos", hour12: false });
@@ -1167,6 +1375,58 @@ if (clockEl) clockEl.textContent = ngtTime() + " WAT";
 function scrollToSection(id) {
   const el = document.getElementById(id);
   if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+// ── Tab switching ─────────────────────────────────────────────────────────────
+// Nav items opt into a tab via data-tab="…"; items without data-tab (like the
+// Configuration entry, which opens a drawer instead) are unaffected. We pass an
+// optional anchor so sub-nav items inside a tab can still scroll to a section.
+function showTab(tab, anchor) {
+  activeTab = tab;
+
+  // Panel visibility
+  document.querySelectorAll(".tab-panel").forEach(el => {
+    el.classList.toggle("active", el.id === "tab-" + tab);
+  });
+
+  // Sidebar active-state: mark ONE nav item per tab (the first data-tab match,
+  // which is the header entry). Sub-anchor entries share the same data-tab and
+  // must NOT all get "active" simultaneously — that would make three items in
+  // the Overview section light up at once.
+  const items = document.querySelectorAll(".nav-item[data-tab]");
+  const firstPerTab = new Map();
+  items.forEach(el => {
+    const t = el.dataset.tab;
+    if (!firstPerTab.has(t)) firstPerTab.set(t, el);
+  });
+  items.forEach(el => el.classList.remove("active"));
+  const winner = firstPerTab.get(tab);
+  if (winner) winner.classList.add("active");
+
+  // Topbar title tracks the tab
+  const titleEl = document.querySelector(".topbar-title");
+  if (titleEl) {
+    titleEl.textContent = tab === "slippage"
+      ? "USDT/NGN — Depth-walk slippage"
+      : "Market Overview";
+  }
+
+  // Per-tab side effects: only poll the slippage endpoints while that tab is
+  // visible — no point hammering the API every 5s while the operator is on
+  // the Overview tab.
+  if (tab === "slippage") {
+    fetchSlippageData();
+    startSlippagePolling();
+  } else {
+    stopSlippagePolling();
+  }
+
+  if (anchor) {
+    // Wait one frame so the newly-visible panel has laid out before scrolling
+    requestAnimationFrame(() => scrollToSection(anchor));
+  } else {
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
 }
 
 function fmt(val, decimals = 4, suffix = "%") {
@@ -1263,11 +1523,7 @@ function renderDashboard(data) {
   renderPairs(pairs);
 
   pairs.forEach(p => {
-<<<<<<< HEAD
     if (p.telegram_fired) {
-=======
-    if (p.should_alert) {
->>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
       const entry = { time: ngtTime(), sym: p.symbol.toUpperCase(), spread: p.current_spread, target: p.target_spread, diff: p.percent_diff, dws: p.dws };
       const key = `${p.symbol}-${p.timestamp}`;
       if (!alertLog.find(a => a._key === key)) {
@@ -1292,7 +1548,6 @@ function renderPairs(pairs) {
     container.innerHTML = `<p class="empty-state">No data yet — run a monitor cycle first.</p>`;
     return;
   }
-<<<<<<< HEAD
   // Default view: Tier 1 / Tier 2 issues (actionable) plus any pair with a live
   // D1 volume spike — D1 fires to Telegram immediately and is surfaced via its own
   // d1_spike field, so it must show here even when the pair has no other issue.
@@ -1303,19 +1558,12 @@ function renderPairs(pairs) {
   document.getElementById("pairs-count-label").textContent = visible.length + " of " + pairs.length;
   if (!visible.length) {
     container.innerHTML = `<p class="empty-state empty-state-green"><i class="ti ti-circle-check" style="font-size:15px"></i> All ${pairs.length} pairs healthy or flagged only</p>`;
-=======
-  const visible = showAll ? pairs : pairs.filter(p => (p.status || "").toLowerCase() === "warning");
-  document.getElementById("pairs-count-label").textContent = visible.length + " of " + pairs.length;
-  if (!visible.length) {
-    container.innerHTML = `<p class="empty-state empty-state-green"><i class="ti ti-circle-check" style="font-size:15px"></i> All ${pairs.length} pairs healthy</p>`;
->>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
     return;
   }
   container.innerHTML = visible.map(p => renderMarketRow(p)).join("");
 }
 
 function renderMarketRow(p) {
-<<<<<<< HEAD
   const tier     = p.alert_tier ?? 0;
   const alerted  = p.should_alert;
   const { base } = symParts(p.symbol);
@@ -1342,27 +1590,6 @@ function renderMarketRow(p) {
     const codes = p.issues.split("|").filter(Boolean).map(part => part.split(":")[0]);
     codes.slice(0, 2).forEach(c => { issuesBadgesHtml += `<span class="mr-badge blue">${c}</span>`; });
     if (codes.length > 2) issuesBadgesHtml += `<span class="mr-badge blue">+${codes.length - 2}</span>`;
-=======
-  const isCrit  = p.issues && p.issues.includes("CRITICAL");
-  const isWarn  = (p.status || "").toLowerCase() === "warning";
-  const alerted = p.should_alert;
-  const rowCls  = isCrit ? "crit" : isWarn ? "warn" : "ok";
-  const { base } = symParts(p.symbol);
-  const spread = fmt(p.current_spread, 4);
-  const mid = fmtPrice(p.mid_price);
-  const isSelected = p.symbol === selectedSym;
-
-  let badgesHtml = "";
-  if (alerted) badgesHtml += `<span class="mr-badge crit">Alert fired</span>`;
-  else if (isCrit) badgesHtml += `<span class="mr-badge crit">Critical</span>`;
-  else if (isWarn) badgesHtml += `<span class="mr-badge warn">Warning</span>`;
-  else             badgesHtml += `<span class="mr-badge ok">Healthy</span>`;
-
-  if (p.issues) {
-    const codes = p.issues.split("|").filter(Boolean).map(part => part.split(":")[0]);
-    codes.slice(0, 2).forEach(c => { badgesHtml += `<span class="mr-badge blue">${c}</span>`; });
-    if (codes.length > 2) badgesHtml += `<span class="mr-badge blue">+${codes.length - 2}</span>`;
->>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
   }
 
   return `<div class="market-row ${rowCls}${isSelected ? " selected" : ""}" onclick="selectMarket('${p.symbol}')">
@@ -1378,11 +1605,7 @@ function renderMarketRow(p) {
       <div class="mr-spread-val">${spread}</div>
       <div class="mr-price-label">Spread</div>
     </div>
-<<<<<<< HEAD
     <div class="mr-issues">${primaryBadge}${issuesBadgesHtml}</div>
-=======
-    <div class="mr-issues">${badgesHtml}</div>
->>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
     <i class="ti ti-chevron-right mr-chevron"></i>
   </div>`;
 }
@@ -1405,7 +1628,6 @@ function selectMarket(symbol) {
   if (spreadHistoryMap[symbol]) updateChart(symbol);
 }
 
-<<<<<<< HEAD
 function formatTelegramDetail(detail) {
   if (!detail) return "";
   return detail.split("|").filter(Boolean).map(part => {
@@ -1413,26 +1635,20 @@ function formatTelegramDetail(detail) {
     if (!state) return id;
     if (state === "flag-only") return `${id} dashboard-only`;
     if (state === "fired") return `${id} sent`;
+    if (state === "suspended") return `${id} muted`;
     if (state === "cooldown") return `${id} in cooldown`;
     if (state.endsWith("cyc")) return `${id} ${state.replace("cyc", "")} cycles`;
     return `${id} ${state}`;
   }).join(" · ");
 }
 
-=======
->>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
 function renderDetailPanel(p) {
   const { base } = symParts(p.symbol);
   const isCrit = p.issues && p.issues.includes("CRITICAL");
   const isWarn = (p.status || "").toLowerCase() === "warning";
-<<<<<<< HEAD
   const statusBadgeCls = p.telegram_fired ? "crit" : isCrit ? "crit" : isWarn ? "warn" : "ok";
   const statusText     = p.telegram_fired ? "Alert fired" : isCrit ? "Critical" : isWarn ? "Warning" : "Healthy";
   const telegramCaption = (!p.telegram_fired && p.telegram_detail) ? formatTelegramDetail(p.telegram_detail) : "";
-=======
-  const statusBadgeCls = p.should_alert ? "crit" : isCrit ? "crit" : isWarn ? "warn" : "ok";
-  const statusText     = p.should_alert ? "Alert fired" : isCrit ? "Critical" : isWarn ? "Warning" : "Healthy";
->>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
 
   // Parse active issues
   const activeIssues = {};
@@ -1476,17 +1692,12 @@ function renderDetailPanel(p) {
     },
     {
       id: "A4", name: "Thin Mid-Market",
-<<<<<<< HEAD
       desc: "Liquidity within spread band below threshold",
-=======
-      desc: "Liquidity within spread band < $5,000",
->>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
       severity: "MEDIUM",
       test: () => activeIssues["A4"] ? "info" : "pass",
       passDesc: "Adequate mid-market liquidity",
     },
     {
-<<<<<<< HEAD
       id: "A5", name: "Depth Imbalance",
       desc: `Ratio: ${p.imbalance_ratio ?? "—"}${p.heavier_side ? " — " + p.heavier_side + " heavier" : ""}`,
       severity: "MEDIUM",
@@ -1531,13 +1742,6 @@ function renderDetailPanel(p) {
       severity: "HIGH",
       test: () => activeIssues["B4"] ? "warn" : "pass",
       passDesc: "Within normal trading range",
-=======
-      id: "STALE", name: "Stale Order Book",
-      desc: "Top-of-book unchanged for 3+ consecutive cycles",
-      severity: "HIGH",
-      test: () => activeIssues["STALE"] ? "warn" : "pass",
-      passDesc: "Order book is updating",
->>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
     },
     {
       id: "DWS", name: "Dynamic Weighted Spread",
@@ -1547,7 +1751,6 @@ function renderDetailPanel(p) {
       passDesc: "DWS within acceptable range",
     },
     {
-<<<<<<< HEAD
       id: "F1", name: "Cross-Pair Arbitrage Gap",
       desc: "Quoted price vs implied cross-rate from linked pairs",
       severity: "MEDIUM",
@@ -1563,8 +1766,6 @@ function renderDetailPanel(p) {
       naDesc: "Monitor-only — no volume threshold",
     },
     {
-=======
->>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
       id: "DEPTH", name: "Depth Liquidity",
       desc: `1.25×: ${p.depth_1_25x || p["depth_1.25x"] || "—"} | 1.5×: ${p.depth_1_5x || p["depth_1.5x"] || "—"}`,
       severity: "INFO",
@@ -1602,20 +1803,14 @@ function renderDetailPanel(p) {
       </div>
       <span class="mr-badge ${statusBadgeCls}" style="font-size:12px;padding:4px 12px">${statusText}</span>
     </div>
-<<<<<<< HEAD
     ${telegramCaption ? `<div style="font-size:11px;color:var(--text-muted);margin:-6px 0 14px">${telegramCaption}</div>` : ""}
-=======
->>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
     <div class="detail-metrics">
       <div class="dm"><div class="k">Mid price</div><div class="v muted">${fmtPrice(p.mid_price)}</div></div>
       <div class="dm"><div class="k">Spread</div><div class="v ${(p.status||"").toLowerCase() === "warning" ? "warn" : "ok"}">${fmt(p.current_spread, 4)}</div></div>
       <div class="dm"><div class="k">Target spread</div><div class="v muted">${p.target_spread && p.target_spread !== "N/A" ? p.target_spread + "%" : "N/A"}</div></div>
       <div class="dm"><div class="k">Spread diff</div><div class="v ${parseFloat(p.percent_diff) > 0 ? "warn" : "ok"}">${fmt(p.percent_diff, 1)}</div></div>
-<<<<<<< HEAD
       <div class="dm"><div class="k">Reference price</div><div class="v muted">${p.trusted_ref && p.trusted_ref !== "N/A" ? fmtPrice(p.trusted_ref) : "—"}</div></div>
       <div class="dm"><div class="k">vs reference</div><div class="v ${activeIssues["B1"] ? "warn" : "ok"}">${p.trusted_ref && p.trusted_ref !== "N/A" ? (((p.mid_price - p.trusted_ref) / p.trusted_ref) * 100).toFixed(2) + "%" : "—"}</div></div>
-=======
->>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
     </div>
     <div class="detail-alerts-title">Alert checks</div>
     <div class="alert-checks">${checksHtml}</div>
@@ -1648,13 +1843,10 @@ function initChart() {
   if (!canvas) return;
   const ctx = canvas.getContext("2d");
 
-<<<<<<< HEAD
   const cssVar = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
   const grid = cssVar("--chart-grid");
   const tick = cssVar("--chart-tick");
 
-=======
->>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
   spreadChart = new Chart(ctx, {
     type: "line",
     data: { labels: [], datasets: [
@@ -1666,20 +1858,14 @@ function initChart() {
       maintainAspectRatio: false,
       plugins: { legend: { display: false } },
       scales: {
-<<<<<<< HEAD
         x: { display: true, ticks: { font: { size: 10 }, color: tick, maxRotation: 0 }, grid: { color: grid } },
         y: { grid: { color: grid }, ticks: { font: { size: 11 }, color: tick, callback: v => v.toFixed(3) + "%" } },
-=======
-        x: { display: true, ticks: { font: { size: 10 }, color: "#9ca3af", maxRotation: 0 }, grid: { color: "rgba(0,0,0,0.04)" } },
-        y: { grid: { color: "rgba(0,0,0,0.05)" }, ticks: { font: { size: 11 }, color: "#9ca3af", callback: v => v.toFixed(3) + "%" } },
->>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
       },
       animation: { duration: 300 },
     },
   });
 }
 
-<<<<<<< HEAD
 // Re-apply themeable colours to an already-built chart (called on theme toggle)
 function themeChart() {
   if (!spreadChart) return;
@@ -1692,8 +1878,6 @@ function themeChart() {
   spreadChart.update("none");
 }
 
-=======
->>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
 function rebuildChartSelector(statusData) {
   if (!statusData || !statusData.pairs) return;
   const container = document.getElementById("chart-selector");
@@ -1731,14 +1915,618 @@ function updateChart(sym) {
   spreadChart.update();
 }
 
+// ══════════════════════════════════════════════════════════════════════════════
+// USDT/NGN Depth-walk slippage tab
+// ══════════════════════════════════════════════════════════════════════════════
+// Data flow:
+//   1) fetchSlippageData() calls BOTH endpoints:
+//        /api/usdtngn-slippage/raw       → last-hour 5s samples
+//        /api/usdtngn-slippage/history   → older hourly-condensed averages
+//      then stitches them into one chronological series filtered by the
+//      current range/date filter.
+//   2) The two charts (slip % + weighted prices) render off that stitched
+//      series.
+//   3) The stat cards run a simple mean over the same filtered series
+//      (raw and hourly samples equal-weighted per spec).
+//
+// Only polls while the tab is visible; showTab starts/stops the timer.
+
+function setSlippageRange(range) {
+  slippageRange = range;
+  // Range presets override any archive date filter
+  slippageDateStart = null;
+  slippageDateEnd = null;
+  const s = document.getElementById("slippage-date-start");
+  const e = document.getElementById("slippage-date-end");
+  if (s) s.value = "";
+  if (e) e.value = "";
+  document.querySelectorAll("#slippage-range-group .range-btn").forEach(b => {
+    b.classList.toggle("active", b.dataset.range === range);
+  });
+  fetchSlippageData();
+}
+
+function setSlippageDateRange() {
+  const s = document.getElementById("slippage-date-start").value;
+  const e = document.getElementById("slippage-date-end").value;
+  if (!s && !e) {
+    slippageDateStart = null;
+    slippageDateEnd = null;
+    fetchSlippageData();
+    return;
+  }
+  slippageDateStart = s || null;
+  slippageDateEnd = e || null;
+  // A picked archive range takes precedence over the range preset
+  document.querySelectorAll("#slippage-range-group .range-btn").forEach(b => {
+    b.classList.remove("active");
+  });
+  fetchSlippageData();
+}
+
+function clearSlippageDateRange() {
+  document.getElementById("slippage-date-start").value = "";
+  document.getElementById("slippage-date-end").value = "";
+  setSlippageRange(slippageRange);   // reset back to the current range preset
+}
+
+function startSlippagePolling() {
+  stopSlippagePolling();
+  slippagePollTimer = setInterval(() => {
+    // Only auto-refresh when viewing live (no archive filter). Archive views
+    // are static — no point re-fetching every 5s if the user has pinned a
+    // past date range.
+    if (!slippageDateStart && !slippageDateEnd) {
+      fetchSlippageData({silent: true});
+    }
+  }, SLIPPAGE_POLL_MS);
+}
+
+function stopSlippagePolling() {
+  if (slippagePollTimer) {
+    clearInterval(slippagePollTimer);
+    slippagePollTimer = null;
+  }
+}
+
+// Compute the (start, end) window boundaries for the current view.
+// Archive date range wins if set; otherwise use the range preset relative to now.
+function computeSlippageWindow() {
+  const now = new Date();
+  if (slippageDateStart || slippageDateEnd) {
+    // Date pickers give YYYY-MM-DD; expand end to end-of-day
+    const start = slippageDateStart ? new Date(slippageDateStart + "T00:00:00+01:00") : null;
+    const end   = slippageDateEnd   ? new Date(slippageDateEnd   + "T23:59:59+01:00") : null;
+    return { start, end, mode: "archive" };
+  }
+  const map = { "1h": 1, "24h": 24, "7d": 24 * 7, "30d": 24 * 30 };
+  const hours = map[slippageRange] || 1;
+  const start = new Date(now.getTime() - hours * 3600 * 1000);
+  return { start, end: now, mode: "range" };
+}
+
+async function fetchSlippageData(opts) {
+  opts = opts || {};
+  const { start, end, mode } = computeSlippageWindow();
+
+  // Update live-badge label based on mode
+  const liveTextEl = document.getElementById("slippage-live-text");
+  if (liveTextEl) {
+    liveTextEl.textContent = mode === "archive"
+      ? "Archive view · static"
+      : "Live · updates every 5s";
+  }
+
+  // History fetch — only needed if the window extends beyond "last hour",
+  // since the raw endpoint covers the last hour on its own.
+  const needHistory = mode === "archive" || slippageRange !== "1h";
+
+  try {
+    const [rawRes, histRes] = await Promise.all([
+      fetch(`${API_BASE}/api/usdtngn-slippage/raw`),
+      needHistory
+        ? fetch(`${API_BASE}/api/usdtngn-slippage/history` +
+            (start ? `?start=${encodeURIComponent(start.toISOString())}` : "") +
+            (end   ? `${start ? "&" : "?"}end=${encodeURIComponent(end.toISOString())}` : ""))
+        : Promise.resolve(null),
+    ]);
+
+    if (!rawRes.ok) throw new Error(`raw HTTP ${rawRes.status}`);
+    const raw = await rawRes.json();
+    const hist = histRes && histRes.ok ? await histRes.json() : { points: [] };
+
+    // Capture current live weights so all labels reflect what the monitor is
+    // actually using right now (in case the operator changed them via the
+    // config drawer). Fallbacks keep the numbers sensible if the API is old
+    // and doesn't return the config block.
+    if (raw.config) {
+      if (raw.config.weight_usdt     != null) slippageWeightUsdt    = raw.config.weight_usdt;
+      if (raw.config.mid_weight_usdt != null) slippageMidWeightUsdt = raw.config.mid_weight_usdt;
+      const up = raw.config.uptime || {};
+      if (up.reference_price != null) uptimeReferencePrice = up.reference_price;
+      if (up.band_pct        != null) uptimeBandPct        = up.band_pct;
+      if (up.weight_usdt     != null) uptimeWeightUsdt     = up.weight_usdt;
+    }
+    applySlippageWeightLabels();
+
+    // Stitch: hourly-condensed points first (older), then raw samples (newer)
+    const points = [];
+    (hist.points || []).forEach(p => points.push({
+      ts:                p.ts,
+      buy_slip_pct:      p.buy_slip_pct,
+      sell_slip_pct:     p.sell_slip_pct,
+      mid:               p.mid,
+      weighted_avg_buy:  null,  // not tracked in condensed
+      weighted_avg_sell: null,
+      g1:                !!p.g1,
+      partial_fill_buy:  !!p.partial_fill_buy,
+      partial_fill_sell: !!p.partial_fill_sell,
+      mid_from_fallback: !!p.mid_from_fallback,
+      resolution:        "hourly",
+    }));
+    (raw.samples || []).forEach(p => points.push({
+      ts:                p.ts,
+      buy_slip_pct:      p.buy_slip_pct,
+      sell_slip_pct:     p.sell_slip_pct,
+      mid:               p.mid,
+      weighted_avg_buy:  p.weighted_avg_buy,
+      weighted_avg_sell: p.weighted_avg_sell,
+      g1:                !!p.g1,
+      partial_fill_buy:  !!p.partial_fill_buy,
+      partial_fill_sell: !!p.partial_fill_sell,
+      mid_from_fallback: !!p.mid_from_fallback,
+      resolution:        "raw",
+    }));
+
+    // Apply window filter (double-safety — raw endpoint has no filtering)
+    const filtered = points.filter(p => {
+      const t = new Date(p.ts);
+      if (start && t < start) return false;
+      if (end   && t > end)   return false;
+      return true;
+    }).sort((a, b) => new Date(a.ts) - new Date(b.ts));
+
+    renderSlippageCharts(filtered);
+    renderSlippageStats(filtered);
+
+    // ── Liquidity uptime — hourly-only series ────────────────────────────────
+    // Uptime is an hourly aggregate, not a per-5s value: the chart plots one
+    // decimal per completed hour (from history) plus one live point for the
+    // in-progress bucket, computed on the fly from the raw samples. The live
+    // figure also drives the "this hour" stat cards.
+    const uptimePoints = [];
+    (hist.points || []).forEach(p => {
+      if (p.uptime_ask == null && p.uptime_bid == null) return; // pre-feature hour
+      uptimePoints.push({ ts: p.ts, ask: p.uptime_ask, bid: p.uptime_bid, live: false });
+    });
+
+    const live = computeLiveUptime(raw.samples || []);
+    if (live.count > 0) {
+      uptimePoints.push({
+        ts: raw.bucket_start || (raw.samples[raw.samples.length - 1] || {}).ts,
+        ask: live.ask, bid: live.bid, live: true,
+      });
+    }
+
+    const uptimeFiltered = uptimePoints.filter(p => {
+      const t = new Date(p.ts);
+      if (start && t < start) return false;
+      if (end   && t > end)   return false;
+      return true;
+    }).sort((a, b) => new Date(a.ts) - new Date(b.ts));
+
+    renderUptimeChart(uptimeFiltered);
+    renderUptime1nStats(live);
+  } catch (err) {
+    if (!opts.silent) {
+      showToast("Could not load slippage data: " + err.message, true);
+    }
+    console.error("Slippage fetch failed:", err);
+  }
+}
+
+// Running uptime for the in-progress bucket: fraction of usable samples that
+// passed, per side. Mirrors the backend's dynamic denominator — only samples
+// carrying the uptime flag are counted (empty-book polls never produced one).
+function computeLiveUptime(samples) {
+  let askPass = 0, askN = 0, bidPass = 0, bidN = 0;
+  samples.forEach(s => {
+    if (s.uptime_ask_ok !== undefined && s.uptime_ask_ok !== null) { askN++; if (s.uptime_ask_ok) askPass++; }
+    if (s.uptime_bid_ok !== undefined && s.uptime_bid_ok !== null) { bidN++; if (s.uptime_bid_ok) bidPass++; }
+  });
+  return {
+    ask:   askN ? askPass / askN : null,
+    bid:   bidN ? bidPass / bidN : null,
+    askN, bidN,
+    count: Math.max(askN, bidN),
+  };
+}
+
+// The 1₦ (fixed / graphed) cards show this hour's running fraction so far —
+// the same value that becomes the next hourly graph point, so it's visible
+// immediately without waiting for the hour to close.
+function renderUptime1nStats(live) {
+  const pct = v => v == null ? "—" : (v * 100).toFixed(1) + "%";
+  const set2 = (id, t) => { const el = document.getElementById(id); if (el) el.textContent = t; };
+  set2("uptime-ask-1n", pct(live.ask));
+  set2("uptime-bid-1n", pct(live.bid));
+  set2("uptime-ask-1n-sub", live.askN ? `${Math.round((live.ask || 0) * live.askN)}/${live.askN} polls · this hour` : "this hour · graphed");
+  set2("uptime-bid-1n-sub", live.bidN ? `${Math.round((live.bid || 0) * live.bidN)}/${live.bidN} polls · this hour` : "this hour · graphed");
+}
+
+function _mean(vals) {
+  const clean = vals.filter(v => v != null && !isNaN(v));
+  if (!clean.length) return null;
+  return clean.reduce((a, b) => a + b, 0) / clean.length;
+}
+
+// Compact USDT-quantity formatter used in chart labels/legends. Keeps things
+// readable across the full range of possible config values (500 → "500 USDT",
+// 1_000 → "1k USDT", 100_000 → "100k USDT", 2_500_000 → "2.5M USDT").
+function fmtUsdtQty(v) {
+  if (v == null) return "—";
+  const n = Number(v);
+  if (!isFinite(n)) return "—";
+  if (n >= 1_000_000) return (n / 1_000_000).toFixed(n % 1_000_000 === 0 ? 0 : 1) + "M USDT";
+  if (n >= 1_000)     return (n / 1_000).toFixed(n % 1_000 === 0 ? 0 : 1) + "k USDT";
+  return n + " USDT";
+}
+
+// Push the current live weights into every static label on the slippage tab.
+// Called after each successful fetch — that way a config change picked up on
+// the next 5s poll re-labels the whole tab automatically.
+function applySlippageWeightLabels() {
+  const w   = fmtUsdtQty(slippageWeightUsdt);
+  const mid = fmtUsdtQty(slippageMidWeightUsdt);
+
+  // Legend + stat-card subtitles + explainer
+  const set = (id, text) => { const el = document.getElementById(id); if (el) el.textContent = text; };
+  set("slip-legend-buy",     `Buy slippage % (${w} walk)`);
+  set("slip-legend-sell",    `Sell slippage % (${w} walk)`);
+  set("slip-legend-mid",     `Mid (${mid} walk)`);
+  set("slip-legend-wavg-buy",  `Weighted avg buy (${w} walk)`);
+  set("slip-legend-wavg-sell", `Weighted avg sell (${w} walk)`);
+  set("slip-avg-buy-sub",  `₦ from mid · weighted-avg buy (${w})`);
+  set("slip-avg-sell-sub", `₦ from mid · weighted-avg sell (${w})`);
+  set("slip-g1-sub",       `book couldn't fill ${w}`);
+  set("slip-explainer-weight",     w);
+  set("slip-explainer-mid-weight", mid);
+
+  // Chart.js dataset labels (drive the tooltip labels)
+  if (slippageChart) {
+    slippageChart.data.datasets[0].label = `Buy slip % (${w})`;
+    slippageChart.data.datasets[1].label = `Sell slip % (${w})`;
+    slippageChart.update("none");
+  }
+  if (slippagePriceChart) {
+    slippagePriceChart.data.datasets[0].label = `Mid (${mid} walk)`;
+    slippagePriceChart.data.datasets[1].label = `Weighted avg buy (${w})`;
+    slippagePriceChart.data.datasets[2].label = `Weighted avg sell (${w})`;
+    slippagePriceChart.update("none");
+  }
+
+  // Uptime labels — band is ±p% of live mid (p = n/s*100), one collapsed value
+  const uw   = fmtUsdtQty(uptimeWeightUsdt);
+  const pctS = (Number(uptimeBandPct)).toLocaleString(undefined, { maximumFractionDigits: 4 });
+  const ref  = (Number(uptimeReferencePrice)).toLocaleString();
+  set("uptime-explainer-pct",    pctS);
+  set("uptime-explainer-pct2",   pctS);
+  set("uptime-explainer-ref",    ref);
+  set("uptime-explainer-weight", uw);
+  set("uptime-ask-1n-label",     `±${pctS}%`);
+  set("uptime-bid-1n-label",     `±${pctS}%`);
+  set("uptime-legend-ask", `Ask uptime % (≥ ${uw} within ±${pctS}%)`);
+  set("uptime-legend-bid", `Bid uptime % (≥ ${uw} within ±${pctS}%)`);
+  if (uptimeChart) {
+    uptimeChart.data.datasets[0].label = `Ask uptime % (≥ ${uw}, ±${pctS}%)`;
+    uptimeChart.data.datasets[1].label = `Bid uptime % (≥ ${uw}, ±${pctS}%)`;
+    uptimeChart.update("none");
+  }
+}
+
+function fmtNairaSigned(v) {
+  if (v == null || isNaN(v)) return "—";
+  const sign = v > 0 ? "+" : (v < 0 ? "−" : "");
+  return sign + "₦" + Math.abs(v).toFixed(4);
+}
+
+function renderSlippageStats(points) {
+  // Naira distance from mid, directional: buy = wavg_ask − mid (>0),
+  // sell = wavg_bid − mid (<0). Derived as slip_pct/100 × mid so it works for
+  // condensed points too (which don't retain the raw weighted-avg prices).
+  const buyNaira  = points.map(p => (p.buy_slip_pct  != null && p.mid != null) ? (p.buy_slip_pct  / 100) * p.mid : null);
+  const sellNaira = points.map(p => (p.sell_slip_pct != null && p.mid != null) ? (p.sell_slip_pct / 100) * p.mid : null);
+  const buyAvg  = _mean(buyNaira);
+  const sellAvg = _mean(sellNaira);
+  const g1Count = points.filter(p => p.g1).length;
+
+  document.getElementById("slip-avg-buy").textContent  = fmtNairaSigned(buyAvg);
+  document.getElementById("slip-avg-sell").textContent = fmtNairaSigned(sellAvg);
+  document.getElementById("slip-g1-count").textContent = g1Count.toLocaleString();
+  document.getElementById("slip-samples").textContent  = points.length.toLocaleString();
+
+  const raws = points.filter(p => p.resolution === "raw").length;
+  const hrly = points.length - raws;
+  document.getElementById("slip-samples-sub").textContent = `${raws} raw · ${hrly} hourly`;
+}
+
+function initSlippageCharts() {
+  if (slippageChart) return;
+  const ctx = document.getElementById("slippageChart").getContext("2d");
+  slippageChart = new Chart(ctx, {
+    type: "line",
+    data: { labels: [], datasets: [
+      { label: "Buy slip %",  data: [], borderColor: "#22c55e", backgroundColor: "rgba(34,197,94,.12)",
+        tension: .25, pointRadius: 0, pointHoverRadius: 4, borderWidth: 2, fill: true },
+      { label: "Sell slip %", data: [], borderColor: "#ef4444", backgroundColor: "rgba(239,68,68,.10)",
+        tension: .25, pointRadius: 0, pointHoverRadius: 4, borderWidth: 2, fill: true },
+      // G1 partial-fill markers: a scatter overlay on top of the buy line
+      { label: "G1 partial-fill", data: [], type: "scatter",
+        borderColor: "#f59e0b", backgroundColor: "#f59e0b",
+        pointRadius: 4, pointStyle: "triangle", showLine: false },
+    ]},
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      interaction: { mode: "index", intersect: false },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            label: (item) => {
+              const v = item.parsed.y;
+              return `${item.dataset.label}: ${v != null ? v.toFixed(4) + "%" : "—"}`;
+            },
+          },
+        },
+      },
+      scales: {
+        x: { ticks: { maxRotation: 0, autoSkip: true, maxTicksLimit: 10, font: { size: 10 } } },
+        y: { ticks: { callback: v => v.toFixed(2) + "%", font: { size: 10 } } },
+      },
+    },
+  });
+
+  const ctx2 = document.getElementById("slippagePriceChart").getContext("2d");
+  slippagePriceChart = new Chart(ctx2, {
+    type: "line",
+    data: { labels: [], datasets: [
+      { label: "Mid",               data: [], borderColor: "#8b5cf6", backgroundColor: "rgba(139,92,246,.08)",
+        tension: .25, pointRadius: 0, pointHoverRadius: 4, borderWidth: 2, fill: false },
+      { label: "Weighted avg buy",  data: [], borderColor: "#22c55e", backgroundColor: "rgba(34,197,94,.08)",
+        tension: .25, pointRadius: 0, pointHoverRadius: 4, borderWidth: 1.5, borderDash: [4, 3], fill: false },
+      { label: "Weighted avg sell", data: [], borderColor: "#ef4444", backgroundColor: "rgba(239,68,68,.08)",
+        tension: .25, pointRadius: 0, pointHoverRadius: 4, borderWidth: 1.5, borderDash: [4, 3], fill: false },
+    ]},
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      interaction: { mode: "index", intersect: false },
+      plugins: { legend: { display: false } },
+      scales: {
+        x: { ticks: { maxRotation: 0, autoSkip: true, maxTicksLimit: 10, font: { size: 10 } } },
+        y: { ticks: { font: { size: 10 } } },
+      },
+    },
+  });
+
+  const ctx3 = document.getElementById("uptimeChart").getContext("2d");
+  uptimeChart = new Chart(ctx3, {
+    type: "line",
+    data: { labels: [], datasets: [
+      { label: "Ask uptime %", data: [], borderColor: "#22c55e", backgroundColor: "rgba(34,197,94,.12)",
+        tension: .2, pointRadius: 0, pointHoverRadius: 4, borderWidth: 2, fill: true, spanGaps: true },
+      { label: "Bid uptime %", data: [], borderColor: "#ef4444", backgroundColor: "rgba(239,68,68,.10)",
+        tension: .2, pointRadius: 0, pointHoverRadius: 4, borderWidth: 2, fill: true, spanGaps: true },
+    ]},
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      interaction: { mode: "index", intersect: false },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            title: (items) => {
+              const i = items[0] && items[0].dataIndex;
+              const live = uptimeChart._liveFlags && uptimeChart._liveFlags[i];
+              return (items[0] ? items[0].label : "") + (live ? "  · in-progress hour" : "");
+            },
+            label: (item) => {
+              const v = item.parsed.y;
+              return `${item.dataset.label}: ${v != null ? v.toFixed(1) + "%" : "—"}`;
+            },
+          },
+        },
+      },
+      scales: {
+        x: { ticks: { maxRotation: 0, autoSkip: true, maxTicksLimit: 10, font: { size: 10 } } },
+        y: { min: 0, max: 100, ticks: { callback: v => v + "%", font: { size: 10 }, stepSize: 25 } },
+      },
+    },
+  });
+}
+
+// Uptime x-axis labels lean to date granularity — points are hourly, so a
+// bare HH:MM collapses multiple days together over long windows.
+function _labelForUptimePoint(p) {
+  const d = new Date(p.ts);
+  const hh = String(d.getHours()).padStart(2, "0");
+  const isLongWindow = ["7d", "30d"].includes(slippageRange) || slippageDateStart || slippageDateEnd;
+  if (isLongWindow) {
+    const mo = String(d.getMonth() + 1).padStart(2, "0");
+    const dd = String(d.getDate()).padStart(2, "0");
+    return `${mo}-${dd} ${hh}:00`;
+  }
+  return `${hh}:00`;
+}
+
+function renderUptimeChart(points) {
+  initSlippageCharts();
+  const labels = points.map(_labelForUptimePoint);
+  // Per-point radius: highlight the single live in-progress-hour point.
+  const liveFlags = points.map(p => !!p.live);
+  const radii = liveFlags.map(f => f ? 5 : 0);
+  const styles = liveFlags.map(f => f ? "rectRot" : "circle");
+
+  uptimeChart._liveFlags = liveFlags;
+  uptimeChart.data.labels = labels;
+  uptimeChart.data.datasets[0].data = points.map(p => p.ask != null ? p.ask * 100 : null);
+  uptimeChart.data.datasets[1].data = points.map(p => p.bid != null ? p.bid * 100 : null);
+  uptimeChart.data.datasets[0].pointRadius = radii;
+  uptimeChart.data.datasets[1].pointRadius = radii;
+  uptimeChart.data.datasets[0].pointStyle = styles;
+  uptimeChart.data.datasets[1].pointStyle = styles;
+  uptimeChart.update();
+}
+
+function _labelForPoint(p) {
+  const d = new Date(p.ts);
+  // Compact label — HH:MM for intraday, add MM-DD when window > 24h
+  const isLongWindow = ["7d", "30d"].includes(slippageRange) || slippageDateStart || slippageDateEnd;
+  const hh = String(d.getHours()).padStart(2, "0");
+  const mm = String(d.getMinutes()).padStart(2, "0");
+  if (isLongWindow) {
+    const mo = String(d.getMonth() + 1).padStart(2, "0");
+    const dd = String(d.getDate()).padStart(2, "0");
+    return `${mo}-${dd} ${hh}:${mm}`;
+  }
+  return `${hh}:${mm}`;
+}
+
+function renderSlippageCharts(points) {
+  initSlippageCharts();
+
+  const labels    = points.map(_labelForPoint);
+  const buySeries = points.map(p => p.buy_slip_pct);
+  const sellSeries= points.map(p => p.sell_slip_pct);
+  // G1 overlay: only place a marker at points where g1 fired, otherwise NaN
+  // so the point is skipped by Chart.js.
+  const g1Series  = points.map(p => p.g1 ? p.buy_slip_pct : NaN);
+
+  slippageChart.data.labels = labels;
+  slippageChart.data.datasets[0].data = buySeries;
+  slippageChart.data.datasets[1].data = sellSeries;
+  slippageChart.data.datasets[2].data = g1Series;
+  slippageChart.update();
+
+  slippagePriceChart.data.labels = labels;
+  slippagePriceChart.data.datasets[0].data = points.map(p => p.mid);
+  slippagePriceChart.data.datasets[1].data = points.map(p => p.weighted_avg_buy);
+  slippagePriceChart.data.datasets[2].data = points.map(p => p.weighted_avg_sell);
+  slippagePriceChart.update();
+
+  // Chart title reflects the current window
+  const titleEl = document.getElementById("slippage-chart-title");
+  if (titleEl) {
+    const label = slippageDateStart || slippageDateEnd
+      ? `${slippageDateStart || "…"} → ${slippageDateEnd || "…"}`
+      : slippageRange;
+    const w = fmtUsdtQty(slippageWeightUsdt);
+    titleEl.textContent = `USDTNGN — ${w} depth-walk slippage · ${label} · ${points.length} point${points.length === 1 ? "" : "s"}`;
+  }
+}
+
 // ── Config panel ──────────────────────────────────────────────────────────────
 let configOpen = false;
 let _currentConfig = null;
 
+// ── Per-pair Telegram suspensions (config drawer) ────────────────────────────
+// _suspensions: { symbol: ISO expiry (NGT) } fetched from /api/suspensions.
+// _suspendMinutes: the global configured duration, used to label the button.
+// A lightweight ticker refreshes only the suspend cells (never the whole table,
+// which would wipe any in-progress edits to the symbol/target/alias inputs).
+let _suspensions = {};
+let _suspendMinutes = 30;
+let _suspendTicker = null;
+
+function suspendCellHtml(sym) {
+  const key = String(sym || "").toLowerCase();
+  if (!key) return "";
+  const until = _suspensions[key];
+  const remainingMs = until ? (new Date(until).getTime() - Date.now()) : 0;
+  if (until && remainingMs > 0) {
+    const mins = Math.max(1, Math.ceil(remainingMs / 60000));
+    return `<button class="suspend-btn active" onclick="resumePair('${key}')" title="Resume Telegram alerts for ${key.toUpperCase()} now">
+      <i class="ti ti-player-play"></i> ${mins}m</button>`;
+  }
+  return `<button class="suspend-btn" onclick="suspendPair('${key}')" title="Mute ${key.toUpperCase()} Telegram alerts for ${_suspendMinutes}m">
+    <i class="ti ti-bell-off"></i> Suspend</button>`;
+}
+
+function tickSuspendButtons() {
+  // Rewrite only the suspend cells — leaves the editable inputs in every row alone.
+  document.querySelectorAll("#pairs-cfg-tbody td.suspend-cell").forEach(td => {
+    td.innerHTML = suspendCellHtml(td.getAttribute("data-sym"));
+  });
+}
+
+function updateSuspendCell(sym) {
+  const key = String(sym || "").toLowerCase();
+  const td = document.querySelector(`#pairs-cfg-tbody td.suspend-cell[data-sym="${key}"]`);
+  if (td) td.innerHTML = suspendCellHtml(key);
+  else tickSuspendButtons();
+}
+
+async function fetchSuspensions() {
+  try {
+    const res = await fetch(`${API_BASE}/api/suspensions`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    _suspensions = data.suspensions || {};
+    if (typeof data.suspend_minutes === "number") _suspendMinutes = data.suspend_minutes;
+  } catch (err) {
+    _suspensions = {};
+  }
+  tickSuspendButtons();
+}
+
+async function suspendPair(sym) {
+  const key = String(sym || "").toLowerCase();
+  try {
+    const res = await fetch(`${API_BASE}/api/suspensions`, {
+      method:  "POST",
+      headers: { "Content-Type": "application/json" },
+      body:    JSON.stringify({ symbol: key, suspend: true }),
+    });
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || res.statusText);
+    const data = await res.json();
+    _suspensions = data.suspensions || {};
+    if (typeof data.minutes === "number") _suspendMinutes = data.minutes;
+    updateSuspendCell(key);
+    showToast(`${key.toUpperCase()} alerts suspended for ${_suspendMinutes}m`);
+  } catch (err) {
+    showToast("Suspend failed: " + err.message, true);
+  }
+}
+
+async function resumePair(sym) {
+  const key = String(sym || "").toLowerCase();
+  try {
+    const res = await fetch(`${API_BASE}/api/suspensions`, {
+      method:  "POST",
+      headers: { "Content-Type": "application/json" },
+      body:    JSON.stringify({ symbol: key, suspend: false }),
+    });
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || res.statusText);
+    const data = await res.json();
+    _suspensions = data.suspensions || {};
+    updateSuspendCell(key);
+    showToast(`${key.toUpperCase()} alerts resumed`);
+  } catch (err) {
+    showToast("Resume failed: " + err.message, true);
+  }
+}
+
 function toggleConfigPanel() {
   configOpen = !configOpen;
   document.getElementById("config-overlay").classList.toggle("open", configOpen);
-  if (configOpen) loadConfigIntoPanel();
+  if (configOpen) {
+    loadConfigIntoPanel();
+    // Refresh the muted-countdown labels once a minute while the drawer is open.
+    if (_suspendTicker) clearInterval(_suspendTicker);
+    _suspendTicker = setInterval(tickSuspendButtons, 30000);
+  } else if (_suspendTicker) {
+    clearInterval(_suspendTicker);
+    _suspendTicker = null;
+  }
 }
 
 function handleOverlayClick(e) {
@@ -1751,6 +2539,8 @@ async function loadConfigIntoPanel() {
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     _currentConfig = await res.json();
     populateConfigFields(_currentConfig);
+    // Pull live suspension state so each pair's button shows Suspend vs Resume·Nm.
+    await fetchSuspensions();
   } catch (err) {
     showToast("Could not load config: " + err.message, true);
   }
@@ -1759,33 +2549,25 @@ async function loadConfigIntoPanel() {
 function populateConfigFields(cfg) {
   const t = cfg.timing    || {};
   const o = cfg.orderbook || {};
-<<<<<<< HEAD
   const p = cfg.pricing   || {};
   const k = cfg.kline     || {};
   const lc = cfg.layer_churn || {};
   const vs = cfg.volume_spike || {};
-=======
-  const k = cfg.kline     || {};
->>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
+  const dw = cfg.depth_walk || {};
 
   const set = (id, val) => {
     const el = document.getElementById(id);
     if (el && val !== undefined && val !== null) el.value = val;
   };
 
-<<<<<<< HEAD
   set("cfg-cycle-sleep", t.cycle_sleep_seconds);
-=======
-  set("cfg-anomaly-alert-after", t.anomaly_alert_after_minutes);
-  set("cfg-alert-cooldown",       t.alert_cooldown_minutes);
-  set("cfg-cycle-sleep",          t.cycle_sleep_seconds);
->>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
+
+  set("cfg-alert-suspend-minutes", (cfg.alerts || {}).suspend_minutes);
 
   set("cfg-depth-limit",     o.depth_limit);
   set("cfg-min-ob-layers",   o.min_orderbook_layers);
   set("cfg-thin-depth",      o.thin_depth_threshold);
   set("cfg-imbalance-ratio", o.depth_imbalance_ratio);
-<<<<<<< HEAD
   set("cfg-dws-poor",        o.dws_poor_threshold);
   set("cfg-min-abs-spread",  o.min_abs_spread_diff_pct);
 
@@ -1811,31 +2593,26 @@ function populateConfigFields(cfg) {
   set("cfg-layer-churn-baseline-buckets", lc.baseline_buckets);
   set("cfg-layer-churn-ratio-threshold",  lc.ratio_threshold);
 
+  set("cfg-depth-walk-weight",                dw.weight_usdt);
+  set("cfg-depth-walk-mid-weight",            dw.mid_weight_usdt);
+  set("cfg-depth-walk-poll",                  dw.poll_interval_seconds);
+  set("cfg-depth-walk-raw-retention",         dw.raw_retention_seconds);
+  set("cfg-depth-walk-condensed-retention",   dw.condensed_retention_days);
+
+  const dwUp = dw.uptime || {};
+  set("cfg-uptime-reference", dwUp.reference_price);
+  set("cfg-uptime-weight",    dwUp.weight_usdt);
+
   renderPairsTable(cfg.pairs || [], (cfg.pricing || {}).source_divergence_overrides || {});
 }
 
 function renderPairsTable(pairs, overrides) {
   overrides = overrides || ((_currentConfig && _currentConfig.pricing && _currentConfig.pricing.source_divergence_overrides) || {});
-=======
-  set("cfg-stale-ob-cycles", o.stale_ob_cycles);
-  set("cfg-mid-price-alert", o.mid_price_alert_threshold);
-  set("cfg-dws-poor",        o.dws_poor_threshold);
-  set("cfg-min-abs-spread",  o.min_abs_spread_diff_pct);
-
-  set("cfg-kline-candle",   k.candle_minutes);
-  set("cfg-kline-lookback", k.lookback_minutes);
-
-  renderPairsTable(cfg.pairs || []);
-}
-
-function renderPairsTable(pairs) {
->>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
   const tbody = document.getElementById("pairs-cfg-tbody");
   document.getElementById("pairs-count-cfg").textContent = pairs.length + " pairs";
   tbody.innerHTML = pairs.map((p, i) => {
     const sym = Array.isArray(p) ? p[0] : p.symbol;
     const tgt = Array.isArray(p) ? p[1] : p.target;
-<<<<<<< HEAD
     const aliases = (Array.isArray(p) ? p[2] : p.aliases) || {};
     const tgtVal = tgt !== null && tgt !== undefined ? tgt : "";
     // B2 override is USDT-only (B2 doesn't run on NGN/GHS). Non-USDT rows show a
@@ -1853,12 +2630,7 @@ function renderPairsTable(pairs) {
       <td>${b2Cell}</td>
       <td><input type="text" value="${aliases.mexc || ""}" placeholder="same as symbol" data-row="${i}" data-col="mexc_alias" /></td>
       <td><input type="text" value="${aliases.kucoin || ""}" placeholder="same as symbol" data-row="${i}" data-col="kucoin_alias" /></td>
-=======
-    const tgtVal = tgt !== null && tgt !== undefined ? tgt : "";
-    return `<tr>
-      <td><input type="text" value="${sym}" data-row="${i}" data-col="sym" /></td>
-      <td><input type="number" value="${tgtVal}" placeholder="monitor only" min="0" step="0.01" data-row="${i}" data-col="tgt" /></td>
->>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
+      <td class="suspend-cell" data-sym="${symKey}" style="text-align:center">${suspendCellHtml(symKey)}</td>
       <td style="text-align:center"><button class="del-btn" onclick="deletePairRow(this)" aria-label="Remove pair"><i class="ti ti-trash"></i></button></td>
     </tr>`;
   }).join("");
@@ -1870,7 +2642,6 @@ function getPairsFromTable() {
   rows.forEach(row => {
     const symInput = row.querySelector("input[data-col='sym']");
     const tgtInput = row.querySelector("input[data-col='tgt']");
-<<<<<<< HEAD
     const mexcInput = row.querySelector("input[data-col='mexc_alias']");
     const kucoinInput = row.querySelector("input[data-col='kucoin_alias']");
     if (!symInput) return;
@@ -1886,18 +2657,10 @@ function getPairsFromTable() {
     const row_ = [sym, isNaN(tgt) ? null : tgt];
     if (Object.keys(aliases).length) row_.push(aliases);
     pairs.push(row_);
-=======
-    if (!symInput) return;
-    const sym = symInput.value.trim().toLowerCase();
-    const tgtRaw = tgtInput ? tgtInput.value.trim() : "";
-    const tgt = tgtRaw === "" ? null : parseFloat(tgtRaw);
-    if (sym) pairs.push([sym, isNaN(tgt) ? null : tgt]);
->>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
   });
   return pairs;
 }
 
-<<<<<<< HEAD
 function getDivergenceOverridesFromTable() {
   // Build the {symbol: pct} B2 override map from the table. USDT-quoted rows only;
   // a blank or non-numeric cell means "use the global default" (no entry emitted).
@@ -1918,8 +2681,6 @@ function getDivergenceOverridesFromTable() {
   return overrides;
 }
 
-=======
->>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
 function deletePairRow(btn) {
   // btn is the delete button element; walk up to its <tr> and remove it
   const tr = btn.closest("tr");
@@ -1931,17 +2692,13 @@ function deletePairRow(btn) {
 function addPairRow() {
   const symInput = document.getElementById("new-pair-sym");
   const tgtInput = document.getElementById("new-pair-target");
-<<<<<<< HEAD
   const b2Input = document.getElementById("new-pair-b2div");
   const mexcInput = document.getElementById("new-pair-mexc-alias");
   const kucoinInput = document.getElementById("new-pair-kucoin-alias");
-=======
->>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
   const sym = symInput.value.trim().toLowerCase();
   if (!sym) { showToast("Enter a symbol first", true); return; }
   const tgtRaw = tgtInput.value.trim();
   const tgt = tgtRaw === "" ? null : parseFloat(tgtRaw);
-<<<<<<< HEAD
   const mexcAlias = mexcInput.value.trim().toUpperCase();
   const kucoinAlias = kucoinInput.value.trim().toUpperCase();
   const aliases = {};
@@ -1967,33 +2724,22 @@ function addPairRow() {
   b2Input.value = "";
   mexcInput.value = "";
   kucoinInput.value = "";
-=======
-  if (!_currentConfig) _currentConfig = { pairs: [] };
-  _currentConfig.pairs.push([sym, isNaN(tgt) ? null : tgt]);
-  renderPairsTable(_currentConfig.pairs);
-  symInput.value = "";
-  tgtInput.value = "";
->>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
 }
 
 function buildConfigPayload() {
   const num = id => { const el = document.getElementById(id); return el ? parseFloat(el.value) : null; };
   return {
     timing: {
-<<<<<<< HEAD
       cycle_sleep_seconds: num("cfg-cycle-sleep"),
-=======
-      anomaly_alert_after_minutes: num("cfg-anomaly-alert-after"),
-      alert_cooldown_minutes:      num("cfg-alert-cooldown"),
-      cycle_sleep_seconds:         num("cfg-cycle-sleep"),
->>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
+    },
+    alerts: {
+      suspend_minutes: num("cfg-alert-suspend-minutes"),
     },
     orderbook: {
       depth_limit:               num("cfg-depth-limit"),
       min_orderbook_layers:      num("cfg-min-ob-layers"),
       thin_depth_threshold:      num("cfg-thin-depth"),
       depth_imbalance_ratio:     num("cfg-imbalance-ratio"),
-<<<<<<< HEAD
       dws_poor_threshold:        num("cfg-dws-poor"),
       min_abs_spread_diff_pct:   num("cfg-min-abs-spread"),
     },
@@ -2023,16 +2769,17 @@ function buildConfigPayload() {
       top_pct:          num("cfg-layer-churn-top-pct"),
       baseline_buckets: num("cfg-layer-churn-baseline-buckets"),
       ratio_threshold:  num("cfg-layer-churn-ratio-threshold"),
-=======
-      stale_ob_cycles:           num("cfg-stale-ob-cycles"),
-      mid_price_alert_threshold: num("cfg-mid-price-alert"),
-      dws_poor_threshold:        num("cfg-dws-poor"),
-      min_abs_spread_diff_pct:   num("cfg-min-abs-spread"),
     },
-    kline: {
-      candle_minutes:   num("cfg-kline-candle"),
-      lookback_minutes: num("cfg-kline-lookback"),
->>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
+    depth_walk: {
+      weight_usdt:              num("cfg-depth-walk-weight"),
+      mid_weight_usdt:          num("cfg-depth-walk-mid-weight"),
+      poll_interval_seconds:    num("cfg-depth-walk-poll"),
+      raw_retention_seconds:    num("cfg-depth-walk-raw-retention"),
+      condensed_retention_days: num("cfg-depth-walk-condensed-retention"),
+      uptime: {
+        reference_price: num("cfg-uptime-reference"),
+        weight_usdt:     num("cfg-uptime-weight"),
+      },
     },
     pairs: getPairsFromTable(),
   };
@@ -2089,7 +2836,6 @@ function showToast(msg, isError = false) {
   setTimeout(() => el.classList.remove("show"), 3500);
 }
 
-<<<<<<< HEAD
 // ── Daily Log ─────────────────────────────────────────────────────────────────
 let _dlAllRows   = [];   // full dataset from /api/history
 let _dlFiltered  = [];   // after market + status filter applied
@@ -2266,12 +3012,6 @@ fetchAndRender();
 fetchDailyLog();
 setInterval(fetchAndRender, 60_000);
 setInterval(fetchDailyLog, 60_000);
-=======
-// ── Boot ──────────────────────────────────────────────────────────────────────
-initChart();
-fetchAndRender();
-setInterval(fetchAndRender, 60_000);
->>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
 </script>
 </body>
 </html>

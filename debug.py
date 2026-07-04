@@ -1,5 +1,4 @@
 """
-<<<<<<< HEAD
 Quidax Market Monitor — API-based, OHM alert taxonomy v3
 ──────────────────────────────────────────────────────────────────────────────
 Endpoints used:
@@ -39,6 +38,15 @@ Alert scope (see OHM spec doc for full definitions):
   E1 Quidax API Failure       — implemented (unchanged: per-pair + outage-ratio detection)
   E2 Reference Feed Disconnect — implemented (MEXC/KuCoin batched call failure)
   F1 Cross-Pair Arbitrage Gap — implemented (triangulates via pairs already being fetched)
+  G1 Depth-Walk Partial Fill  — implemented, USDTNGN only. Own 5s polling task, separate
+                                 from the main cycle (see depth_walk_loop). Fires when a
+                                 simulated 100k-USDT buy or sell can't be filled from the
+                                 visible book — MEDIUM, Tier 3 (dashboard-only, no Telegram).
+                                 Mid price for the slippage math is itself a small depth
+                                 walk (default 1k USDT each side, averaged), not raw
+                                 best_ask/best_bid — so a lone dust order at the touch
+                                 doesn't distort the reference. Falls back to top-of-book
+                                 mid if either side can't supply even the mid walk weight.
 
   C1/C2/C3 (LM bot health) and E3 (bot feed heartbeat) are explicitly OUT OF SCOPE —
   none of these are derivable from public Depth/K-line/reference-ticker data; they
@@ -95,27 +103,11 @@ NOTE on alert tiering & cooldowns:
 Run modes:
   python debug.py          # continuous loop (1-min cycle)
   python debug.py --once   # single pass then exit
-=======
-Quidax Market Monitor — API-based (replaces Selenium scraper)
-─────────────────────────────────────────────────────────────
-Endpoints used:
-  Depth  : GET /exchange-open-api/api/v1/markets/{symbol}/depth?limit=200
-  K-Line : GET /exchange-open-api/api/v1/markets/{symbol}/k?period=1&limit=60
-           (1-minute candles, last 60 minutes — a rolling hourly window,
-            NOT 60-minute candles. See KLINE_CANDLE_MINUTES below.)
-
-Run modes:
-  python quidax_monitor.py          # continuous loop (1-min cycle)
-  python quidax_monitor.py --once   # single pass then exit
->>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
 """
 
 import asyncio
 import json
-<<<<<<< HEAD
 import math
-=======
->>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
 import os
 from datetime import datetime, timedelta, timezone
 from typing import Optional
@@ -123,11 +115,8 @@ from typing import Optional
 import aiohttp
 import pandas as pd
 
-<<<<<<< HEAD
-from defaults import merge_config  # single source of truth for config
+from defaults import merge_config, default_config, UPTIME_FIXED_STEP_NGN  # single source of truth for config
 
-=======
->>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
 try:
     from dotenv import load_dotenv
     load_dotenv()  # loads a local .env file if python-dotenv is installed
@@ -141,18 +130,12 @@ except ImportError:
 API_HEADERS = {"accept": "application/json"}
 
 # Secrets come from the environment ONLY — never hardcode them here.
-<<<<<<< HEAD
-=======
-# Set QUIDAX_TG_BOT_TOKEN and QUIDAX_TG_CHAT_IDS (comma-separated) in a
-# .env file (gitignored) or in your systemd unit's Environment= lines.
->>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
 TELEGRAM_BOT_TOKEN = os.environ.get("QUIDAX_TG_BOT_TOKEN", "")
 TELEGRAM_CHAT_IDS  = [c.strip() for c in os.environ.get("QUIDAX_TG_CHAT_IDS", "").split(",") if c.strip()]
 
 if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_IDS:
     print("⚠️  QUIDAX_TG_BOT_TOKEN / QUIDAX_TG_CHAT_IDS not set — Telegram alerts are disabled.")
 
-<<<<<<< HEAD
 BASE_API_URL        = "https://openapi.quidax.io/exchange-open-api/api/v1"
 MEXC_TICKER_URL      = "https://api.mexc.com/api/v3/ticker/price"
 KUCOIN_TICKER_URL    = "https://api.kucoin.com/api/v1/market/allTickers"
@@ -160,22 +143,27 @@ KUCOIN_TICKER_URL    = "https://api.kucoin.com/api/v1/market/allTickers"
 # ── Persistence ───────────────────────────────────────────────────────────────
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR    = "/app/data"
-=======
-BASE_API_URL = "https://openapi.quidax.io/exchange-open-api/api/v1"
-
-# ── Persistence ───────────────────────────────────────────────────────────────
-# Resolve DATA_DIR relative to this script's location so that debug.py and
-# api.py always read/write the same files regardless of the working directory
-# each process was launched from.
-_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-DATA_DIR    = os.path.join(_SCRIPT_DIR, "data")
-# DATA_DIR = "/app/data"
->>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
 STATE_FILE  = os.path.join(DATA_DIR, "health_state.json")
 CONFIG_FILE = os.path.join(DATA_DIR, "monitor_config.json")
 
+# Per-pair alert suspensions — {symbol: ISO expiry (NGT)}. Written by api.py when
+# an operator taps "Suspend" in the config drawer; read here at the fire gate.
+# Deliberately a SEPARATE file from health_state.json: the API writes it out-of-band
+# (mid-cycle), while this process rewrites health_state.json wholesale at the end of
+# every cycle — sharing one file would let save_state() clobber a suspend the API set
+# while a cycle was in flight. This mirrors the monitor_config.json direction
+# (api writes / debug reads), so there's no cross-process write race.
+SUSPENSIONS_FILE = os.path.join(DATA_DIR, "suspensions.json")
+
+# G1 — USDTNGN depth-walk slippage tracker persistence. Separate files from
+# STATE_FILE deliberately: this data updates every 5s (vs. the main 60s cycle)
+# and has its own bucket/condense lifecycle — mixing it into health_state.json
+# would mean rewriting the whole health state 12x more often than necessary.
+DEPTH_WALK_SYMBOL        = "usdtngn"
+DEPTH_WALK_RAW_FILE       = os.path.join(DATA_DIR, "usdtngn_slippage_raw.json")
+DEPTH_WALK_CONDENSED_FILE = os.path.join(DATA_DIR, "usdtngn_slippage_hourly.json")
+
 # ── Default configuration ─────────────────────────────────────────────────────
-<<<<<<< HEAD
 # Canonical defaults now live in defaults.py, shared verbatim with api.py so the
 # two processes can never drift (this module imports merge_config from it). The
 # dashboard writes changes to monitor_config.json; apply_config() re-reads it at
@@ -184,106 +172,14 @@ CONFIG_FILE = os.path.join(DATA_DIR, "monitor_config.json")
 
 def _load_config_from_disk() -> dict:
     """Read monitor_config.json and deep-merge it over the shared defaults."""
-=======
-# All tunable parameters live here. The dashboard writes changes to
-# monitor_config.json; apply_config() re-reads it at the top of every cycle
-# so adjustments take effect without restarting the process.
-_DEFAULT_CONFIG: dict = {
-    "timing": {
-        "anomaly_alert_after_minutes": 10,
-        "alert_cooldown_minutes":      30,
-        "cycle_sleep_seconds":         60,
-    },
-    "orderbook": {
-        "depth_limit":               200,
-        "min_orderbook_layers":      10,
-        "thin_depth_threshold":      5_000,
-        "depth_imbalance_ratio":     5.0,
-        "stale_ob_cycles":           3,
-        "mid_price_alert_threshold": 25,
-        "dws_poor_threshold":        0.5,
-        "min_abs_spread_diff_pct":   0.05,
-    },
-    "kline": {
-        "candle_minutes":   1,
-        "lookback_minutes": 60,
-    },
-    "pairs": [
-        ["aaveusdt",     0.3  ],
-        ["adausdt",      2.0  ],
-        ["algousdt",     2.0  ],
-        ["bchusdt",      1.20 ],
-        ["bnbusdt",      0.3  ],
-        ["bonkusdt",     2.0  ],
-        ["btcusdt",      0.2  ],
-        ["cakeusdt",     0.3  ],
-        ["cfxusdt",      2.0  ],
-        ["dashusdt",     2.0  ],
-        ["dotusdt",      0.26 ],
-        ["dogeusdt",     0.26 ],
-        ["ethusdt",      0.25 ],
-        ["fartcoinusdt", 2.0  ],
-        ["flokiusdt",    0.5  ],
-        ["hypeusdt",     2.0  ],
-        ["linkusdt",     0.26 ],
-        ["lskusdt",      1.5  ],
-        ["ltcusdt",      0.3  ],
-        ["pepeusdt",     0.5  ],
-        ["polusdt",      0.5  ],
-        ["rndrusdt",     2.0  ],
-        ["shibusdt",     0.4  ],
-        ["slpusdt",      2.0  ],
-        ["solusdt",      0.25 ],
-        ["suiusdt",      2.0  ],
-        ["tonusdt",      0.3  ],
-        ["trxusdt",      0.3  ],
-        ["usdcusdt",     0.02 ],
-        ["wifusdt",      2.0  ],
-        ["xlmusdt",      0.3  ],
-        ["xrpusdt",      0.3  ],
-        ["xyousdt",      1.0  ],
-        ["usdtcngn",     None ],
-        ["btcngn",       0.7  ],
-        ["usdtngn",      0.95 ],
-        ["ethngn",       0.75 ],
-        ["trxngn",       0.75 ],
-        ["xrpngn",       0.5  ],
-        ["dashngn",      0.5  ],
-        ["ltcngn",       0.5  ],
-        ["solngn",       0.8  ],
-        ["usdcngn",      1.2  ],
-        ["cngnngn",      None ],
-        ["usdtghs",      1.3  ],
-    ],
-}
-
-
-def _load_config_from_disk() -> dict:
-    """Read monitor_config.json and deep-merge with defaults."""
->>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
     if os.path.exists(CONFIG_FILE):
         try:
             with open(CONFIG_FILE) as f:
                 stored = json.load(f)
-<<<<<<< HEAD
             return merge_config(stored)
         except Exception as exc:
             print(f"⚠️  Could not read {CONFIG_FILE}: {exc} — using defaults")
     return merge_config({})
-=======
-            merged = json.loads(json.dumps(_DEFAULT_CONFIG))
-            for section, values in stored.items():
-                if section == "pairs":
-                    merged["pairs"] = values
-                elif isinstance(values, dict) and section in merged:
-                    merged[section].update(values)
-                else:
-                    merged[section] = values
-            return merged
-        except Exception as exc:
-            print(f"⚠️  Could not read {CONFIG_FILE}: {exc} — using defaults")
-    return json.loads(json.dumps(_DEFAULT_CONFIG))
->>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
 
 
 def apply_config():
@@ -292,7 +188,6 @@ def apply_config():
     Called once at startup and again at the top of each run_cycle so that
     dashboard edits take effect on the next cycle without a restart.
     """
-<<<<<<< HEAD
     global PAIRS, PAIR_ALIASES, DEPTH_LIMIT, KLINE_CANDLE_MINUTES, KLINE_LOOKBACK_MINUTES, VOLUME_BASELINE_BUCKETS
     global CYCLE_SLEEP_SECONDS
     global MIN_ORDERBOOK_LAYERS, THIN_DEPTH_THRESHOLD, DEPTH_IMBALANCE_RATIO
@@ -304,6 +199,10 @@ def apply_config():
     global LAYER_CHURN_TOP_PCT, LAYER_CHURN_BASELINE_BUCKETS
     global LAYER_CHURN_RATIO_THRESHOLD
     global VOLUME_SPIKE_MODE, VOLUME_SPIKE_RATIO, VOLUME_SPIKE_MIN_BUCKETS, VOLUME_SPIKE_WARMUP_FALLBACK
+    global DEPTH_WALK_WEIGHT_USDT, DEPTH_WALK_POLL_INTERVAL_SECONDS
+    global DEPTH_WALK_RAW_RETENTION_SECONDS, DEPTH_WALK_CONDENSED_RETENTION_DAYS
+    global DEPTH_WALK_MID_WEIGHT_USDT
+    global UPTIME_REFERENCE_PRICE, UPTIME_WEIGHT_USDT, UPTIME_BAND_PCT
 
     cfg = _load_config_from_disk()
 
@@ -373,37 +272,30 @@ def apply_config():
     VOLUME_SPIKE_RATIO           = float(vs.get("spike_ratio", 3.0))
     VOLUME_SPIKE_MIN_BUCKETS     = int(vs.get("min_baseline_buckets", 4))
     VOLUME_SPIKE_WARMUP_FALLBACK = str(vs.get("warmup_fallback", "absolute"))
-=======
-    global PAIRS, DEPTH_LIMIT, KLINE_CANDLE_MINUTES, KLINE_LOOKBACK_MINUTES
-    global ANOMALY_ALERT_AFTER_MINUTES, ALERT_COOLDOWN_MINUTES, CYCLE_SLEEP_SECONDS
-    global MIN_ORDERBOOK_LAYERS, THIN_DEPTH_THRESHOLD, DEPTH_IMBALANCE_RATIO
-    global STALE_OB_CYCLES, MID_PRICE_ALERT_THRESHOLD, DWS_POOR_THRESHOLD
-    global MIN_ABS_SPREAD_DIFF_PCT, MAX_CONCURRENT_PAIRS, MONITOR_ONLY_SYMBOLS
 
-    cfg = _load_config_from_disk()
+    # G1 — depth-walk slippage tracker (USDTNGN only, independent 5s task)
+    dw = cfg.get("depth_walk", {})
+    DEPTH_WALK_WEIGHT_USDT             = float(dw.get("weight_usdt", 100_000))
+    DEPTH_WALK_MID_WEIGHT_USDT         = float(dw.get("mid_weight_usdt", 1_000))
+    DEPTH_WALK_POLL_INTERVAL_SECONDS   = float(dw.get("poll_interval_seconds", 5))
+    DEPTH_WALK_RAW_RETENTION_SECONDS   = float(dw.get("raw_retention_seconds", 3600))
+    DEPTH_WALK_CONDENSED_RETENTION_DAYS = float(dw.get("condensed_retention_days", 365))
 
-    # Pairs
-    PAIRS = [(str(sym).lower(), tgt) for sym, tgt in cfg["pairs"]]
-
-    # K-line
-    DEPTH_LIMIT            = int(cfg["orderbook"]["depth_limit"])
-    KLINE_CANDLE_MINUTES   = int(cfg["kline"]["candle_minutes"])
-    KLINE_LOOKBACK_MINUTES = int(cfg["kline"]["lookback_minutes"])
-
-    # Timing
-    ANOMALY_ALERT_AFTER_MINUTES = float(cfg["timing"]["anomaly_alert_after_minutes"])
-    ALERT_COOLDOWN_MINUTES      = float(cfg["timing"]["alert_cooldown_minutes"])
-    CYCLE_SLEEP_SECONDS         = float(cfg["timing"]["cycle_sleep_seconds"])
-
-    # Orderbook thresholds
-    MIN_ORDERBOOK_LAYERS        = int(cfg["orderbook"]["min_orderbook_layers"])
-    THIN_DEPTH_THRESHOLD        = float(cfg["orderbook"]["thin_depth_threshold"])
-    DEPTH_IMBALANCE_RATIO       = float(cfg["orderbook"]["depth_imbalance_ratio"])
-    STALE_OB_CYCLES             = int(cfg["orderbook"]["stale_ob_cycles"])
-    MID_PRICE_ALERT_THRESHOLD   = float(cfg["orderbook"]["mid_price_alert_threshold"])
-    DWS_POOR_THRESHOLD          = float(cfg["orderbook"]["dws_poor_threshold"])
-    MIN_ABS_SPREAD_DIFF_PCT     = float(cfg["orderbook"]["min_abs_spread_diff_pct"])
->>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
+    # Liquidity uptime (rides the same depth-walk sample). reference_price is
+    # now the ACTIVE target price `s`: the band half-width is a percentage
+    # p = n/s*100 (n = fixed 1₦ step) applied multiplicatively to live mid,
+    # NOT a flat naira width. weight_usdt is the in-band size threshold,
+    # independent of the slippage walk weight above.
+    up = dw.get("uptime", {}) or {}
+    _up_ref = float(up.get("reference_price", 1400))
+    if _up_ref <= 0:
+        # p = n/s is undefined for s <= 0. Reject by falling back to the config
+        # default `s` rather than disabling the metric or dividing by zero.
+        _up_ref = float(default_config()["depth_walk"]["uptime"]["reference_price"])
+    UPTIME_REFERENCE_PRICE = _up_ref
+    UPTIME_WEIGHT_USDT     = float(up.get("weight_usdt", 100_000))
+    # p = n/s*100 — constant given config, recomputed on each apply.
+    UPTIME_BAND_PCT        = UPTIME_FIXED_STEP_NGN / UPTIME_REFERENCE_PRICE * 100.0
 
     # Derived
     MAX_CONCURRENT_PAIRS = 10   # not user-facing yet; keep fixed
@@ -411,35 +303,20 @@ def apply_config():
 
 
 # Initialise with defaults (or saved config if it already exists)
-<<<<<<< HEAD
 PAIRS:                       list  = []
 PAIR_ALIASES:                dict  = {}
 DEPTH_LIMIT:                 int   = 200
 KLINE_CANDLE_MINUTES:        int   = 1
 KLINE_LOOKBACK_MINUTES:      int   = 60
 VOLUME_BASELINE_BUCKETS:     int   = 24
-=======
-PAIRS:                       list = []
-DEPTH_LIMIT:                 int   = 200
-KLINE_CANDLE_MINUTES:        int   = 1
-KLINE_LOOKBACK_MINUTES:      int   = 60
-ANOMALY_ALERT_AFTER_MINUTES: float = 10
-ALERT_COOLDOWN_MINUTES:      float = 30
->>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
 CYCLE_SLEEP_SECONDS:         float = 60
 MIN_ORDERBOOK_LAYERS:        int   = 10
 THIN_DEPTH_THRESHOLD:        float = 5_000
 DEPTH_IMBALANCE_RATIO:       float = 5.0
-<<<<<<< HEAD
-=======
-STALE_OB_CYCLES:             int   = 3
-MID_PRICE_ALERT_THRESHOLD:   float = 25
->>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
 DWS_POOR_THRESHOLD:          float = 0.5
 MIN_ABS_SPREAD_DIFF_PCT:     float = 0.05
 MAX_CONCURRENT_PAIRS:        int   = 10
 MONITOR_ONLY_SYMBOLS:        set   = set()
-<<<<<<< HEAD
 PRICE_DISCREPANCY_PCT:       float = 0.5
 SOURCE_DIVERGENCE_PCT:       float = 0.3
 SOURCE_DIVERGENCE_OVERRIDES: dict  = {}
@@ -456,8 +333,14 @@ VOLUME_SPIKE_MODE:            str   = "baseline_relative"
 VOLUME_SPIKE_RATIO:           float = 3.0
 VOLUME_SPIKE_MIN_BUCKETS:     int   = 4
 VOLUME_SPIKE_WARMUP_FALLBACK: str   = "absolute"
-=======
->>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
+DEPTH_WALK_WEIGHT_USDT:              float = 100_000
+DEPTH_WALK_MID_WEIGHT_USDT:          float = 1_000
+DEPTH_WALK_POLL_INTERVAL_SECONDS:    float = 5
+DEPTH_WALK_RAW_RETENTION_SECONDS:    float = 3600
+DEPTH_WALK_CONDENSED_RETENTION_DAYS: float = 365
+UPTIME_REFERENCE_PRICE:              float = 1400
+UPTIME_WEIGHT_USDT:                  float = 100_000
+UPTIME_BAND_PCT:                     float = UPTIME_FIXED_STEP_NGN / 1400 * 100.0
 apply_config()  # populate from disk immediately
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -469,7 +352,6 @@ NIGERIAN_TZ = timezone(timedelta(hours=1))
 CURRENCY_SYMBOLS = {"USDT": "$", "NGN": "₦", "GHS": "₵"}
 HIGH_VOL_TOKENS  = {"BTC", "ETH", "SOL", "USDC"}
 
-<<<<<<< HEAD
 REF_HISTORY_LEN = 8   # rolling readings kept per asset/exchange for B2 drift detection
 
 LAYER_CHURN_MIN_HISTORY_BUCKETS = 5   # A6 cold-start gate — min prior churn readings
@@ -477,8 +359,6 @@ LAYER_CHURN_MIN_HISTORY_BUCKETS = 5   # A6 cold-start gate — min prior churn r
                                        # all (not dashboard-configurable, same spirit as
                                        # D1's hardcoded bucket_count >= 2 gate)
 
-=======
->>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
 
 def ngt_now() -> datetime:
     return datetime.now(NIGERIAN_TZ)
@@ -493,7 +373,6 @@ def split_symbol(sym: str) -> tuple[str, str]:
     """
     Split a concatenated symbol like 'btcusdt' into (base, quote).
     Quote length varies (ngn/ghs = 3 chars, usdt = 4 chars) — a fixed
-<<<<<<< HEAD
     sym[:-3] slice silently mis-splits every usdt pair.
 
     Special case: usdtcngn's quote is "cngn", not "ngn" — but "cngn" can't be
@@ -508,18 +387,6 @@ def split_symbol(sym: str) -> tuple[str, str]:
     for quote in sorted(KNOWN_QUOTE_CURRENCIES, key=len, reverse=True):
         if lower.endswith(quote):
             return lower[:-len(quote)], quote
-=======
-    sym[:-3] slice silently mis-splits every usdt pair (e.g. 'btcusdt'
-    -> 'btcu' instead of 'btc'), which made base-token checks like
-    HIGH_VOL_TOKENS membership fail for BTC/ETH/SOL/USDC against USDT.
-    """
-    lower = sym.lower()
-    for quote in sorted(KNOWN_QUOTE_CURRENCIES, key=len, reverse=True):
-        if lower.endswith(quote):
-            return lower[:-len(quote)], quote
-    # Unknown quote currency — fall back to the old 3-char assumption
-    # rather than crashing, but this symbol should be added above.
->>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
     return lower[:-3], lower[-3:]
 
 
@@ -543,16 +410,11 @@ def get_currency_symbol(sym: str) -> str:
     return CURRENCY_SYMBOLS.get(quote.upper(), "$")
 
 
-<<<<<<< HEAD
 def format_depth(val) -> str:
     if val in (None, "", "N/A"):
         return "$0"
     val = float(val)
     if not val:               return "$0"
-=======
-def format_depth(val: float) -> str:
-    if not val:              return "$0"
->>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
     if val >= 1_000_000:    return f"${val/1_000_000:.2f}M"
     if val >= 1_000:        return f"${val/1_000:.1f}K"
     return f"${val:.0f}"
@@ -566,21 +428,13 @@ FETCH_MAX_RETRIES   = 2     # additional attempts after the first failure
 FETCH_RETRY_BACKOFF = 1.5   # seconds, doubles each retry
 
 
-<<<<<<< HEAD
 async def _request_json(session: aiohttp.ClientSession, url: str, timeout: int = 10) -> dict | list:
-=======
-async def _request_json(session: aiohttp.ClientSession, url: str) -> dict:
->>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
     """GET a URL and return parsed JSON, retrying transient failures."""
     last_exc = None
     for attempt in range(FETCH_MAX_RETRIES + 1):
         try:
             async with session.get(url, headers={"accept": "application/json"},
-<<<<<<< HEAD
                                    timeout=aiohttp.ClientTimeout(total=timeout)) as resp:
-=======
-                                   timeout=aiohttp.ClientTimeout(total=10)) as resp:
->>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
                 resp.raise_for_status()
                 return await resp.json()
         except (aiohttp.ClientError, asyncio.TimeoutError) as e:
@@ -594,32 +448,18 @@ async def fetch_depth(session: aiohttp.ClientSession, symbol: str) -> dict:
     """Returns raw depth payload: {asks: [[price,qty],...], bids: [[price,qty],...]}"""
     url = f"{BASE_API_URL}/markets/{symbol}/depth?limit={DEPTH_LIMIT}"
     payload = await _request_json(session, url)
-<<<<<<< HEAD
-=======
-    # Response envelope: {"status": "success", "data": {"asks": [...], "bids": [...], ...}}
->>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
     return payload["data"]
 
 
 async def fetch_kline(session: aiohttp.ClientSession, symbol: str) -> list:
     """
     Returns 1-minute candles for the last 60 minutes (a rolling window,
-<<<<<<< HEAD
     not calendar-day-scoped). Each candle: [timestamp_ms, open, high, low, close, volume] (strings).
-=======
-    not calendar-day-scoped — see get_recent_spikes).
-    Anchors via ?timestamp=<lookback_ms> so we never miss the current
-    incomplete hour — one call, exactly KLINE_LOOKBACK_MINUTES candles,
-    no looping needed.
-
-    Each candle: [timestamp_ms, open, high, low, close, volume]  ← strings
->>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
     """
     lookback_ms = int((ngt_now().timestamp() - KLINE_LOOKBACK_MINUTES * 60) * 1000)
     url = (f"{BASE_API_URL}/markets/{symbol}/k"
            f"?period={KLINE_CANDLE_MINUTES}&limit={KLINE_LOOKBACK_MINUTES}&timestamp={lookback_ms}")
     payload = await _request_json(session, url)
-<<<<<<< HEAD
     return payload["data"]
 
 
@@ -689,35 +529,25 @@ async def fetch_reference_data(session: aiohttp.ClientSession) -> tuple[dict, di
     return mexc_map, kucoin_map, e2_issues
 
 
-=======
-    # Response envelope: {"status": "success", "data": [[ts_ms, o, h, l, c, vol], ...]}
-    return payload["data"]
-
-
->>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
 # ══════════════════════════════════════════════════════════════════════════════
 # ORDERBOOK ANALYTICS
 # ══════════════════════════════════════════════════════════════════════════════
 
 def build_orderbook_dfs(raw: dict) -> tuple[pd.DataFrame, pd.DataFrame]:
-<<<<<<< HEAD
     """Convert raw depth payload to ask/bid DataFrames with columns [price, amount]."""
-=======
-    """
-    Convert raw depth payload to ask/bid DataFrames with columns
-    [price, amount].  Asks sorted ascending, bids descending.
-    """
->>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
     def to_df(rows):
+        empty = pd.DataFrame(columns=["price", "amount"])
         if not rows:
-            return pd.DataFrame(columns=["price", "amount"])
-        df = pd.DataFrame(rows, columns=["price", "amount"])
-<<<<<<< HEAD
-        return df.astype(float)
-=======
-        df = df.astype(float)
-        return df
->>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
+            return empty
+        df = pd.DataFrame(rows, columns=["price", "amount"]).astype(float)
+        # Drop phantom/sentinel levels. A level is real liquidity only if it has
+        # a positive price AND positive size. Exchanges emit sentinel rows like
+        # [0, 0] to signal an empty side; taken literally these count as a bogus
+        # layer, which (a) hides a genuinely one-sided book from the A3 gate and
+        # (b) poisons mid_price via best_bid/best_ask == 0. Filtering here, at the
+        # single parser choke point, makes an all-sentinel side correctly .empty.
+        df = df[(df["price"] > 0) & (df["amount"] > 0)].reset_index(drop=True)
+        return df if not df.empty else empty
 
     asks = to_df(raw.get("asks", []))
     bids = to_df(raw.get("bids", []))
@@ -782,7 +612,6 @@ def calculate_depth_imbalance(asks_df: pd.DataFrame, bids_df: pd.DataFrame,
     return heavier / lighter, ("bids" if bid_d > ask_d else "asks")
 
 
-<<<<<<< HEAD
 # ══════════════════════════════════════════════════════════════════════════════
 # A-SERIES CHECKS (pure orderbook, no external reference needed)
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1180,75 +1009,21 @@ def compute_window_volume(candles: list, sym: str) -> Optional[dict]:
     currency = get_currency_symbol(sym)
     total_quote_volume, candle_count = 0.0, 0
     window_start = window_end = None
-=======
-def get_top_of_book_snapshot(asks_df: pd.DataFrame, bids_df: pd.DataFrame) -> Optional[dict]:
-    if asks_df.empty or bids_df.empty:
-        return None
-    return {
-        "ba_p": round(float(asks_df["price"].iloc[0]),  8),
-        "ba_a": round(float(asks_df["amount"].iloc[0]), 8),
-        "bb_p": round(float(bids_df["price"].iloc[0]),  8),
-        "bb_a": round(float(bids_df["amount"].iloc[0]), 8),
-    }
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# K-LINE SPIKE DETECTION
-# ══════════════════════════════════════════════════════════════════════════════
-
-def get_recent_spikes(candles: list, sym: str) -> list:
-    """
-    Aggregates the last KLINE_LOOKBACK_MINUTES of 1-minute candles into a
-    single rolling quote-volume figure. Flags if the aggregate exceeds
-    the threshold.
-
-    This is a pure rolling window — it intentionally does NOT filter by
-    calendar date. An earlier version filtered out candles that fell on
-    a different NGT calendar date than "now," which silently dropped up
-    to ~59 minutes of real data in the window spanning each midnight.
-
-    Volume per candle is in base currency; quote value = vol × close_price.
-    All candle values arrive as strings from the API.
-    """
-    threshold = get_threshold(sym)
-    if threshold is None or not candles:
-        return []
-
-    currency = get_currency_symbol(sym)
-
-    total_quote_volume = 0.0
-    candle_count        = 0
-    window_start         = None
-    window_end           = None
->>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
 
     for candle in candles:
         try:
             ts, o, h, l, c, volume = candle[:6]
             candle_dt = datetime.fromtimestamp(int(ts) / 1000, tz=NIGERIAN_TZ)
-<<<<<<< HEAD
             total_quote_volume += float(volume) * float(c)
             candle_count += 1
-=======
-
-            quote_value = float(volume) * float(c)
-            total_quote_volume += quote_value
-            candle_count       += 1
-
->>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
             if window_start is None or candle_dt < window_start:
                 window_start = candle_dt
             if window_end is None or candle_dt > window_end:
                 window_end = candle_dt
-<<<<<<< HEAD
-=======
-
->>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
         except (ValueError, TypeError, IndexError):
             continue
 
     if candle_count == 0:
-<<<<<<< HEAD
         return None
 
     window_label = (f"{window_start.strftime('%H:%M')}–{window_end.strftime('%H:%M')}"
@@ -1412,35 +1187,311 @@ def check_arb_gaps(triangles: list[dict], mids: dict[str, float], b1_fired: set[
                 "severity": severity,
             })
     return out
-=======
-        return []
 
-    if total_quote_volume >= threshold:
-        window_label = (
-            f"{window_start.strftime('%H:%M')}–{window_end.strftime('%H:%M')}"
-            if window_start and window_end else f"last {KLINE_LOOKBACK_MINUTES} min"
-        )
-        return [{
-            "window":       window_label,
-            "candle_count": candle_count,
-            "quote_volume": total_quote_volume,
-            "currency":     currency,
-        }]
 
+# ══════════════════════════════════════════════════════════════════════════════
+# G-SERIES — DEPTH-WALK SLIPPAGE TRACKER (USDTNGN only)
+# ══════════════════════════════════════════════════════════════════════════════
+# Answers: "what price would a 100k-USDT market buy/sell actually clear at,
+# vs. the displayed mid?" This is distinct from A4 (thin mid-market, a static
+# depth check) and A6 (layer churn, a staleness check) — it's a direct
+# execution-cost simulation. Runs on its own 5s task (DEPTH_WALK_POLL_INTERVAL_SECONDS),
+# independent of the main 60s cycle, because meaningful book movement on a
+# thin NGN pair can happen well inside a 60s window.
+#
+# G1 — Depth-Walk Partial Fill (MEDIUM, Tier 3 dashboard-only): fires when the
+# visible book can't supply the full DEPTH_WALK_WEIGHT_USDT on one side. The
+# datapoint is still recorded (using whatever depth was available) and flagged
+# rather than dropped, so a thin patch doesn't leave a gap in the chart.
+
+def walk_depth_weighted(df: pd.DataFrame, weight_usdt: float) -> tuple[Optional[float], bool]:
+    """
+    Cumulatively consumes `df` (already sorted best-price-first by
+    build_orderbook_dfs) until `weight_usdt` worth of base-asset quantity
+    (the "amount" column) has been walked. The boundary layer is clipped to
+    only the remainder needed — e.g. cumulative 97k + a 114k layer only
+    weighs 3k of that layer, not the full 114k.
+
+    Returns (weighted_avg_price, partial_fill). partial_fill is True when the
+    entire book was consumed and still didn't reach weight_usdt (G1 case);
+    weighted_avg_price in that case is computed over whatever was available.
+    Returns (None, True) for an empty book.
+    """
+    if df.empty or weight_usdt <= 0:
+        return None, True
+
+    remaining = weight_usdt
+    notional  = 0.0   # sum(price * consumed_amount)
+    consumed  = 0.0   # sum(consumed_amount)
+
+    for row in df.itertuples():
+        price, amount = float(row.price), float(row.amount)
+        if amount <= 0:
+            continue
+        take = min(amount, remaining)
+        notional += price * take
+        consumed += take
+        remaining -= take
+        if remaining <= 0:
+            break
+
+    if consumed <= 0:
+        return None, True
+    return notional / consumed, remaining > 0
+
+
+def depth_within_band(df: pd.DataFrame, target_price: float, side: str,
+                      weight_usdt: float) -> tuple[float, bool]:
+    """
+    Sum resting size (the "amount" column — USDT-denominated base quantity for
+    USDTNGN, same unit walk_depth_weighted consumes) priced within a FLAT band
+    on one side, and report whether it reaches weight_usdt.
+
+      side="ask": count asks priced <= target_price   (target = mid*(1+p/100))
+      side="bid": count bids priced >= target_price   (target = mid*(1-p/100))
+
+    df is best-price-first (asks ascending, bids descending), so we stop as
+    soon as a level falls outside the band. Returns (in_band_usdt, ok) where ok
+    is (in_band_usdt >= weight_usdt). A present-but-too-thin band yields
+    (small_number, False) — i.e. it still counts as a poll, just a failing one.
+    """
+    if df.empty or weight_usdt <= 0:
+        return 0.0, False
+    in_band = 0.0
+    for row in df.itertuples():
+        price, amount = float(row.price), float(row.amount)
+        if amount <= 0:
+            continue
+        if side == "ask":
+            if price > target_price:
+                break
+        else:  # bid
+            if price < target_price:
+                break
+        in_band += amount
+    return in_band, in_band >= weight_usdt
+
+
+def compute_depth_walk_metrics(asks_df: pd.DataFrame, bids_df: pd.DataFrame,
+                                weight_usdt: float,
+                                mid_weight_usdt: float = 1_000.0,
+                                uptime_band_pct: float = UPTIME_FIXED_STEP_NGN / 1400.0 * 100.0,
+                                uptime_weight_usdt: float = 100_000.0) -> Optional[dict]:
+    """
+    Returns the G1 metric set for one snapshot, or None if either side of the
+    book is empty (nothing meaningful to walk — mirrors the A1/A3 guard used
+    elsewhere for empty books).
+
+    Mid price definition: NOT best_ask/best_bid top-of-book — instead it's the
+    average of two `mid_weight_usdt` walks (default 1k USDT each side), so a
+    lone dust order at the touch can't distort the reference. Fallback to
+    top-of-book mid when either side can't supply even mid_weight_usdt; when
+    that happens `mid_from_fallback: True` is set on the sample so the chart
+    can flag it. The main slippage walk (weight_usdt, default 100k) still
+    runs independently and its own partial_fill flags still drive G1.
+    """
+    if asks_df.empty or bids_df.empty:
+        return None
+
+    # ── Mid price via small depth walk ──────────────────────────────────────
+    mid_ask, mid_ask_partial = walk_depth_weighted(asks_df, mid_weight_usdt)
+    mid_bid, mid_bid_partial = walk_depth_weighted(bids_df, mid_weight_usdt)
+    mid_from_fallback = mid_ask_partial or mid_bid_partial or mid_ask is None or mid_bid is None
+
+    if mid_from_fallback:
+        # Book too thin for a walk-based mid — fall back to top-of-book, which
+        # is the historical behaviour. compute_mid_and_spread already handles
+        # empty-df guards; we ruled those out above.
+        mid, _, _ = compute_mid_and_spread(asks_df, bids_df)
+    else:
+        mid = (mid_ask + mid_bid) / 2
+
+    if not mid:
+        return None
+
+    # ── Main slippage walk (independent of mid computation) ─────────────────
+    weighted_avg_buy,  partial_buy  = walk_depth_weighted(asks_df, weight_usdt)
+    weighted_avg_sell, partial_sell = walk_depth_weighted(bids_df, weight_usdt)
+
+    buy_slip_pct  = ((weighted_avg_buy  / mid) - 1) * 100 if weighted_avg_buy  is not None else None
+    sell_slip_pct = ((weighted_avg_sell / mid) - 1) * 100 if weighted_avg_sell is not None else None
+
+    # ── Liquidity uptime — ±uptime_band_pct band around the same mid ─────────
+    # p = n/s*100 (n = fixed 1₦ step, s = target price), applied MULTIPLICATIVELY
+    # to this poll's live mid so the band tracks mid instead of being flat naira.
+    # Ask uptime: is there >= uptime_weight_usdt of asks priced <= mid*(1+p/100)?
+    # Bid uptime: is there >= uptime_weight_usdt of bids priced >= mid*(1-p/100)?
+    # Scored independently per side. A thin book still produces a sample and
+    # simply fails (ok=False); the dynamic hourly denominator is the count of
+    # samples, so a failing poll counts against uptime while a no-book poll
+    # (this function returns None) never becomes a sample at all.
+    uptime_ask_target = mid * (1 + uptime_band_pct / 100.0)
+    uptime_bid_target = mid * (1 - uptime_band_pct / 100.0)
+    uptime_ask_depth, uptime_ask_ok = depth_within_band(
+        asks_df, uptime_ask_target, "ask", uptime_weight_usdt)
+    uptime_bid_depth, uptime_bid_ok = depth_within_band(
+        bids_df, uptime_bid_target, "bid", uptime_weight_usdt)
+
+    return {
+        "mid":               mid,
+        "mid_from_fallback": mid_from_fallback,
+        "weighted_avg_buy":  weighted_avg_buy,
+        "weighted_avg_sell": weighted_avg_sell,
+        "buy_slip_pct":      buy_slip_pct,
+        "sell_slip_pct":     sell_slip_pct,
+        "partial_fill_buy":  partial_buy,
+        "partial_fill_sell": partial_sell,
+        "g1":                partial_buy or partial_sell,
+        # Liquidity uptime (per-side, this sample)
+        "uptime_ask_target": uptime_ask_target,
+        "uptime_bid_target": uptime_bid_target,
+        "uptime_ask_depth":  uptime_ask_depth,
+        "uptime_bid_depth":  uptime_bid_depth,
+        "uptime_ask_ok":     uptime_ask_ok,
+        "uptime_bid_ok":     uptime_bid_ok,
+    }
+
+
+def load_depth_walk_raw() -> dict:
+    """{"bucket_start": iso_str | None, "samples": [ {...}, ... ]}"""
+    if os.path.exists(DEPTH_WALK_RAW_FILE):
+        try:
+            with open(DEPTH_WALK_RAW_FILE) as f:
+                return json.load(f)
+        except Exception as exc:
+            print(f"⚠️  Could not read {DEPTH_WALK_RAW_FILE}: {exc} — starting fresh bucket")
+    return {"bucket_start": None, "samples": []}
+
+
+def save_depth_walk_raw(raw: dict):
+    os.makedirs(DATA_DIR, exist_ok=True)
+    with open(DEPTH_WALK_RAW_FILE, "w") as f:
+        json.dump(raw, f, indent=2)
+
+
+def load_depth_walk_condensed() -> list:
+    if os.path.exists(DEPTH_WALK_CONDENSED_FILE):
+        try:
+            with open(DEPTH_WALK_CONDENSED_FILE) as f:
+                return json.load(f)
+        except Exception as exc:
+            print(f"⚠️  Could not read {DEPTH_WALK_CONDENSED_FILE}: {exc} — starting fresh")
     return []
->>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
+
+
+def save_depth_walk_condensed(condensed: list):
+    os.makedirs(DATA_DIR, exist_ok=True)
+    with open(DEPTH_WALK_CONDENSED_FILE, "w") as f:
+        json.dump(condensed, f, indent=2)
+
+
+def _mean(vals: list) -> Optional[float]:
+    vals = [v for v in vals if v is not None]
+    return sum(vals) / len(vals) if vals else None
+
+
+def condense_bucket(bucket_start: str, samples: list) -> Optional[dict]:
+    """Collapses one hour's worth of raw 5s samples into a single averaged point."""
+    if not samples:
+        return None
+    # Uptime = fraction of usable samples this hour that met the in-band
+    # threshold, per side. Denominator is dynamic: samples carrying the flag
+    # (every sample produced since the uptime feature shipped). Older samples
+    # from before the feature lack the key and are excluded so we don't dilute
+    # a fresh bucket with pre-feature blanks.
+    ask_flags = [1.0 if s.get("uptime_ask_ok") else 0.0
+                 for s in samples if s.get("uptime_ask_ok") is not None]
+    bid_flags = [1.0 if s.get("uptime_bid_ok") else 0.0
+                 for s in samples if s.get("uptime_bid_ok") is not None]
+    return {
+        "ts":                bucket_start,
+        "buy_slip_pct":      _mean([s.get("buy_slip_pct")  for s in samples]),
+        "sell_slip_pct":     _mean([s.get("sell_slip_pct") for s in samples]),
+        "mid":               _mean([s.get("mid")           for s in samples]),
+        "partial_fill_buy":  any(s.get("partial_fill_buy")  for s in samples),
+        "partial_fill_sell": any(s.get("partial_fill_sell") for s in samples),
+        "mid_from_fallback": any(s.get("mid_from_fallback") for s in samples),
+        "g1":                any(s.get("g1")                for s in samples),
+        "sample_count":      len(samples),
+        # Per-side liquidity uptime, 0..1 decimals (None if no flagged samples)
+        "uptime_ask":        (sum(ask_flags) / len(ask_flags)) if ask_flags else None,
+        "uptime_bid":        (sum(bid_flags) / len(bid_flags)) if bid_flags else None,
+        "uptime_ask_samples": len(ask_flags),
+        "uptime_bid_samples": len(bid_flags),
+    }
+
+
+def prune_condensed(condensed: list, retention_days: float) -> list:
+    if not condensed or retention_days <= 0:
+        return condensed
+    cutoff = ngt_now() - timedelta(days=retention_days)
+    out = []
+    for pt in condensed:
+        try:
+            ts = datetime.fromisoformat(pt["ts"])
+        except (KeyError, ValueError):
+            continue
+        if ts >= cutoff:
+            out.append(pt)
+    return out
+
+
+async def depth_walk_loop(session: aiohttp.ClientSession):
+    """
+    Standalone 5s task — independent of the main 60s A/B/D cycle. Fetches
+    USDTNGN depth, computes the G1 slippage metrics, appends to the
+    in-progress hourly raw bucket, and condenses+resets that bucket once it
+    has been open for DEPTH_WALK_RAW_RETENTION_SECONDS. Any single-cycle
+    failure (fetch error, empty book) is logged and skipped — it does not
+    kill the loop or the main monitor.
+    """
+    raw = load_depth_walk_raw()
+    if raw.get("bucket_start") is None:
+        raw["bucket_start"] = ngt_now().isoformat()
+
+    while True:
+        try:
+            payload = await fetch_depth(session, DEPTH_WALK_SYMBOL)
+            asks_df, bids_df = build_orderbook_dfs(payload)
+            # Uptime band is p = n/s*100 (n = fixed 1₦, s = configurable target
+            # price), applied multiplicatively to live mid inside the metric fn.
+            metrics = compute_depth_walk_metrics(
+                asks_df, bids_df, DEPTH_WALK_WEIGHT_USDT,
+                mid_weight_usdt=DEPTH_WALK_MID_WEIGHT_USDT,
+                uptime_band_pct=UPTIME_BAND_PCT,
+                uptime_weight_usdt=UPTIME_WEIGHT_USDT,
+            )
+            if metrics is not None:
+                metrics["ts"] = ngt_now().isoformat()
+                raw["samples"].append(metrics)
+                if metrics["g1"]:
+                    print(f"  [G1] {DEPTH_WALK_SYMBOL} depth-walk partial fill "
+                          f"(buy={metrics['partial_fill_buy']}, sell={metrics['partial_fill_sell']})")
+            else:
+                print(f"⚠️  Depth-walk: {DEPTH_WALK_SYMBOL} book empty on one side — skipping sample")
+        except Exception as e:
+            print(f"⚠️  Depth-walk fetch/compute error: {e}")
+
+        # Condense + reset once the current bucket has been open long enough
+        bucket_start_dt = datetime.fromisoformat(raw["bucket_start"])
+        age_seconds = (ngt_now() - bucket_start_dt).total_seconds()
+        if age_seconds >= DEPTH_WALK_RAW_RETENTION_SECONDS:
+            condensed_point = condense_bucket(raw["bucket_start"], raw["samples"])
+            if condensed_point is not None:
+                condensed = load_depth_walk_condensed()
+                condensed.append(condensed_point)
+                condensed = prune_condensed(condensed, DEPTH_WALK_CONDENSED_RETENTION_DAYS)
+                save_depth_walk_condensed(condensed)
+            raw = {"bucket_start": ngt_now().isoformat(), "samples": []}
+
+        save_depth_walk_raw(raw)
+        await asyncio.sleep(DEPTH_WALK_POLL_INTERVAL_SECONDS)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
 # PERSISTENCE
 # ══════════════════════════════════════════════════════════════════════════════
 
-<<<<<<< HEAD
-=======
-_state_lock = asyncio.Lock()
-
-
->>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
 def load_state() -> dict:
     if os.path.exists(STATE_FILE):
         with open(STATE_FILE) as f:
@@ -1456,7 +1507,6 @@ def save_state(state: dict):
 
 def update_daily_log(all_results: list):
     """
-<<<<<<< HEAD
     Long-format daily log: one ROW per WARNING market per cycle. Only markets whose
     status is "Warning" this cycle are appended — healthy ("Checked") pairs and
     failed-fetch pairs are skipped, so the file stays small and every row is something
@@ -1465,23 +1515,12 @@ def update_daily_log(all_results: list):
 
     A cycle with no warnings appends nothing (and writes no header until the first
     warning of the day creates the file).
-=======
-    Long-format daily log: one ROW per (market, check) rather than 3 new
-    COLUMNS per check. At a 60s cycle interval the old wide format could
-    grow past 1,000+ columns in a single day, with every cycle paying the
-    cost of reading and rewriting the whole (ever-growing) file. This
-    version only appends — cost per cycle stays flat regardless of how
-    many checks have already run today.
-
-    Columns: Timestamp, Market, Status, Issues, Depth
->>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
     """
     now   = ngt_now()
     today = now.strftime("%Y-%m-%d")
     path  = os.path.join(DATA_DIR, f"daily_log_{today}.csv")
     ts    = now.strftime("%H:%M:%S")
 
-<<<<<<< HEAD
     pair_order = {sym: i for i, (sym, _) in enumerate(PAIRS)}
     warning_results = [r for r in all_results
                        if str(r.get("status", "")).lower() == "warning"]
@@ -1496,36 +1535,11 @@ def update_daily_log(all_results: list):
         "Issues": r.get("issues", ""),
         "Depth": f"{r.get('depth_1.25x', '')} / {r.get('depth_1.5x', '')}",
     } for r in warning_results]
-=======
-    pair_syms   = [sym for sym, _ in PAIRS]
-    results_map = {r["symbol"]: r for r in all_results}
-
-    rows = []
-    for m in pair_syms:
-        if m in results_map:
-            r = results_map[m]
-            rows.append({
-                "Timestamp": ts,
-                "Market":    m,
-                "Status":    r["status"].upper(),
-                "Issues":    r.get("issues", ""),
-                "Depth":     f"{r['depth_1.25x']} / {r['depth_1.5x']}",
-            })
-        else:
-            rows.append({
-                "Timestamp": ts, "Market": m, "Status": "SKIPPED",
-                "Issues": "", "Depth": "",
-            })
->>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
 
     new_df      = pd.DataFrame(rows)
     file_exists = os.path.exists(path)
     new_df.to_csv(path, mode="a", header=not file_exists, index=False)
-<<<<<<< HEAD
     print(f"✅ Daily log appended: {path} (+{len(rows)} warning row(s))")
-=======
-    print(f"✅ Daily log appended: {path} (+{len(rows)} rows)")
->>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1533,31 +1547,16 @@ def update_daily_log(all_results: list):
 # ══════════════════════════════════════════════════════════════════════════════
 
 _telegram_lock = asyncio.Lock()
-<<<<<<< HEAD
-=======
-
->>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
 TELEGRAM_MAX_CHARS = 4000  # stay under Telegram's 4096 hard limit
 
 
 def _chunk_telegram_message(msg: str, max_chars: int = TELEGRAM_MAX_CHARS) -> list:
-<<<<<<< HEAD
     if len(msg) <= max_chars:
         return [msg]
     lines = msg.split("\n")
     chunks, current, current_len = [], [], 0
     for line in lines:
         extra = len(line) + (1 if current else 0)
-=======
-    """Split a message into chunks at line boundaries, each under max_chars."""
-    if len(msg) <= max_chars:
-        return [msg]
-    lines = msg.split("\n")
-    chunks, current = [], []
-    current_len = 0
-    for line in lines:
-        extra = len(line) + (1 if current else 0)  # +1 for the joining "\n"
->>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
         if current and current_len + extra > max_chars:
             chunks.append("\n".join(current))
             current, current_len = [line], len(line)
@@ -1569,7 +1568,6 @@ def _chunk_telegram_message(msg: str, max_chars: int = TELEGRAM_MAX_CHARS) -> li
     return chunks
 
 
-<<<<<<< HEAD
 async def send_telegram(msg: str, session: aiohttp.ClientSession) -> bool:
     """
     Send to every configured chat. Returns True if the message reached AT LEAST ONE
@@ -1598,17 +1596,11 @@ async def send_telegram(msg: str, session: aiohttp.ClientSession) -> bool:
         return True
     delivered_any = False
     failed_any    = False
-=======
-async def send_telegram(msg: str, session: aiohttp.ClientSession):
-    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_IDS:
-        return
->>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
     async with _telegram_lock:
         for chat_id in TELEGRAM_CHAT_IDS:
             chat_id = str(chat_id).strip()
             if not chat_id:
                 continue
-<<<<<<< HEAD
             chat_ok = True
             for chunk in _chunk_telegram_message(msg):
                 try:
@@ -1632,17 +1624,6 @@ async def send_telegram(msg: str, session: aiohttp.ClientSession):
         print("⚠️  Telegram: delivered to some chats but not all — committing cooldown "
               "anyway (≥1 recipient got it). Fix the failing chat_id flagged above.")
     return delivered_any
-=======
-            for chunk in _chunk_telegram_message(msg):
-                try:
-                    await session.post(
-                        f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
-                        json={"chat_id": chat_id, "text": chunk, "parse_mode": "HTML"},
-                        timeout=aiohttp.ClientTimeout(total=10),
-                    )
-                except Exception as e:
-                    print(f"⚠️  Telegram send failed: {e}")
->>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1652,7 +1633,6 @@ async def send_telegram(msg: str, session: aiohttp.ClientSession):
 async def process_pair(
     symbol: str,
     target: Optional[float],
-<<<<<<< HEAD
     session: aiohttp.ClientSession,
     semaphore: asyncio.Semaphore,
     trusted_price: Optional[float],
@@ -1674,29 +1654,14 @@ async def process_pair(
     that two checks emit in the same cycle — A2 (spread + shallow) and B3 (MEXC +
     KuCoin) — is folded to a single tuple with the highest severity and merged
     labels. Everything downstream therefore sees each id exactly once.
-=======
-    shared_state: dict,
-    session: aiohttp.ClientSession,
-    semaphore: asyncio.Semaphore,
-) -> Optional[dict]:
-    """
-    Fetches depth + kline for one pair, runs all health checks,
-    updates shared_state (time-based anomaly tracking), and returns a result dict.
-    Alert firing decisions are left to the caller (main loop).
->>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
     """
     async with semaphore:
         monitor_only = target is None
         try:
-<<<<<<< HEAD
-=======
-            # ── Fetch ──────────────────────────────────────────────────────
->>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
             depth_raw, kline_raw = await asyncio.gather(
                 fetch_depth(session, symbol),
                 fetch_kline(session, symbol),
             )
-<<<<<<< HEAD
             asks_df, bids_df = build_orderbook_dfs(depth_raw)
 
             # ── A3 — One-sided market ───────────────────────────────────────
@@ -1740,49 +1705,10 @@ async def process_pair(
 
             # ── A1 — Crossed orderbook ──────────────────────────────────────
             best_ask, best_bid = asks_df["price"].iloc[0], bids_df["price"].iloc[0]
-=======
-
-            asks_df, bids_df = build_orderbook_dfs(depth_raw)
-
-            if asks_df.empty or bids_df.empty:
-                print(f"[{symbol}] ✗ Empty orderbook side — skipping")
-                return None
-
-            ask_layers = len(asks_df)
-            bid_layers = len(bids_df)
-
-            # ── Derived metrics ────────────────────────────────────────────
-            mid_price, spread_abs, curr_spread = compute_mid_and_spread(asks_df, bids_df)
-            dws       = calculate_dws(asks_df, bids_df, mid_price)
-            depth_25  = calculate_liquidity_depth(asks_df, bids_df, mid_price, curr_spread * 1.25)
-            depth_50  = calculate_liquidity_depth(asks_df, bids_df, mid_price, curr_spread * 1.50)
-            imbalance_ratio, heavier_side = calculate_depth_imbalance(asks_df, bids_df, mid_price, curr_spread * 1.25)
-            ob_snapshot = get_top_of_book_snapshot(asks_df, bids_df)
-
-            # ── Spread anomaly (A2) ────────────────────────────────────────
-            if not monitor_only and target is not None:
-                diff = ((curr_spread - target) / target) * 100
-                abs_diff_pp = abs(curr_spread - target)  # percentage-point move
-                spread_anomaly = (diff > 100 or diff < -75) and abs_diff_pp >= MIN_ABS_SPREAD_DIFF_PCT
-            else:
-                diff           = None
-                spread_anomaly = False
-
-            dws_poor    = dws > DWS_POOR_THRESHOLD
-            a2_confirmed = spread_anomaly and dws_poor
-
-            # ── Issue detection ────────────────────────────────────────────
-            issues = []
-
-            # A1 — Crossed orderbook
-            best_ask = asks_df["price"].iloc[0]
-            best_bid = bids_df["price"].iloc[0]
->>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
             if best_bid >= best_ask:
                 issues.append(("A1", "CRITICAL",
                     f"Crossed orderbook — best bid {best_bid:,.6g} ≥ best ask {best_ask:,.6g}"))
 
-<<<<<<< HEAD
             # ── A2 — Spread widening (vs target, DWS-confirmed) + shallow book ──
             # Both sub-checks emit id "A2"; dedupe_actionable folds them into one
             # tuple (merged label) below so the Tier-2 counter only advances once.
@@ -1817,35 +1743,11 @@ async def process_pair(
                     f"Shallow orderbook — asks:{ask_layers} bids:{bid_layers} (min {MIN_ORDERBOOK_LAYERS})"))
 
             # ── A4 — Thin mid-market ────────────────────────────────────────
-=======
-            # A3 — One-sided market (shouldn't happen after empty check, but guard anyway)
-            if asks_df.empty:
-                issues.append(("A3", "CRITICAL", "One-sided market — no ask orders"))
-            elif bids_df.empty:
-                issues.append(("A3", "CRITICAL", "One-sided market — no bid orders"))
-
-            # A2 — Spread widening
-            if spread_anomaly:
-                dws_note = (f" | DWS: {dws:.4f} "
-                            f"({'poor — strike counted' if dws_poor else 'ok — skipped'})")
-                issues.append(("A2", "HIGH",
-                    f"Spread {curr_spread:.4f}% vs target {target}% "
-                    f"(diff {diff:+.1f}%){dws_note}"))
-
-            # Shallow orderbook
-            if ask_layers < MIN_ORDERBOOK_LAYERS or bid_layers < MIN_ORDERBOOK_LAYERS:
-                issues.append(("A2", "HIGH",
-                    f"Shallow orderbook — asks:{ask_layers} bids:{bid_layers} "
-                    f"(min {MIN_ORDERBOOK_LAYERS})"))
-
-            # A4 — Thin mid-market (informational)
->>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
             if 0 < depth_25 < THIN_DEPTH_THRESHOLD:
                 issues.append(("A4", "MEDIUM",
                     f"Thin mid-market — depth within spread: {format_depth(depth_25)} "
                     f"(min {format_depth(THIN_DEPTH_THRESHOLD)})"))
 
-<<<<<<< HEAD
             # ── A5 — Depth imbalance ────────────────────────────────────────
             issues += check_depth_imbalance(imbalance_ratio, heavier_side)
 
@@ -1923,101 +1825,6 @@ async def process_pair(
 
             print(f"[{symbol}] {'⚠️ ' if is_poor else '✅'} spread={curr_spread:.4f}% mid={mid_price:,.4f} "
                   f"dws={dws:.4f} layers={ask_layers}/{bid_layers} issues={len(issues)}")
-=======
-            # ── Actionable issues (drive time-based alert timer) ───────────
-            critical_issues = [i for i in issues if i[1] == "CRITICAL"]
-            shallow_issues  = [i for i in issues if i[0] == "A2" and "Shallow" in i[2]]
-            spread_a2       = [i for i in issues if i[0] == "A2" and "Spread" in i[2]]
-
-            actionable = critical_issues + shallow_issues
-            if a2_confirmed:
-                actionable += spread_a2
-
-            is_poor = bool(actionable)
-
-            # ── Time-based anomaly state  ──────────────────────────────────
-            now_iso = ngt_now().isoformat()
-            async with _state_lock:
-                p = shared_state.get(symbol, {
-                    "anomaly_since":    None,   # ISO when anomaly first seen
-                    "last_alert":       None,   # ISO of last Telegram alert
-                    "last_mid_price":   None,
-                    "last_ob_snapshot": None,
-                    "stale_ob_count":   0,
-                    "price_move_alert": None,   # ISO of last price-move alert
-                })
-
-                # ── Mid-price movement ─────────────────────────────────────
-                price_move_label = None
-                last_mid = p.get("last_mid_price")
-                if mid_price and last_mid:
-                    pct = ((mid_price - last_mid) / last_mid) * 100
-                    if abs(pct) >= MID_PRICE_ALERT_THRESHOLD:
-                        direction = "📈" if pct > 0 else "📉"
-                        price_move_label = (f"{direction} Price moved {pct:+.2f}% "
-                                            f"({last_mid:,.6g} → {mid_price:,.6g})")
-                p["last_mid_price"] = mid_price
-
-                # ── Stale orderbook ────────────────────────────────────────
-                last_snap = p.get("last_ob_snapshot")
-                if ob_snapshot and ob_snapshot == last_snap:
-                    p["stale_ob_count"] = p.get("stale_ob_count", 0) + 1
-                else:
-                    p["stale_ob_count"] = 0
-                p["last_ob_snapshot"] = ob_snapshot
-
-                stale_triggered = p["stale_ob_count"] >= STALE_OB_CYCLES
-                if stale_triggered:
-                    p["stale_ob_count"] = 0
-                    if ob_snapshot:
-                        stale_issue = (
-                            "STALE", "HIGH",
-                            f"Stale orderbook — top-of-book unchanged for "
-                            f"{STALE_OB_CYCLES} consecutive checks "
-                            f"(ask {ob_snapshot['ba_p']:,.6g}×{ob_snapshot['ba_a']}, "
-                            f"bid {ob_snapshot['bb_p']:,.6g}×{ob_snapshot['bb_a']})"
-                        )
-                        issues.append(stale_issue)
-                        actionable.append(stale_issue)
-                        is_poor = True
-
-                # ── Anomaly timer ──────────────────────────────────────────
-                if is_poor:
-                    if not p["anomaly_since"]:
-                        p["anomaly_since"] = now_iso
-                else:
-                    p["anomaly_since"] = None
-                    p["last_alert"]    = None   # reset cooldown when market recovers
-
-                # Determine whether to fire an alert this cycle
-                should_alert = False
-                if is_poor and p["anomaly_since"]:
-                    anomaly_since_dt = datetime.fromisoformat(p["anomaly_since"])
-                    age_minutes      = (ngt_now() - anomaly_since_dt).total_seconds() / 60
-
-                    last_alert_dt = (datetime.fromisoformat(p["last_alert"])
-                                     if p["last_alert"] else None)
-                    cooldown_ok   = (last_alert_dt is None or
-                                     (ngt_now() - last_alert_dt).total_seconds() / 60
-                                     >= ALERT_COOLDOWN_MINUTES)
-
-                    if age_minutes >= ANOMALY_ALERT_AFTER_MINUTES and cooldown_ok:
-                        should_alert    = True
-                        p["last_alert"] = now_iso
-
-                shared_state[symbol] = p
-
-            # ── Spike detection from K-line ────────────────────────────────
-            spikes = get_recent_spikes(kline_raw, symbol)
-            if spikes:
-                print(f"[{symbol}] 🚨 {len(spikes)} volume spike(s) detected")
-            else:
-                print(f"[{symbol}] ✅ No trade spikes")
-
-            print(f"[{symbol}] ✓ spread={curr_spread:.4f}% mid={mid_price:,.4f} "
-                  f"dws={dws:.4f} layers={ask_layers}/{bid_layers} "
-                  f"poor={is_poor} alert={should_alert}")
->>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
 
             return {
                 "timestamp":       ngt_now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -2025,12 +1832,8 @@ async def process_pair(
                 "monitor_only":    monitor_only,
                 "status":          "Warning" if is_poor else "Checked",
                 "issues":          "|".join(f"{i[0]}:{i[1]}" for i in issues) if issues else "",
-<<<<<<< HEAD
                 "should_alert":    is_poor,
                 "alert_tier":      tier,
-=======
-                "should_alert":    should_alert,
->>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
                 "current_spread":  round(curr_spread, 6),
                 "spread_abs":      round(spread_abs, 8),
                 "target_spread":   target if not monitor_only else "N/A",
@@ -2046,7 +1849,6 @@ async def process_pair(
                                     if imbalance_ratio and imbalance_ratio != float("inf")
                                     else ("inf" if imbalance_ratio == float("inf") else "")),
                 "heavier_side":    heavier_side or "",
-<<<<<<< HEAD
                 "trusted_ref":     round(trusted_price, 8) if trusted_price else "N/A",
                 "layer_churn_pct":          round(churn_score * 100, 1) if churn_score is not None else "N/A",
                 "layer_churn_baseline_pct": round(churn_baseline * 100, 1) if churn_baseline is not None else "N/A",
@@ -2058,10 +1860,6 @@ async def process_pair(
                 "d1_currency":      get_currency_symbol(symbol),
                 "d1_context":       d1_context,
                 "_actionable":     issues,
-=======
-                "_actionable":     actionable,
-                "_price_move":     price_move_label,
->>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
                 "_spikes":         spikes,
             }
 
@@ -2076,7 +1874,6 @@ async def process_pair(
 
 FAILED_PAIR_RATIO_FOR_OUTAGE_ALERT = 0.5   # ≥50% of pairs failing looks like an
                                             # outage, not isolated per-pair errors
-<<<<<<< HEAD
 
 # ── Alert tier classification ─────────────────────────────────────────────────
 # Maps issue_id → tier.  B4 has two tiers depending on severity (handled in
@@ -2145,6 +1942,39 @@ def worst_tier(issues: list) -> int:
     if not issues:
         return 0
     return min(classify_tier(iid, sev) for iid, sev, _ in issues)
+
+
+def load_suspensions() -> dict:
+    """
+    Read suspensions.json → {symbol: ISO expiry (NGT)}. Missing/corrupt file yields
+    an empty map (fail-open: a bad file must never mute or crash the alert path).
+    Called once per cycle in run_cycle; the API writes this file when a suspend is
+    set or cleared. Keys are lowercase symbols to match PAIRS.
+    """
+    if not os.path.exists(SUSPENSIONS_FILE):
+        return {}
+    try:
+        with open(SUSPENSIONS_FILE) as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except Exception as exc:
+        print(f"⚠️  Could not read {SUSPENSIONS_FILE}: {exc} — treating as no suspensions")
+        return {}
+
+
+def is_suspended(suspensions: dict, symbol: str) -> bool:
+    """
+    True if `symbol` has an active (non-expired) Telegram suspension right now.
+    An expiry in the past (or an unparseable one) counts as not suspended, so a
+    lapsed window self-heals even if the API never gets around to pruning it.
+    """
+    expiry_str = suspensions.get(symbol.lower())
+    if not expiry_str:
+        return False
+    try:
+        return ngt_now() < datetime.fromisoformat(expiry_str)
+    except (ValueError, TypeError):
+        return False
 
 
 def _alert_state(shared_state: dict, symbol: str) -> dict:
@@ -2225,16 +2055,11 @@ def should_fire_telegram(shared_state: dict, symbol: str,
     confirm_needed = TIER2_CONFIRM_CYCLES
     count = increment_consecutive(shared_state, symbol, issue_id)
     return count >= confirm_needed
-=======
-OUTAGE_ALERT_COOLDOWN_MINUTES      = 30
-
-_last_outage_alert: Optional[datetime] = None
->>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
 
 
 async def run_cycle(shared_state: dict, session: aiohttp.ClientSession, cycle_num: int):
     apply_config()   # pick up any dashboard edits without restarting
-<<<<<<< HEAD
+    suspensions = load_suspensions()   # per-pair Telegram mutes, set from the dashboard
     cycle_start = ngt_now()
     semaphore   = asyncio.Semaphore(MAX_CONCURRENT_PAIRS)
 
@@ -2368,47 +2193,10 @@ async def run_cycle(shared_state: dict, session: aiohttp.ClientSession, cycle_nu
         if not is_in_cooldown(shared_state, "_global", "E1"):
             sent = await send_telegram(
                 f"🔴 <b>E1 — Possible Quidax API outage</b>\n"
-=======
-    semaphore   = asyncio.Semaphore(MAX_CONCURRENT_PAIRS)
-    cycle_start = ngt_now()
-
-    tasks = [
-        process_pair(sym, tgt, shared_state, session, semaphore)
-        for sym, tgt in PAIRS
-    ]
-    raw_results = await asyncio.gather(*tasks)
-
-    results      = [r for r in raw_results if r is not None]
-    warnings     = [r for r in results if r["status"] == "Warning"]
-    alert_pairs  = [r for r in warnings if r["should_alert"]]
-    spike_pairs  = [r for r in results if r.get("_spikes")]
-    price_moves  = [(r["symbol"], r["_price_move"]) for r in results if r.get("_price_move")]
-
-    elapsed = (ngt_now() - cycle_start).total_seconds()
-    print(f"\n⏱  Cycle {cycle_num} complete in {elapsed:.1f}s — "
-          f"{len(results)}/{len(PAIRS)} pairs | "
-          f"{len(warnings)} warnings | {len(alert_pairs)} alerts firing")
-
-    # ── Outage detection: a wave of failures means "API problem," not
-    #    "44 unrelated coincidences" — worth its own alert with a cooldown
-    #    so it doesn't fire every single cycle during a prolonged outage.
-    global _last_outage_alert
-    failed_count   = len(PAIRS) - len(results)
-    failure_ratio  = failed_count / len(PAIRS) if PAIRS else 0
-    if failure_ratio >= FAILED_PAIR_RATIO_FOR_OUTAGE_ALERT:
-        cooldown_ok = (_last_outage_alert is None or
-                       (ngt_now() - _last_outage_alert).total_seconds() / 60
-                       >= OUTAGE_ALERT_COOLDOWN_MINUTES)
-        if cooldown_ok:
-            _last_outage_alert = ngt_now()
-            await send_telegram(
-                f"🔴 <b>Possible API outage</b>\n"
->>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
                 f"{failed_count}/{len(PAIRS)} pairs failed to fetch this cycle "
                 f"({ngt_now().strftime('%Y-%m-%d %H:%M:%S')} NGT).",
                 session,
             )
-<<<<<<< HEAD
             if sent:
                 start_cooldown(shared_state, "_global", "E1")
             else:
@@ -2453,6 +2241,27 @@ async def run_cycle(shared_state: dict, session: aiohttp.ClientSession, cycle_nu
     for r in results:
         if not r.get("_actionable") and not r.get("_spikes"):
             continue
+
+        # ── Suspended pairs: mute Telegram, keep dashboard visibility ──────────
+        # An operator-set suspension gags THIS pair's own alerts only (F1 on other
+        # legs is unaffected — check_arb_gaps already ran per-pair above). We skip
+        # the fire gate entirely and, per the agreed "clean slate on resume" rule,
+        # reset each Tier-2 consecutive counter so a still-present issue re-confirms
+        # from scratch when the window lifts instead of blasting the instant it does
+        # (mirrors how a cooldown holds counters). Cooldowns already in flight are
+        # left untouched — they're time-based and resume naturally.
+        if is_suspended(suspensions, r["symbol"]):
+            for issue_id, _, _ in r.get("_actionable", []):
+                reset_consecutive(shared_state, r["symbol"], issue_id)
+            r["telegram_fired"]  = False
+            r["suspended_until"] = suspensions.get(r["symbol"].lower())
+            detail = [f"{iid}:suspended" for iid, _, _ in r.get("_actionable", [])]
+            detail += ["D1:suspended" for _ in r.get("_spikes", [])]
+            r["telegram_detail"] = "|".join(detail)
+            print(f"  [{r['symbol']}] suspended — {len(detail)} issue(s) muted, "
+                  f"until {r['suspended_until']}")
+            continue
+
         tg_issues = []
         detail_parts = []   # per-issue state, rendered as the dashboard caption
         for issue_id, severity, label in r.get("_actionable", []):
@@ -2552,69 +2361,6 @@ async def run_cycle(shared_state: dict, session: aiohttp.ClientSession, cycle_nu
         pd.DataFrame(clean_results).to_csv(os.path.join(DATA_DIR, "latest.csv"), index=False)
     save_state(shared_state)
 
-=======
-
-    # ── Persist ────────────────────────────────────────────────────────────────
-    clean_results = []
-    for r in results:
-        cr = {k: v for k, v in r.items() if not k.startswith("_")}
-        clean_results.append(cr)
-
-    update_daily_log(clean_results)
-
-    if clean_results:
-        pd.DataFrame(clean_results).to_csv(
-            os.path.join(DATA_DIR, "latest.csv"), index=False
-        )
-
-    save_state(shared_state)
-
-    # ── Telegram: anomaly alerts ───────────────────────────────────────────────
-    if alert_pairs:
-        msg  = f"⚠️ <b>Market Anomaly Alert</b>\n"
-        msg += f"<i>{ngt_now().strftime('%Y-%m-%d %H:%M:%S')} (NGT)</i>\n"
-        msg += f"{'─' * 30}\n"
-        for r in alert_pairs:
-            msg += f"\n<b>{r['symbol'].upper()}</b>\n"
-            if not r["monitor_only"]:
-                msg += (f"  Spread: {r['current_spread']}% "
-                        f"(Target: {r['target_spread']}%, Diff: {r['percent_diff']:+}%)\n")
-            else:
-                msg += f"  Spread: {r['current_spread']}% (Monitor only)\n"
-            msg += f"  Mid: {r['mid_price']:,.4f}\n"
-            msg += f"  DWS: {r['dws']:.4f}{'  ⚠ poor' if r['dws_poor'] else ''}\n"
-            msg += f"  Layers — Ask: {r['ask_layers']} | Bid: {r['bid_layers']}\n"
-            msg += f"  Depth @ 1.25x: {r['depth_1.25x']} | 1.5x: {r['depth_1.5x']}\n"
-            actionable = r.get("_actionable", [])
-            if actionable:
-                msg += "  <b>Issues:</b>\n"
-                for alert_id, severity, label in actionable:
-                    icon = "🚨" if severity == "CRITICAL" else "⚠️"
-                    msg += f"    {icon} [{alert_id}] {label}\n"
-        await send_telegram(msg, session)
-
-    # ── Telegram: price move alerts ───────────────────────────────────────────
-    if price_moves:
-        msg  = "📊 <b>Price Movement Alerts</b>\n"
-        msg += f"<i>{ngt_now().strftime('%Y-%m-%d %H:%M:%S')} (NGT)</i>\n"
-        msg += f"{'─' * 30}\n"
-        for sym, label in price_moves:
-            msg += f"  <b>{sym.upper()}</b>: {label}\n"
-        await send_telegram(msg, session)
-
-    # ── Telegram: spike summary ────────────────────────────────────────────────
-    if spike_pairs:
-        msg  = "🚨 <b>Trade Spike Summary</b>\n"
-        msg += f"<i>{ngt_now().strftime('%Y-%m-%d %H:%M:%S')} (NGT)</i>\n"
-        msg += f"{'─' * 30}\n"
-        for r in spike_pairs:
-            msg += f"\n<b>{r['symbol'].upper()}</b>\n"
-            for s in r["_spikes"]:
-                msg += (f"  {s['window']} ({s['candle_count']} candles) — "
-                        f"{s['currency']}{s['quote_volume']:,.2f}\n")
-        await send_telegram(msg, session)
-
->>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
 
 # ══════════════════════════════════════════════════════════════════════════════
 # ENTRY POINT
@@ -2631,25 +2377,21 @@ async def main(run_once: bool = False):
             await run_cycle(shared_state, session, cycle_num=1)
             return
 
-<<<<<<< HEAD
         print(f"🚀 Starting continuous monitor — {len(PAIRS)} pairs, {CYCLE_SLEEP_SECONDS}s cycle | "
               f"Tier 1: immediate fire, Tier 2: {TIER2_CONFIRM_CYCLES} cycles to confirm, "
               f"cooldown {ALERT_COOLDOWN_MINUTES}min")
 
-        while True:
-            cycle_num += 1
-            print(f"\n{'═'*50}\n  Cycle {cycle_num}  —  {ngt_now().strftime('%Y-%m-%d %H:%M:%S')} NGT\n{'═'*50}")
-=======
-        print(f"🚀 Starting continuous monitor — {len(PAIRS)} pairs, "
-              f"{CYCLE_SLEEP_SECONDS}s cycle, "
-              f"alert after {ANOMALY_ALERT_AFTER_MINUTES}min anomaly")
+        # G1 depth-walk tracker — independent 5s task, own loop, own persistence.
+        # Fire-and-forget: it manages its own error handling per-cycle (see
+        # depth_walk_loop) and never raises out to here, so it doesn't need
+        # supervision beyond being kept alive alongside the main loop.
+        depth_walk_task = asyncio.create_task(depth_walk_loop(session))
+        print(f"🚀 Starting USDTNGN depth-walk tracker — {DEPTH_WALK_POLL_INTERVAL_SECONDS}s poll, "
+              f"{DEPTH_WALK_WEIGHT_USDT:,.0f} USDT weight")
 
         while True:
             cycle_num += 1
-            print(f"\n{'═' * 50}")
-            print(f"  Cycle {cycle_num}  —  {ngt_now().strftime('%Y-%m-%d %H:%M:%S')} NGT")
-            print(f"{'═' * 50}")
->>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b
+            print(f"\n{'═'*50}\n  Cycle {cycle_num}  —  {ngt_now().strftime('%Y-%m-%d %H:%M:%S')} NGT\n{'═'*50}")
             try:
                 await run_cycle(shared_state, session, cycle_num)
             except Exception as e:
