@@ -1124,27 +1124,22 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
         </div>
       </div>
 
-      <!-- K-line -->
+      <!-- K-line (B4 circuit breaker only) -->
       <div class="config-section">
         <div class="config-section-title">
           <i class="ti ti-chart-candle" style="font-size:14px"></i>
-          K-line / volume
+          K-line (circuit breaker · B4)
         </div>
         <div class="config-grid">
           <div class="config-field">
             <label>Candle size (minutes)</label>
             <input type="number" id="cfg-kline-candle" min="1" step="1" />
-            <span class="hint">Candle period requested from the API (usually 1).</span>
+            <span class="hint">B4 — candle period requested from the API (usually 1). Independent of D1's own candle size below — changing this no longer affects volume-spike detection.</span>
           </div>
           <div class="config-field">
             <label>Lookback window (minutes)</label>
             <input type="number" id="cfg-kline-lookback" min="1" step="1" />
-            <span class="hint">Rolling window for volume-spike detection. Fetches this many candles.</span>
-          </div>
-          <div class="config-field">
-            <label>Volume baseline windows</label>
-            <input type="number" id="cfg-vol-baseline-buckets" min="2" step="1" />
-            <span class="hint">D1 — how many prior lookback-windows to average for "is this spike unusual for THIS pair" context. Built entirely from Quidax's own k-line history — no external data.</span>
+            <span class="hint">B4 — window used for circuit-breaker move detection (price now vs. open of the oldest candle in this window).</span>
           </div>
         </div>
       </div>
@@ -1172,7 +1167,7 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
           <div class="config-field">
             <label>Min baseline windows (trust gate)</label>
             <input type="number" id="cfg-vol-spike-min-buckets" min="2" step="1" />
-            <span class="hint">How many recorded windows the baseline needs before it's trusted to gate the trigger. Distinct from "Volume baseline windows" above (which is how many to average). Keep ≤ that value, or the baseline never becomes ready. Warm-up ≈ this × lookback minutes after a cold start.</span>
+            <span class="hint">How many recorded windows the baseline needs before it's trusted to gate the trigger. Distinct from "Baseline windows" below (which is how many to average). Keep ≤ that value, or the baseline never becomes ready. Warm-up ≈ this × D1 lookback minutes after a cold start.</span>
           </div>
           <div class="config-field">
             <label>Warm-up fallback</label>
@@ -1181,6 +1176,21 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
               <option value="suppress">Suppress (no D1 until baseline ready)</option>
             </select>
             <span class="hint">Behaviour before the baseline is trusted (incl. just after an OOM reset). Absolute keeps firing on the flat threshold; suppress goes silent until enough history exists.</span>
+          </div>
+          <div class="config-field">
+            <label>Candle size (minutes)</label>
+            <input type="number" id="cfg-vol-spike-candle" min="1" step="1" />
+            <span class="hint">D1's OWN candle period — a separate API call from the K-line (B4) section above, so tuning this never touches the circuit breaker. Larger candles avoid sparse near-zero-volume 1-min bars on illiquid pairs.</span>
+          </div>
+          <div class="config-field">
+            <label>Lookback window (minutes)</label>
+            <input type="number" id="cfg-vol-spike-lookback" min="1" step="1" />
+            <span class="hint">D1's OWN rolling window for volume-spike detection. Fetches lookback ÷ candle-size candles.</span>
+          </div>
+          <div class="config-field">
+            <label>Baseline windows</label>
+            <input type="number" id="cfg-vol-baseline-buckets" min="2" step="1" />
+            <span class="hint">D1 — how many prior lookback-windows to average for "is this spike unusual for THIS pair" context. Built entirely from Quidax's own k-line history — no external data. Effective baseline span = this × lookback window.</span>
           </div>
         </div>
       </div>
@@ -2109,6 +2119,11 @@ async function fetchSlippageData(opts) {
       if (p.uptime_ask == null && p.uptime_bid == null) return; // pre-feature hour
       uptimePoints.push({
         ts: p.ts, ask: p.uptime_ask, bid: p.uptime_bid,
+        // Per-side denominators (a poll can score ask but not bid, or vice
+        // versa, if one side of the book was empty). Older persisted records
+        // predating the per-side split fall back to the combined sample_count.
+        ask_samples: p.uptime_ask_samples ?? p.sample_count ?? null,
+        bid_samples: p.uptime_bid_samples ?? p.sample_count ?? null,
         sample_count: p.sample_count ?? null, live: false,
       });
     });
@@ -2117,7 +2132,9 @@ async function fetchSlippageData(opts) {
     if (live.count > 0) {
       uptimePoints.push({
         ts: raw.bucket_start || (raw.samples[raw.samples.length - 1] || {}).ts,
-        ask: live.ask, bid: live.bid, sample_count: live.count, live: true,
+        ask: live.ask, bid: live.bid,
+        ask_samples: live.askN, bid_samples: live.bidN,
+        sample_count: live.count, live: true,
       });
     }
 
@@ -2138,7 +2155,19 @@ async function fetchSlippageData(opts) {
     _lastUptimeCsvWindow = { start, end };
 
     renderUptimeChart(uptimeForChart);
-    renderUptime1nStats(live);
+    // 1h preset with no archive override → current in-progress hour's running
+    // fraction, same behaviour as before. Every other range (24h/7d/30d) or an
+    // archive date range instead shows the pooled average over completed,
+    // trading-hours-only buckets in the window — excluding the still-open
+    // current hour, so the card always reflects fully-settled data outside
+    // the 1h view.
+    const isLiveHourView = mode !== "archive" && slippageRange === "1h";
+    if (isLiveHourView) {
+      renderUptime1nStats(live);
+    } else {
+      const windowAvg = computeUptimeWindowAverage(uptimeForChart.filter(p => !p.live));
+      renderUptimeWindowAverage(windowAvg, mode, slippageRange);
+    }
   } catch (err) {
     if (!opts.silent) {
       showToast("Could not load slippage data: " + err.message, true);
@@ -2275,6 +2304,46 @@ function renderUptime1nStats(live) {
   set2("uptime-bid-1n", pct(live.bid));
   set2("uptime-ask-1n-sub", live.askN ? `${Math.round((live.ask || 0) * live.askN)}/${live.askN} polls · this hour` : "this hour · graphed");
   set2("uptime-bid-1n-sub", live.bidN ? `${Math.round((live.bid || 0) * live.bidN)}/${live.bidN} polls · this hour` : "this hour · graphed");
+}
+
+// Non-1h views: pools total passes ÷ total polls across every qualifying
+// completed hour, weighted by each hour's own sample count — NOT a simple
+// mean of per-hour percentages. An hour with 720 polls counts proportionally
+// more than a thin hour with 40. `points` must already be window-filtered,
+// trading-hours-filtered, and have the live in-progress hour excluded by the
+// caller (see the isLiveHourView branch in fetchSlippageData).
+function computeUptimeWindowAverage(points) {
+  let askPass = 0, askN = 0, bidPass = 0, bidN = 0, hours = 0;
+  points.forEach(p => {
+    if (p.ask != null && p.ask_samples) { askPass += p.ask * p.ask_samples; askN += p.ask_samples; }
+    if (p.bid != null && p.bid_samples) { bidPass += p.bid * p.bid_samples; bidN += p.bid_samples; }
+    if (p.ask != null || p.bid != null) hours++;
+  });
+  return {
+    ask: askN ? askPass / askN : null,
+    bid: bidN ? bidPass / bidN : null,
+    askN, bidN, hours,
+  };
+}
+
+function uptimeWindowLabel(mode, range) {
+  if (mode === "archive") return "archive avg";
+  const names = { "24h": "24h avg", "7d": "7d avg", "30d": "30d avg" };
+  return names[range] || "window avg";
+}
+
+function renderUptimeWindowAverage(avg, mode, range) {
+  const pct = v => v == null ? "—" : (v * 100).toFixed(1) + "%";
+  const set2 = (id, t) => { const el = document.getElementById(id); if (el) el.textContent = t; };
+  const label = uptimeWindowLabel(mode, range);
+  set2("uptime-ask-1n", pct(avg.ask));
+  set2("uptime-bid-1n", pct(avg.bid));
+  set2("uptime-ask-1n-sub", avg.askN
+    ? `${Math.round(avg.ask * avg.askN)}/${avg.askN} polls · ${label} · trading hrs`
+    : `${label} · no completed hours yet`);
+  set2("uptime-bid-1n-sub", avg.bidN
+    ? `${Math.round(avg.bid * avg.bidN)}/${avg.bidN} polls · ${label} · trading hrs`
+    : `${label} · no completed hours yet`);
 }
 
 function _mean(vals) {
@@ -2705,12 +2774,14 @@ function populateConfigFields(cfg) {
 
   set("cfg-kline-candle",   k.candle_minutes);
   set("cfg-kline-lookback", k.lookback_minutes);
-  set("cfg-vol-baseline-buckets", k.volume_baseline_buckets);
 
   set("cfg-vol-spike-mode",        vs.mode);
   set("cfg-vol-spike-ratio",       vs.spike_ratio);
   set("cfg-vol-spike-min-buckets", vs.min_baseline_buckets);
   set("cfg-vol-spike-warmup",      vs.warmup_fallback);
+  set("cfg-vol-spike-candle",      vs.candle_minutes);
+  set("cfg-vol-spike-lookback",    vs.lookback_minutes);
+  set("cfg-vol-baseline-buckets",  vs.baseline_buckets);
 
   set("cfg-layer-churn-top-pct",          lc.top_pct);
   set("cfg-layer-churn-baseline-buckets", lc.baseline_buckets);
@@ -2878,15 +2949,17 @@ function buildConfigPayload() {
       arb_gap_pct:                num("cfg-arb-gap"),
     },
     kline: {
-      candle_minutes:          num("cfg-kline-candle"),
-      lookback_minutes:        num("cfg-kline-lookback"),
-      volume_baseline_buckets: num("cfg-vol-baseline-buckets"),
+      candle_minutes:   num("cfg-kline-candle"),
+      lookback_minutes: num("cfg-kline-lookback"),
     },
     volume_spike: {
       mode:                 (document.getElementById("cfg-vol-spike-mode") || {}).value || "baseline_relative",
       spike_ratio:          num("cfg-vol-spike-ratio"),
       min_baseline_buckets: num("cfg-vol-spike-min-buckets"),
       warmup_fallback:      (document.getElementById("cfg-vol-spike-warmup") || {}).value || "absolute",
+      candle_minutes:       num("cfg-vol-spike-candle"),
+      lookback_minutes:     num("cfg-vol-spike-lookback"),
+      baseline_buckets:     num("cfg-vol-baseline-buckets"),
     },
     layer_churn: {
       top_pct:          num("cfg-layer-churn-top-pct"),
@@ -3137,4 +3210,4 @@ setInterval(fetchAndRender, 60_000);
 setInterval(fetchDailyLog, 60_000);
 </script>
 </body>
-</html>
+</html>

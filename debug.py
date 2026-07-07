@@ -2,11 +2,19 @@
 Quidax Market Monitor — API-based, OHM alert taxonomy v3
 ──────────────────────────────────────────────────────────────────────────────
 Endpoints used:
-  Quidax Depth  : GET /exchange-open-api/api/v1/markets/{symbol}/depth?limit=200
-  Quidax K-Line : GET /exchange-open-api/api/v1/markets/{symbol}/k?period=1&limit=60
-                  (1-minute candles, last 60 minutes — a rolling hourly window,
-                   NOT 60-minute candles. See KLINE_CANDLE_MINUTES below.)
-  MEXC          : GET /api/v3/ticker/price        (all symbols, one call — price only,
+  Quidax Depth       : GET /exchange-open-api/api/v1/markets/{symbol}/depth?limit=200
+  Quidax K-Line (B4) : GET /exchange-open-api/api/v1/markets/{symbol}/k?period=1&limit=60
+                       (1-minute candles, last 60 minutes — a rolling hourly window.
+                        Feeds check_circuit_breaker_proximity ONLY. See KLINE_CANDLE_MINUTES/
+                        KLINE_LOOKBACK_MINUTES below. fetch_kline().)
+  Quidax K-Line (D1) : GET /exchange-open-api/api/v1/markets/{symbol}/k?period=60&limit=4
+                       (60-minute candles, last 240 minutes by default — a SEPARATE API call
+                        from the B4 fetch above, on its own VOLUME_SPIKE_CANDLE_MINUTES/
+                        VOLUME_SPIKE_LOOKBACK_MINUTES. fetch_kline_volume(). Decoupled from
+                        B4's window deliberately: tuning D1's candle size/lookback (e.g. to
+                        avoid sparse near-zero-volume 1-min candles on illiquid pairs) no
+                        longer changes B4's circuit-breaker window, and vice versa.)
+  MEXC               : GET /api/v3/ticker/price        (all symbols, one call — price only,
                                                      no 24h stats requested or needed)
   KuCoin        : GET /api/v1/market/allTickers    (all symbols, one call — this is the
                                                      *only* batched ticker endpoint KuCoin's
@@ -32,9 +40,11 @@ Alert scope (see OHM spec doc for full definitions):
   B2 Source Exchange Divergence — implemented, MEXC vs KuCoin
   B3 Stale Reference Feed     — implemented, per source (MEXC / KuCoin)
   B4 Circuit Breaker Proximity — implemented, reference-free (uses Quidax's own k-line window)
-  D1 Volume Spike             — implemented (unchanged trigger logic; context is now a
-                                 comparison against Quidax's own longer-term volume baseline,
-                                 built from data already being fetched — no external 24h data)
+  D1 Volume Spike             — implemented (unchanged trigger logic; context is a comparison
+                                 against Quidax's own longer-term volume baseline. Runs on its
+                                 OWN k-line fetch (fetch_kline_volume, default 60min candles /
+                                 240min lookback) — decoupled from B4's kline fetch since
+                                 debug.py v3.1. No external 24h data used.)
   E1 Quidax API Failure       — implemented (unchanged: per-pair + outage-ratio detection)
   E2 Reference Feed Disconnect — implemented (MEXC/KuCoin batched call failure)
   F1 Cross-Pair Arbitrage Gap — implemented (triangulates via pairs already being fetched)
@@ -188,7 +198,7 @@ def apply_config():
     Called once at startup and again at the top of each run_cycle so that
     dashboard edits take effect on the next cycle without a restart.
     """
-    global PAIRS, PAIR_ALIASES, DEPTH_LIMIT, KLINE_CANDLE_MINUTES, KLINE_LOOKBACK_MINUTES, VOLUME_BASELINE_BUCKETS
+    global PAIRS, PAIR_ALIASES, DEPTH_LIMIT, KLINE_CANDLE_MINUTES, KLINE_LOOKBACK_MINUTES
     global CYCLE_SLEEP_SECONDS
     global MIN_ORDERBOOK_LAYERS, THIN_DEPTH_THRESHOLD, DEPTH_IMBALANCE_RATIO
     global DWS_POOR_THRESHOLD, MIN_ABS_SPREAD_DIFF_PCT
@@ -199,6 +209,7 @@ def apply_config():
     global LAYER_CHURN_TOP_PCT, LAYER_CHURN_BASELINE_BUCKETS
     global LAYER_CHURN_RATIO_THRESHOLD
     global VOLUME_SPIKE_MODE, VOLUME_SPIKE_RATIO, VOLUME_SPIKE_MIN_BUCKETS, VOLUME_SPIKE_WARMUP_FALLBACK
+    global VOLUME_SPIKE_CANDLE_MINUTES, VOLUME_SPIKE_LOOKBACK_MINUTES, VOLUME_BASELINE_BUCKETS
     global DEPTH_WALK_WEIGHT_USDT, DEPTH_WALK_POLL_INTERVAL_SECONDS
     global DEPTH_WALK_RAW_RETENTION_SECONDS, DEPTH_WALK_CONDENSED_RETENTION_DAYS
     global DEPTH_WALK_MID_WEIGHT_USDT
@@ -219,11 +230,10 @@ def apply_config():
         PAIRS.append((sym, tgt))
         PAIR_ALIASES[sym] = aliases
 
-    # K-line
+    # K-line (B4 circuit breaker only — D1 has its own fetch, loaded below)
     DEPTH_LIMIT              = int(cfg["orderbook"]["depth_limit"])
     KLINE_CANDLE_MINUTES     = int(cfg["kline"]["candle_minutes"])
     KLINE_LOOKBACK_MINUTES   = int(cfg["kline"]["lookback_minutes"])
-    VOLUME_BASELINE_BUCKETS  = int(cfg["kline"].get("volume_baseline_buckets", 24))
 
     # Timing
     CYCLE_SLEEP_SECONDS = float(cfg["timing"]["cycle_sleep_seconds"])
@@ -272,6 +282,12 @@ def apply_config():
     VOLUME_SPIKE_RATIO           = float(vs.get("spike_ratio", 3.0))
     VOLUME_SPIKE_MIN_BUCKETS     = int(vs.get("min_baseline_buckets", 4))
     VOLUME_SPIKE_WARMUP_FALLBACK = str(vs.get("warmup_fallback", "absolute"))
+    # D1's own k-line window — independent of kline.* above (B4-only). .get
+    # fallbacks reproduce the pre-split behaviour (1min candles/60min lookback)
+    # for any config saved before this split existed.
+    VOLUME_SPIKE_CANDLE_MINUTES  = int(vs.get("candle_minutes", 1))
+    VOLUME_SPIKE_LOOKBACK_MINUTES = int(vs.get("lookback_minutes", 60))
+    VOLUME_BASELINE_BUCKETS      = int(vs.get("baseline_buckets", 24))
 
     # G1 — depth-walk slippage tracker (USDTNGN only, independent 5s task)
     dw = cfg.get("depth_walk", {})
@@ -308,7 +324,6 @@ PAIR_ALIASES:                dict  = {}
 DEPTH_LIMIT:                 int   = 200
 KLINE_CANDLE_MINUTES:        int   = 1
 KLINE_LOOKBACK_MINUTES:      int   = 60
-VOLUME_BASELINE_BUCKETS:     int   = 24
 CYCLE_SLEEP_SECONDS:         float = 60
 MIN_ORDERBOOK_LAYERS:        int   = 10
 THIN_DEPTH_THRESHOLD:        float = 5_000
@@ -333,6 +348,9 @@ VOLUME_SPIKE_MODE:            str   = "baseline_relative"
 VOLUME_SPIKE_RATIO:           float = 3.0
 VOLUME_SPIKE_MIN_BUCKETS:     int   = 4
 VOLUME_SPIKE_WARMUP_FALLBACK: str   = "absolute"
+VOLUME_SPIKE_CANDLE_MINUTES:  int   = 1
+VOLUME_SPIKE_LOOKBACK_MINUTES: int  = 60
+VOLUME_BASELINE_BUCKETS:      int   = 24
 DEPTH_WALK_WEIGHT_USDT:              float = 100_000
 DEPTH_WALK_MID_WEIGHT_USDT:          float = 1_000
 DEPTH_WALK_POLL_INTERVAL_SECONDS:    float = 5
@@ -453,12 +471,38 @@ async def fetch_depth(session: aiohttp.ClientSession, symbol: str) -> dict:
 
 async def fetch_kline(session: aiohttp.ClientSession, symbol: str) -> list:
     """
-    Returns 1-minute candles for the last 60 minutes (a rolling window,
-    not calendar-day-scoped). Each candle: [timestamp_ms, open, high, low, close, volume] (strings).
+    B4 (circuit breaker) feed. Returns 1-minute candles for the last 60 minutes
+    by default (a rolling window, not calendar-day-scoped), per kline.candle_minutes
+    / kline.lookback_minutes. Each candle: [timestamp_ms, open, high, low, close,
+    volume] (strings). Independent of D1's fetch_kline_volume below — this window
+    no longer changes when D1's candle size/lookback is tuned.
+
+    `limit` is the number of candles, i.e. lookback_minutes / candle_minutes — with
+    the default candle_minutes=1 that's numerically equal to lookback_minutes, which
+    is why this historically read `limit=KLINE_LOOKBACK_MINUTES` directly.
     """
+    candle_count = max(1, KLINE_LOOKBACK_MINUTES // KLINE_CANDLE_MINUTES)
     lookback_ms = int((ngt_now().timestamp() - KLINE_LOOKBACK_MINUTES * 60) * 1000)
     url = (f"{BASE_API_URL}/markets/{symbol}/k"
-           f"?period={KLINE_CANDLE_MINUTES}&limit={KLINE_LOOKBACK_MINUTES}&timestamp={lookback_ms}")
+           f"?period={KLINE_CANDLE_MINUTES}&limit={candle_count}&timestamp={lookback_ms}")
+    payload = await _request_json(session, url)
+    return payload["data"]
+
+
+async def fetch_kline_volume(session: aiohttp.ClientSession, symbol: str) -> list:
+    """
+    D1 (volume spike) feed — separate API call from fetch_kline above, on its own
+    candle_minutes/lookback_minutes (volume_spike.candle_minutes / .lookback_minutes,
+    default 60min candles / 240min lookback). Same payload shape as fetch_kline:
+    [timestamp_ms, open, high, low, close, volume] (strings) per candle.
+
+    Kept as a distinct function (rather than a parameterised fetch_kline) so B4's
+    window and D1's window can never accidentally re-couple through a shared call site.
+    """
+    candle_count = max(1, VOLUME_SPIKE_LOOKBACK_MINUTES // VOLUME_SPIKE_CANDLE_MINUTES)
+    lookback_ms = int((ngt_now().timestamp() - VOLUME_SPIKE_LOOKBACK_MINUTES * 60) * 1000)
+    url = (f"{BASE_API_URL}/markets/{symbol}/k"
+           f"?period={VOLUME_SPIKE_CANDLE_MINUTES}&limit={candle_count}&timestamp={lookback_ms}")
     payload = await _request_json(session, url)
     return payload["data"]
 
@@ -999,10 +1043,12 @@ def check_circuit_breaker_proximity(kline_raw: list, current_mid: float) -> list
 
 def compute_window_volume(candles: list, sym: str) -> Optional[dict]:
     """
-    Pure aggregation: sums the last KLINE_LOOKBACK_MINUTES of 1-minute candles into a
-    single rolling quote-volume figure for this pair. Does NOT apply any threshold —
-    that's D1's job (get_recent_spikes) — this just measures "how much traded."
-    Pure rolling window — does NOT filter by calendar date.
+    Pure aggregation: sums the last VOLUME_SPIKE_LOOKBACK_MINUTES of
+    VOLUME_SPIKE_CANDLE_MINUTES-minute candles (D1's own fetch_kline_volume feed,
+    independent of B4's fetch_kline) into a single rolling quote-volume figure for
+    this pair. Does NOT apply any threshold — that's D1's job (get_recent_spikes) —
+    this just measures "how much traded." Pure rolling window — does NOT filter by
+    calendar date.
     """
     if not candles:
         return None
@@ -1027,22 +1073,23 @@ def compute_window_volume(candles: list, sym: str) -> Optional[dict]:
         return None
 
     window_label = (f"{window_start.strftime('%H:%M')}–{window_end.strftime('%H:%M')}"
-                     if window_start and window_end else f"last {KLINE_LOOKBACK_MINUTES} min")
+                     if window_start and window_end else f"last {VOLUME_SPIKE_LOOKBACK_MINUTES} min")
     return {"window": window_label, "candle_count": candle_count,
             "quote_volume": total_quote_volume, "currency": currency}
 
 
 def update_volume_baseline(symbol: str, current_volume: float, vol_hist_root: dict) -> tuple[Optional[float], int]:
     """
-    Builds D1's "Quidax-only" baseline with no external data and no extra API calls —
-    purely from the rolling window volume we already compute every cycle.
+    Builds D1's "Quidax-only" baseline with no external data and no extra API calls
+    beyond fetch_kline_volume — purely from the rolling window volume we already
+    compute every cycle.
 
-    A new "bucket" is only recorded once per KLINE_LOOKBACK_MINUTES of real elapsed time,
-    not every cycle. This matters: with the default 60s cycle and 60min lookback window,
-    consecutive cycles' rolling windows overlap by ~59/60 — recording every cycle would
-    just average near-duplicate overlapping readings against themselves and tell us
-    almost nothing. Sampling once per window-length gives genuinely distinct historical
-    readings to compare "right now" against.
+    A new "bucket" is only recorded once per VOLUME_SPIKE_LOOKBACK_MINUTES of real
+    elapsed time, not every cycle. This matters: with the default 60s cycle and a
+    240min lookback window, consecutive cycles' rolling windows overlap heavily —
+    recording every cycle would just average near-duplicate overlapping readings
+    against themselves and tell us almost nothing. Sampling once per window-length
+    gives genuinely distinct historical readings to compare "right now" against.
 
     Returns (baseline_mean_of_PRIOR_buckets, how_many_prior_buckets_that_mean_is_built_from).
     The just-recorded current reading is deliberately excluded from its own baseline.
@@ -1054,7 +1101,7 @@ def update_volume_baseline(symbol: str, current_volume: float, vol_hist_root: di
     prior_buckets = list(pair_hist["buckets"])
     baseline = (sum(prior_buckets) / len(prior_buckets)) if prior_buckets else None
 
-    if last_ts is None or (now - last_ts).total_seconds() >= KLINE_LOOKBACK_MINUTES * 60:
+    if last_ts is None or (now - last_ts).total_seconds() >= VOLUME_SPIKE_LOOKBACK_MINUTES * 60:
         pair_hist["buckets"].append(current_volume)
         pair_hist["buckets"] = pair_hist["buckets"][-VOLUME_BASELINE_BUCKETS:]
         pair_hist["last_bucket_ts"] = now.isoformat()
@@ -1115,7 +1162,7 @@ def get_recent_spikes(window_info: Optional[dict], sym: str,
     spike["trigger"] = trigger
     if trigger == "baseline_relative":
         ratio = vol / baseline
-        spike["ref_context"] = (f"≈{ratio:.1f}x the typical {KLINE_LOOKBACK_MINUTES}min volume "
+        spike["ref_context"] = (f"≈{ratio:.1f}x the typical {VOLUME_SPIKE_LOOKBACK_MINUTES}min volume "
                                  f"(≥{VOLUME_SPIKE_RATIO:g}x baseline over {bucket_count} windows, "
                                  f"floor {cur}{threshold:,.0f})")
     elif baseline and bucket_count >= 2:
@@ -1651,7 +1698,8 @@ async def process_pair(
     layer_hist_root: dict,
 ) -> Optional[dict]:
     """
-    Fetches depth + kline for one pair and runs every A/B/D check applicable to it.
+    Fetches depth + kline (B4) + kline-volume (D1, its own independent call — see
+    fetch_kline_volume) for one pair and runs every A/B/D check applicable to it.
     No timers, no cooldowns: every issue found this cycle is returned as actionable.
     `trusted_price`/`ref_issues` are pre-resolved once per asset in run_cycle (see
     resolve_trusted_price) and only populated for USDT-quoted pairs. `vol_hist_root`
@@ -1668,9 +1716,10 @@ async def process_pair(
     async with semaphore:
         monitor_only = target is None
         try:
-            depth_raw, kline_raw = await asyncio.gather(
+            depth_raw, kline_raw, kline_vol_raw = await asyncio.gather(
                 fetch_depth(session, symbol),
                 fetch_kline(session, symbol),
+                fetch_kline_volume(session, symbol),
             )
             asks_df, bids_df = build_orderbook_dfs(depth_raw)
 
@@ -1796,7 +1845,9 @@ async def process_pair(
             issues = dedupe_actionable(issues)
 
             # ── D1 — Volume spike, with Quidax's own longer-term baseline as context ──
-            window_info = compute_window_volume(kline_raw, symbol)
+            # kline_vol_raw is D1's own independent fetch (fetch_kline_volume), not
+            # the B4 kline_raw above — this is the point of the D1/B4 decoupling.
+            window_info = compute_window_volume(kline_vol_raw, symbol)
             baseline, bucket_count = (None, 0)
             if window_info:
                 baseline, bucket_count = update_volume_baseline(symbol, window_info["quote_volume"], vol_hist_root)

@@ -547,6 +547,16 @@ async def post_config(request: Request):
         if isinstance(vs.get("spike_ratio"), (int, float)) and vs["spike_ratio"] <= 0:
             raise HTTPException(status_code=400,
                 detail="volume_spike.spike_ratio must be greater than 0")
+        # D1's own k-line window (candle_minutes/lookback_minutes/baseline_buckets) —
+        # independent of kline.* (B4-only). Must be strictly positive: a 0-minute
+        # candle/lookback or a 0-bucket baseline is meaningless, unlike spike_ratio/
+        # min_baseline_buckets above which tolerate 0.
+        for k in ("candle_minutes", "lookback_minutes", "baseline_buckets"):
+            if k in vs:
+                v = vs[k]
+                if not isinstance(v, (int, float)) or isinstance(v, bool) or v <= 0:
+                    raise HTTPException(status_code=400,
+                        detail=f"volume_spike.{k} must be a positive number")
 
     # pricing.source_divergence_overrides is a per-symbol map {symbol: pct}, not a
     # scalar — it can't go through the numbers-only validator below, so validate it

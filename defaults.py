@@ -54,15 +54,28 @@ DEFAULT_CONFIG: dict = {
         "arb_gap_pct":                0.5,   # F1 — % gap between actual and implied cross price
     },
     "kline": {
-        "candle_minutes":          1,
-        "lookback_minutes":        60,
-        "volume_baseline_buckets": 24,  # D1 — how many prior windows to average for the baseline
+        # B4 (circuit breaker) ONLY as of the D1/B4 decoupling below. D1 has its
+        # own independent candle_minutes/lookback_minutes under volume_spike —
+        # changing these no longer touches D1's window, and vice versa.
+        "candle_minutes":   1,
+        "lookback_minutes": 60,
     },
     "volume_spike": {
         "mode":                 "baseline_relative",  # "baseline_relative" | "absolute"
         "spike_ratio":          3.0,    # D1 fires when window volume >= this * the pair's own baseline
         "min_baseline_buckets": 4,      # buckets required before the baseline is trusted enough to gate the trigger
         "warmup_fallback":      "absolute",  # before the baseline is ready: "absolute" | "suppress"
+        # D1's OWN k-line fetch — independent of kline.* above (which feeds B4
+        # only). A separate API call per pair per cycle, sized for markets where
+        # 1-minute candles are too granular to reliably show volume.
+        "candle_minutes":   60,   # D1 candle period, minutes
+        "lookback_minutes": 240,  # D1 rolling window, minutes (4 candles at the default candle size)
+        # How many prior D1 windows to average for the baseline. A new bucket is
+        # recorded once per `lookback_minutes` of elapsed time (see
+        # update_volume_baseline), so effective baseline span = buckets *
+        # lookback_minutes. Default 6 * 240min = 24h, matching the old
+        # 24 * 60min = 24h span from before candle/lookback were split out.
+        "baseline_buckets": 6,
     },
     "layer_churn": {
         "top_pct":          0.5,  # A6 — fraction of each side's layers treated as "near-touch"
