@@ -2196,6 +2196,29 @@ function downloadUptimeCsv() {
   const endTag   = fmt(w.end)   || todayNgt;
 
   const pct = v => v == null ? "" : (v * 100).toFixed(4);
+  // Human-readable D/M/YYYY H:MM:SS in NGT — Excel-friendly, unambiguous for
+  // NG-convention readers (day-first). Uses formatToParts + numeric parseInt
+  // to strip the leading zeros Intl adds to day/month/hour, keeping the
+  // padded minute/second (0:05:03, not 0:5:3). Falls back to raw ts on parse
+  // failure so a bad row still shows *something* in the export.
+  const fmtTs = iso => {
+    try {
+      const parts = new Intl.DateTimeFormat("en-GB", {
+        timeZone: "Africa/Lagos",
+        day: "numeric", month: "numeric", year: "numeric",
+        hour: "numeric", minute: "2-digit", second: "2-digit",
+        hour12: false,
+      }).formatToParts(new Date(iso));
+      const get = t => (parts.find(p => p.type === t) || {}).value || "";
+      const d = parseInt(get("day"),   10);
+      const m = parseInt(get("month"), 10);
+      let   h = parseInt(get("hour"),  10);
+      if (h === 24) h = 0;
+      return `${d}/${m}/${get("year")} ${h}:${get("minute")}:${get("second")}`;
+    } catch {
+      return iso;
+    }
+  };
   const esc = v => {
     const s = String(v ?? "");
     return s.includes(",") || s.includes('"') || s.includes("\n")
@@ -2205,7 +2228,7 @@ function downloadUptimeCsv() {
   const lines  = [header.join(",")];
   rows.forEach(r => {
     lines.push([
-      esc(r.ts),
+      esc(fmtTs(r.ts)),
       esc(pct(r.ask)),
       esc(pct(r.bid)),
       esc(r.sample_count ?? ""),
