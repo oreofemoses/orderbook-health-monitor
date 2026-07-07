@@ -961,7 +961,10 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
       <!-- Liquidity uptime chart -->
       <div class="chart-card">
         <div class="chart-header">
-          <div class="chart-title">USDTNGN — liquidity uptime</div>
+          <div class="chart-title">USDTNGN — liquidity uptime <span style="font-size:11px;font-weight:500;color:var(--text-muted)">(trading hours 9am–6pm NGT)</span></div>
+          <button class="btn" onclick="downloadUptimeCsv()" title="Download completed hourly buckets in the selected window as CSV (trading hours only)">
+            <i class="ti ti-download"></i> Download CSV
+          </button>
         </div>
         <div class="legend">
           <span><span class="swatch" style="background:var(--green)"></span><span id="uptime-legend-ask">Ask uptime %</span></span>
@@ -2094,28 +2097,47 @@ async function fetchSlippageData(opts) {
     // decimal per completed hour (from history) plus one live point for the
     // in-progress bucket, computed on the fly from the raw samples. The live
     // figure also drives the "this hour" stat cards.
+    //
+    // Trading-hours filter: uptime is only meaningful during trading hours
+    // (9am–6pm NGT). We apply it as a permanent filter on the plotted series
+    // — bucket_start hour in [9, 18) NGT — so off-hours points never render
+    // regardless of the selected window. The CSV download uses the same
+    // trading-hours filter and additionally excludes the live in-progress
+    // point (only fully-completed buckets).
     const uptimePoints = [];
     (hist.points || []).forEach(p => {
       if (p.uptime_ask == null && p.uptime_bid == null) return; // pre-feature hour
-      uptimePoints.push({ ts: p.ts, ask: p.uptime_ask, bid: p.uptime_bid, live: false });
+      uptimePoints.push({
+        ts: p.ts, ask: p.uptime_ask, bid: p.uptime_bid,
+        sample_count: p.sample_count ?? null, live: false,
+      });
     });
 
     const live = computeLiveUptime(raw.samples || []);
     if (live.count > 0) {
       uptimePoints.push({
         ts: raw.bucket_start || (raw.samples[raw.samples.length - 1] || {}).ts,
-        ask: live.ask, bid: live.bid, live: true,
+        ask: live.ask, bid: live.bid, sample_count: live.count, live: true,
       });
     }
 
-    const uptimeFiltered = uptimePoints.filter(p => {
+    const uptimeInWindow = uptimePoints.filter(p => {
       const t = new Date(p.ts);
       if (start && t < start) return false;
       if (end   && t > end)   return false;
       return true;
     }).sort((a, b) => new Date(a.ts) - new Date(b.ts));
 
-    renderUptimeChart(uptimeFiltered);
+    // Trading-hours filter drives the chart. Live in-progress point is kept
+    // if its bucket_start hour is within trading hours (treated as any other
+    // point) — otherwise it drops off the chart too.
+    const uptimeForChart = uptimeInWindow.filter(p => isTradingHourNgt(p.ts));
+
+    // CSV eligibility: same window + trading hours, minus the live point.
+    _lastUptimeCsvRows   = uptimeForChart.filter(p => !p.live);
+    _lastUptimeCsvWindow = { start, end };
+
+    renderUptimeChart(uptimeForChart);
     renderUptime1nStats(live);
   } catch (err) {
     if (!opts.silent) {
@@ -2123,6 +2145,84 @@ async function fetchSlippageData(opts) {
     }
     console.error("Slippage fetch failed:", err);
   }
+}
+
+// ── Trading-hours + CSV export helpers ─────────────────────────────────────
+// Uptime is only plotted / exported for hourly buckets whose bucket_start
+// falls within trading hours (9am–6pm NGT). Filter is on bucket_start hour
+// as agreed — buckets are labelled by start time, so the 9:00–10:00 bucket
+// counts, up to and including the 17:00–18:00 bucket. formatToParts avoids
+// per-locale quirks around "24" vs "00" for midnight in some ICU builds.
+function isTradingHourNgt(tsString) {
+  try {
+    const parts = new Intl.DateTimeFormat("en-GB", {
+      timeZone: "Africa/Lagos",
+      hour: "numeric",
+      hour12: false,
+    }).formatToParts(new Date(tsString));
+    const hourPart = parts.find(p => p.type === "hour");
+    if (!hourPart) return false;
+    let hour = parseInt(hourPart.value, 10);
+    if (hour === 24) hour = 0;   // midnight edge case in some locales
+    return hour >= 9 && hour < 18;
+  } catch {
+    return false;   // unparseable ts → drop rather than throw and kill render
+  }
+}
+
+// Populated by fetchSlippageData every render: the trading-hours + window
+// filtered rows, minus the live in-progress bucket. downloadUptimeCsv() reads
+// this directly so the CSV matches exactly what's on-screen (sans live point).
+let _lastUptimeCsvRows   = [];
+let _lastUptimeCsvWindow = { start: null, end: null };
+
+function downloadUptimeCsv() {
+  const rows = _lastUptimeCsvRows;
+  if (!rows || !rows.length) {
+    showToast("No completed hourly buckets in trading hours for this window", true);
+    return;
+  }
+
+  // Filename reflects the actual selected window bounds so archived exports
+  // don't collide. Fall back to today NGT when either bound is null (which
+  // happens if fetchSlippageData hasn't populated the window yet).
+  const w    = _lastUptimeCsvWindow || {};
+  const fmt  = d => d ? new Intl.DateTimeFormat("en-CA", {
+                        timeZone: "Africa/Lagos", year: "numeric",
+                        month: "2-digit", day: "2-digit"
+                      }).format(d) : null;
+  const todayNgt = new Date().toLocaleDateString("en-CA", { timeZone: "Africa/Lagos" });
+  const startTag = fmt(w.start) || todayNgt;
+  const endTag   = fmt(w.end)   || todayNgt;
+
+  const pct = v => v == null ? "" : (v * 100).toFixed(4);
+  const esc = v => {
+    const s = String(v ?? "");
+    return s.includes(",") || s.includes('"') || s.includes("\n")
+      ? `"${s.replace(/"/g, '""')}"` : s;
+  };
+  const header = ["timestamp", "ask_uptime_pct", "bid_uptime_pct", "sample_count"];
+  const lines  = [header.join(",")];
+  rows.forEach(r => {
+    lines.push([
+      esc(r.ts),
+      esc(pct(r.ask)),
+      esc(pct(r.bid)),
+      esc(r.sample_count ?? ""),
+    ].join(","));
+  });
+
+  const csv  = lines.join("\r\n");
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement("a");
+  a.href     = url;
+  a.download = `uptime_${startTag}_${endTag}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+  showToast(`Downloaded ${rows.length} hourly bucket${rows.length === 1 ? "" : "s"}`);
 }
 
 // Running uptime for the in-progress bucket: fraction of usable samples that

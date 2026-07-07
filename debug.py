@@ -1289,6 +1289,13 @@ def compute_depth_walk_metrics(asks_df: pd.DataFrame, bids_df: pd.DataFrame,
     that happens `mid_from_fallback: True` is set on the sample so the chart
     can flag it. The main slippage walk (weight_usdt, default 100k) still
     runs independently and its own partial_fill flags still drive G1.
+
+    Liquidity uptime is a boolean check on that SAME 100k walk: a side scores
+    1 if its walk-fill price doesn't slip more than UPTIME_FIXED_STEP_NGN (1₦)
+    away from mid (ask: weighted_avg_buy <= mid+1₦; bid: weighted_avg_sell >=
+    mid-1₦). uptime_band_pct / uptime_weight_usdt are accepted for call-site
+    compatibility but are no longer read by this calculation — the resting-
+    depth-in-a-percent-band check they used to configure was replaced.
     """
     if asks_df.empty or bids_df.empty:
         return None
@@ -1316,21 +1323,25 @@ def compute_depth_walk_metrics(asks_df: pd.DataFrame, bids_df: pd.DataFrame,
     buy_slip_pct  = ((weighted_avg_buy  / mid) - 1) * 100 if weighted_avg_buy  is not None else None
     sell_slip_pct = ((weighted_avg_sell / mid) - 1) * 100 if weighted_avg_sell is not None else None
 
-    # ── Liquidity uptime — ±uptime_band_pct band around the same mid ─────────
-    # p = n/s*100 (n = fixed 1₦ step, s = target price), applied MULTIPLICATIVELY
-    # to this poll's live mid so the band tracks mid instead of being flat naira.
-    # Ask uptime: is there >= uptime_weight_usdt of asks priced <= mid*(1+p/100)?
-    # Bid uptime: is there >= uptime_weight_usdt of bids priced >= mid*(1-p/100)?
-    # Scored independently per side. A thin book still produces a sample and
-    # simply fails (ok=False); the dynamic hourly denominator is the count of
-    # samples, so a failing poll counts against uptime while a no-book poll
-    # (this function returns None) never becomes a sample at all.
-    uptime_ask_target = mid * (1 + uptime_band_pct / 100.0)
-    uptime_bid_target = mid * (1 - uptime_band_pct / 100.0)
-    uptime_ask_depth, uptime_ask_ok = depth_within_band(
-        asks_df, uptime_ask_target, "ask", uptime_weight_usdt)
-    uptime_bid_depth, uptime_bid_ok = depth_within_band(
-        bids_df, uptime_bid_target, "bid", uptime_weight_usdt)
+    # ── Liquidity uptime — boolean walk-price check ──────────────────────────
+    # Reuses the SAME 100k-USDT walk already computed above for slippage
+    # (weighted_avg_buy / weighted_avg_sell) instead of separately counting
+    # resting depth in a band. A side scores 1 if that walk's fill price
+    # doesn't slip more than UPTIME_FIXED_STEP_NGN (1₦) away from mid:
+    #   Ask uptime: weighted_avg_buy  <= mid + 1₦
+    #   Bid uptime: weighted_avg_sell >= mid - 1₦
+    # A missing walk price (empty side / weight_usdt<=0 upstream) fails
+    # rather than raising, consistent with the old "present but too thin"
+    # behaviour of the band check this replaces.
+    #
+    # NOTE: uptime_band_pct / uptime_weight_usdt (and the dashboard config
+    # fields backing them — reference_price, uptime.weight_usdt) are no
+    # longer used by this calculation. Left in the signature/config schema
+    # inert rather than removed, per design decision.
+    uptime_ask_target = mid + UPTIME_FIXED_STEP_NGN
+    uptime_bid_target = mid - UPTIME_FIXED_STEP_NGN
+    uptime_ask_ok = weighted_avg_buy  is not None and weighted_avg_buy  <= uptime_ask_target
+    uptime_bid_ok = weighted_avg_sell is not None and weighted_avg_sell >= uptime_bid_target
 
     return {
         "mid":               mid,
@@ -1345,8 +1356,6 @@ def compute_depth_walk_metrics(asks_df: pd.DataFrame, bids_df: pd.DataFrame,
         # Liquidity uptime (per-side, this sample)
         "uptime_ask_target": uptime_ask_target,
         "uptime_bid_target": uptime_bid_target,
-        "uptime_ask_depth":  uptime_ask_depth,
-        "uptime_bid_depth":  uptime_bid_depth,
         "uptime_ask_ok":     uptime_ask_ok,
         "uptime_bid_ok":     uptime_bid_ok,
     }
@@ -1453,8 +1462,9 @@ async def depth_walk_loop(session: aiohttp.ClientSession):
         try:
             payload = await fetch_depth(session, DEPTH_WALK_SYMBOL)
             asks_df, bids_df = build_orderbook_dfs(payload)
-            # Uptime band is p = n/s*100 (n = fixed 1₦, s = configurable target
-            # price), applied multiplicatively to live mid inside the metric fn.
+            # Uptime is now a boolean walk-price check (100k walk vs mid ± 1₦)
+            # inside the metric fn — uptime_band_pct/uptime_weight_usdt below
+            # are passed through but no longer used by that calculation.
             metrics = compute_depth_walk_metrics(
                 asks_df, bids_df, DEPTH_WALK_WEIGHT_USDT,
                 mid_weight_usdt=DEPTH_WALK_MID_WEIGHT_USDT,
