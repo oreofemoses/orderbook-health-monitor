@@ -474,17 +474,24 @@ async def fetch_kline(session: aiohttp.ClientSession, symbol: str) -> list:
     B4 (circuit breaker) feed. Returns 1-minute candles for the last 60 minutes
     by default (a rolling window, not calendar-day-scoped), per kline.candle_minutes
     / kline.lookback_minutes. Each candle: [timestamp_ms, open, high, low, close,
-    volume] (strings). Independent of D1's fetch_kline_volume below — this window
-    no longer changes when D1's candle size/lookback is tuned.
+    volume] (strings) — the candle's OWN ts field is milliseconds. Independent of
+    D1's fetch_kline_volume below — this window no longer changes when D1's candle
+    size/lookback is tuned.
 
     `limit` is the number of candles, i.e. lookback_minutes / candle_minutes — with
     the default candle_minutes=1 that's numerically equal to lookback_minutes, which
     is why this historically read `limit=KLINE_LOOKBACK_MINUTES` directly.
+
+    `timestamp` (the QUERY PARAM, distinct from the candle ts field above) is
+    SECONDS since epoch per Quidax's docs (docs.quidax.io/reference/fetch-k-line-
+    for-a-market) — NOT milliseconds. Sending milliseconds here resolves to a
+    timestamp in the far future, so "only return data after that time" matches
+    nothing and the API silently returns an empty candle list every cycle.
     """
     candle_count = max(1, KLINE_LOOKBACK_MINUTES // KLINE_CANDLE_MINUTES)
-    lookback_ms = int((ngt_now().timestamp() - KLINE_LOOKBACK_MINUTES * 60) * 1000)
+    lookback_ts = int(ngt_now().timestamp() - KLINE_LOOKBACK_MINUTES * 60)
     url = (f"{BASE_API_URL}/markets/{symbol}/k"
-           f"?period={KLINE_CANDLE_MINUTES}&limit={candle_count}&timestamp={lookback_ms}")
+           f"?period={KLINE_CANDLE_MINUTES}&limit={candle_count}&timestamp={lookback_ts}")
     payload = await _request_json(session, url)
     return payload["data"]
 
@@ -498,11 +505,14 @@ async def fetch_kline_volume(session: aiohttp.ClientSession, symbol: str) -> lis
 
     Kept as a distinct function (rather than a parameterised fetch_kline) so B4's
     window and D1's window can never accidentally re-couple through a shared call site.
+
+    `timestamp` (the query param) is SECONDS since epoch — see fetch_kline's
+    docstring above for why this matters.
     """
     candle_count = max(1, VOLUME_SPIKE_LOOKBACK_MINUTES // VOLUME_SPIKE_CANDLE_MINUTES)
-    lookback_ms = int((ngt_now().timestamp() - VOLUME_SPIKE_LOOKBACK_MINUTES * 60) * 1000)
+    lookback_ts = int(ngt_now().timestamp() - VOLUME_SPIKE_LOOKBACK_MINUTES * 60)
     url = (f"{BASE_API_URL}/markets/{symbol}/k"
-           f"?period={VOLUME_SPIKE_CANDLE_MINUTES}&limit={candle_count}&timestamp={lookback_ms}")
+           f"?period={VOLUME_SPIKE_CANDLE_MINUTES}&limit={candle_count}&timestamp={lookback_ts}")
     payload = await _request_json(session, url)
     return payload["data"]
 
@@ -1564,14 +1574,35 @@ def save_state(state: dict):
 
 def update_daily_log(all_results: list):
     """
-    Long-format daily log: one ROW per WARNING market per cycle. Only markets whose
-    status is "Warning" this cycle are appended — healthy ("Checked") pairs and
-    failed-fetch pairs are skipped, so the file stays small and every row is something
-    worth reviewing. Rows keep PAIRS config order within a cycle.
-    Columns: Timestamp, Market, Status, Issues, Depth.
+    Long-format daily log: one ROW per WARNING market per cycle, PLUS one row per
+    D1 spike that actually fires Telegram this cycle. Only markets whose status is
+    "Warning" this cycle, or whose D1 spike passed its cooldown gate this cycle,
+    are appended — healthy pairs and non-firing spikes are skipped, so the file
+    stays small and every row is something worth reviewing. Rows keep PAIRS config
+    order within a cycle, warning rows before spike rows.
+    Columns: Timestamp, Market, Status, Issues, Depth (D1 rows reuse the same 5
+    columns: Status="SPIKE", Issues="D1:HIGH" so the dashboard's existing
+    id:severity badge parsing renders it identically to every other issue badge,
+    and Depth carries the actual quote-volume + ref_context — the human-readable
+    "why" — since that column is free text and isn't split/parsed anywhere).
 
-    A cycle with no warnings appends nothing (and writes no header until the first
-    warning of the day creates the file).
+    D1 rows are edge-triggered off telegram_detail's "D1:fired" token — the SAME
+    should_fire_telegram cooldown gate that decides whether D1 actually sends a
+    Telegram message this cycle (see run_cycle) — so a row is logged exactly once
+    per spike occurrence, not once per cycle the underlying condition remains
+    true. Without this, a sustained spike could log up to ~240 rows (the full
+    lookback window) before rolling out of it, defeating the "every row is worth
+    reviewing" goal this log was designed around.
+
+    D1 was previously invisible to this log entirely, since it's deliberately
+    kept out of `issues`/status (see process_pair) so a spike doesn't get folded
+    into Tier-2/status machinery — that isolation also meant a D1-only spike (no
+    concurrent A/B-series issue) left no trace anywhere outside health_state.json's
+    rolling baseline (overwritten every ~lookback_minutes) and Telegram itself.
+    This closes that gap without touching D1's isolation from issues/status.
+
+    A cycle with nothing to log appends nothing (and writes no header until the
+    first loggable row of the day creates the file).
     """
     now   = ngt_now()
     today = now.strftime("%Y-%m-%d")
@@ -1579,12 +1610,17 @@ def update_daily_log(all_results: list):
     ts    = now.strftime("%H:%M:%S")
 
     pair_order = {sym: i for i, (sym, _) in enumerate(PAIRS)}
+
     warning_results = [r for r in all_results
                        if str(r.get("status", "")).lower() == "warning"]
     warning_results.sort(key=lambda r: pair_order.get(r["symbol"], 1_000_000))
 
-    if not warning_results:
-        print("✅ Daily log: no warnings this cycle — nothing appended")
+    spike_results = [r for r in all_results
+                      if "D1:fired" in str(r.get("telegram_detail", "")).split("|")]
+    spike_results.sort(key=lambda r: pair_order.get(r["symbol"], 1_000_000))
+
+    if not warning_results and not spike_results:
+        print("✅ Daily log: no warnings/spikes this cycle — nothing appended")
         return
 
     rows = [{
@@ -1593,10 +1629,20 @@ def update_daily_log(all_results: list):
         "Depth": f"{r.get('depth_1.25x', '')} / {r.get('depth_1.5x', '')}",
     } for r in warning_results]
 
+    for r in spike_results:
+        vol = r.get("d1_window_volume")
+        vol_str = f"{vol:,.2f}" if isinstance(vol, (int, float)) else str(vol)
+        rows.append({
+            "Timestamp": ts, "Market": r["symbol"], "Status": "SPIKE",
+            "Issues": "D1:HIGH",
+            "Depth": f"{r.get('d1_currency', '')}{vol_str} — {r.get('d1_context', '')}",
+        })
+
     new_df      = pd.DataFrame(rows)
     file_exists = os.path.exists(path)
     new_df.to_csv(path, mode="a", header=not file_exists, index=False)
-    print(f"✅ Daily log appended: {path} (+{len(rows)} warning row(s))")
+    print(f"✅ Daily log appended: {path} (+{len(rows)} row(s): "
+          f"{len(warning_results)} warning, {len(spike_results)} spike)")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
