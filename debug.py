@@ -473,10 +473,13 @@ async def fetch_kline(session: aiohttp.ClientSession, symbol: str) -> list:
     """
     B4 (circuit breaker) feed. Returns 1-minute candles for the last 60 minutes
     by default (a rolling window, not calendar-day-scoped), per kline.candle_minutes
-    / kline.lookback_minutes. Each candle: [timestamp_ms, open, high, low, close,
+    / kline.lookback_minutes. Each candle: [timestamp_ms, open, CLOSE, high, low,
     volume] (strings) — the candle's OWN ts field is milliseconds. Independent of
     D1's fetch_kline_volume below — this window no longer changes when D1's candle
-    size/lookback is tuned.
+    size/lookback is tuned. B4 currently only reads index 1 (open) via
+    check_circuit_breaker_proximity, so the OCHLV vs OHLCV distinction doesn't
+    change its behaviour today — but flagged so future readers don't assume the
+    other conventional ordering.
 
     `limit` is the number of candles, i.e. lookback_minutes / candle_minutes — with
     the default candle_minutes=1 that's numerically equal to lookback_minutes, which
@@ -487,9 +490,16 @@ async def fetch_kline(session: aiohttp.ClientSession, symbol: str) -> list:
     for-a-market) — NOT milliseconds. Sending milliseconds here resolves to a
     timestamp in the far future, so "only return data after that time" matches
     nothing and the API silently returns an empty candle list every cycle.
+
+    Lookback is aligned to candle boundaries — see fetch_kline_volume for
+    the full reasoning; at candle_minutes=1 the impact is tiny but the alignment
+    keeps both k-line calls behaving identically.
     """
     candle_count = max(1, KLINE_LOOKBACK_MINUTES // KLINE_CANDLE_MINUTES)
-    lookback_ts = int(ngt_now().timestamp() - KLINE_LOOKBACK_MINUTES * 60)
+    candle_seconds = KLINE_CANDLE_MINUTES * 60
+    now_s = int(ngt_now().timestamp())
+    current_boundary = (now_s // candle_seconds) * candle_seconds
+    lookback_ts = current_boundary - KLINE_LOOKBACK_MINUTES * 60 - 1
     url = (f"{BASE_API_URL}/markets/{symbol}/k"
            f"?period={KLINE_CANDLE_MINUTES}&limit={candle_count}&timestamp={lookback_ts}")
     payload = await _request_json(session, url)
@@ -501,16 +511,34 @@ async def fetch_kline_volume(session: aiohttp.ClientSession, symbol: str) -> lis
     D1 (volume spike) feed — separate API call from fetch_kline above, on its own
     candle_minutes/lookback_minutes (volume_spike.candle_minutes / .lookback_minutes,
     default 60min candles / 240min lookback). Same payload shape as fetch_kline:
-    [timestamp_ms, open, high, low, close, volume] (strings) per candle.
+    [timestamp_ms, open, close, high, low, volume] (strings) per candle.
 
     Kept as a distinct function (rather than a parameterised fetch_kline) so B4's
     window and D1's window can never accidentally re-couple through a shared call site.
 
     `timestamp` (the query param) is SECONDS since epoch — see fetch_kline's
     docstring above for why this matters.
+
+    LOOKBACK IS ALIGNED TO CANDLE BOUNDARIES. Quidax's candles are bucketed to
+    fixed clock-hour boundaries (a 60-min candle starts at :00, not "60 min ago").
+    A naive lookback of `now - 4h` typically lands mid-hour, so the oldest
+    aligned hour's ts is BEFORE the cutoff and gets excluded by the "only k-line
+    data after this time" filter. Verified empirically: `now - 240*60` with
+    `limit=4` consistently returns 3 candles, not 4 — the window silently
+    shrinks by one candle-period. Aligning the lookback to the last closed
+    candle boundary AND subtracting 1 second (to make the boundary candle
+    inclusive) fixes this so D1 gets its full configured N-candle window
+    reliably. The currently-in-progress candle is still excluded (it hasn't
+    closed yet, so the API has no candle for it) — that's inherent to using
+    closed-candle data and can't be worked around here.
     """
     candle_count = max(1, VOLUME_SPIKE_LOOKBACK_MINUTES // VOLUME_SPIKE_CANDLE_MINUTES)
-    lookback_ts = int(ngt_now().timestamp() - VOLUME_SPIKE_LOOKBACK_MINUTES * 60)
+    candle_seconds = VOLUME_SPIKE_CANDLE_MINUTES * 60
+    now_s = int(ngt_now().timestamp())
+    # Round DOWN to the last closed candle boundary, step back N candles, then
+    # subtract 1 second so the boundary candle at exactly that ts is inclusive.
+    current_boundary = (now_s // candle_seconds) * candle_seconds
+    lookback_ts = current_boundary - VOLUME_SPIKE_LOOKBACK_MINUTES * 60 - 1
     url = (f"{BASE_API_URL}/markets/{symbol}/k"
            f"?period={VOLUME_SPIKE_CANDLE_MINUTES}&limit={candle_count}&timestamp={lookback_ts}")
     payload = await _request_json(session, url)
@@ -1068,7 +1096,15 @@ def compute_window_volume(candles: list, sym: str) -> Optional[dict]:
 
     for candle in candles:
         try:
-            ts, o, h, l, c, volume = candle[:6]
+            # Quidax's actual field order per docs + empirical verification is
+            # [ts, open, CLOSE, high, low, volume] — NOT the more common
+            # [ts, open, high, low, close, volume]. Confirmed by inspecting
+            # candles where high != low: e.g. [ts, 1393.95, 1393.93, 1393.97, 1390, ...]
+            # can only be OCHLV since 1393.97 > 1393.93 rules out that being low.
+            # Prior code unpacked as OHLCV and quoted-volume was silently multiplied
+            # by the candle's LOW instead of CLOSE — off by a small amount per
+            # candle, but wrong.
+            ts, o, c, h, l, volume = candle[:6]
             candle_dt = datetime.fromtimestamp(int(ts) / 1000, tz=NIGERIAN_TZ)
             total_quote_volume += float(volume) * float(c)
             candle_count += 1
