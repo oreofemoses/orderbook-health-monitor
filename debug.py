@@ -1125,6 +1125,16 @@ def get_recent_spikes(window_info: Optional[dict], sym: str,
     D1 — fires when this pair's rolling-window volume is unusually large *for this
     pair*, not just large in absolute terms.
 
+    Returns issue tuples in the SAME shape every other check emits — a list of
+    ("D1", "HIGH", label) — so the rest of the pipeline (dedupe_actionable,
+    classify_tier, should_fire_telegram, the anomaly Telegram message loop,
+    update_daily_log, and the dashboard's issues badge parsing) all treat D1
+    identically to A1/A3/A6/B1/B2/B3/B4. Previously D1 lived in its own parallel
+    `_spikes` list of dicts with a separate Telegram message, separate cooldown-
+    detail branches, a separate daily-log status ("SPIKE") — all removed as of
+    this consolidation. Severity is fixed at "HIGH" per user's chosen policy;
+    unlike B4 there is no CRITICAL escalation for extreme spikes.
+
     Trigger (mode="baseline_relative", the default):
         window_volume >= VOLUME_SPIKE_RATIO * baseline   AND   window_volume >= floor
       where `floor` is the per-pair absolute threshold from get_threshold(). The
@@ -1156,34 +1166,42 @@ def get_recent_spikes(window_info: Optional[dict], sym: str,
     )
 
     if baseline_trusted:
-        fired   = vol >= VOLUME_SPIKE_RATIO * baseline and vol >= threshold
+        fired = vol >= VOLUME_SPIKE_RATIO * baseline and vol >= threshold
         trigger = "baseline_relative"
     else:
         # absolute mode, or baseline-relative still warming up
         if VOLUME_SPIKE_MODE == "baseline_relative" and VOLUME_SPIKE_WARMUP_FALLBACK == "suppress":
             return []                   # deliberate warm-up blind spot
-        fired   = vol >= threshold
+        fired = vol >= threshold
         trigger = "absolute"
 
     if not fired:
         return []
 
-    spike = dict(window_info)
-    spike["trigger"] = trigger
+    # Label mirrors the anomaly-alert phrasing style: a short first-line
+    # summary sufficient to identify the check + the pair-specific context
+    # ("3x baseline over 6 windows, floor $5,000" etc). This is what appears
+    # both in the consolidated Telegram message and in the daily log's Issues
+    # column, so it needs to stand on its own.
+    window_label = window_info.get("window", "")
+    candle_count = window_info.get("candle_count", 0)
     if trigger == "baseline_relative":
         ratio = vol / baseline
-        spike["ref_context"] = (f"≈{ratio:.1f}x the typical {VOLUME_SPIKE_LOOKBACK_MINUTES}min volume "
-                                 f"(≥{VOLUME_SPIKE_RATIO:g}x baseline over {bucket_count} windows, "
-                                 f"floor {cur}{threshold:,.0f})")
+        context = (f"≈{ratio:.1f}x the typical {VOLUME_SPIKE_LOOKBACK_MINUTES}min volume "
+                   f"(≥{VOLUME_SPIKE_RATIO:g}x baseline over {bucket_count} windows, "
+                   f"floor {cur}{threshold:,.0f})")
     elif baseline and bucket_count >= 2:
         ratio = vol / baseline
-        spike["ref_context"] = (f"≈{ratio:.1f}x typical — fired on absolute floor "
-                                 f"{cur}{threshold:,.0f} (baseline warming, "
-                                 f"{bucket_count}/{VOLUME_SPIKE_MIN_BUCKETS} buckets)")
+        context = (f"≈{ratio:.1f}x typical — fired on absolute floor "
+                   f"{cur}{threshold:,.0f} (baseline warming, "
+                   f"{bucket_count}/{VOLUME_SPIKE_MIN_BUCKETS} buckets)")
     else:
-        spike["ref_context"] = (f"fired on absolute floor {cur}{threshold:,.0f} "
-                                 f"— baseline still building, no per-pair context yet")
-    return [spike]
+        context = (f"fired on absolute floor {cur}{threshold:,.0f} "
+                   f"— baseline still building, no per-pair context yet")
+
+    label = (f"Volume spike: {window_label} ({candle_count} candles) — "
+             f"{cur}{vol:,.2f} ({context})")
+    return [("D1", "HIGH", label)]
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1574,35 +1592,20 @@ def save_state(state: dict):
 
 def update_daily_log(all_results: list):
     """
-    Long-format daily log: one ROW per WARNING market per cycle, PLUS one row per
-    D1 spike that actually fires Telegram this cycle. Only markets whose status is
-    "Warning" this cycle, or whose D1 spike passed its cooldown gate this cycle,
-    are appended — healthy pairs and non-firing spikes are skipped, so the file
-    stays small and every row is something worth reviewing. Rows keep PAIRS config
-    order within a cycle, warning rows before spike rows.
-    Columns: Timestamp, Market, Status, Issues, Depth (D1 rows reuse the same 5
-    columns: Status="SPIKE", Issues="D1:HIGH" so the dashboard's existing
-    id:severity badge parsing renders it identically to every other issue badge,
-    and Depth carries the actual quote-volume + ref_context — the human-readable
-    "why" — since that column is free text and isn't split/parsed anywhere).
+    Long-format daily log: one ROW per WARNING market per cycle. Only markets whose
+    status is "Warning" this cycle are appended — healthy ("Checked") pairs and
+    failed-fetch pairs are skipped, so the file stays small and every row is something
+    worth reviewing. Rows keep PAIRS config order within a cycle.
+    Columns: Timestamp, Market, Status, Issues, Depth.
 
-    D1 rows are edge-triggered off telegram_detail's "D1:fired" token — the SAME
-    should_fire_telegram cooldown gate that decides whether D1 actually sends a
-    Telegram message this cycle (see run_cycle) — so a row is logged exactly once
-    per spike occurrence, not once per cycle the underlying condition remains
-    true. Without this, a sustained spike could log up to ~240 rows (the full
-    lookback window) before rolling out of it, defeating the "every row is worth
-    reviewing" goal this log was designed around.
+    D1 spikes appear here automatically as of the D1 consolidation — they emit a
+    standard ("D1", "HIGH", label) issue tuple like every other check, which flips
+    status to "Warning" and populates the Issues column with "D1:HIGH" alongside
+    any A/B/F ids that also fired. The earlier SPIKE-specific status/branch has
+    been removed; there's nothing special to do here for D1 anymore.
 
-    D1 was previously invisible to this log entirely, since it's deliberately
-    kept out of `issues`/status (see process_pair) so a spike doesn't get folded
-    into Tier-2/status machinery — that isolation also meant a D1-only spike (no
-    concurrent A/B-series issue) left no trace anywhere outside health_state.json's
-    rolling baseline (overwritten every ~lookback_minutes) and Telegram itself.
-    This closes that gap without touching D1's isolation from issues/status.
-
-    A cycle with nothing to log appends nothing (and writes no header until the
-    first loggable row of the day creates the file).
+    A cycle with no warnings appends nothing (and writes no header until the first
+    warning of the day creates the file).
     """
     now   = ngt_now()
     today = now.strftime("%Y-%m-%d")
@@ -1610,17 +1613,12 @@ def update_daily_log(all_results: list):
     ts    = now.strftime("%H:%M:%S")
 
     pair_order = {sym: i for i, (sym, _) in enumerate(PAIRS)}
-
     warning_results = [r for r in all_results
                        if str(r.get("status", "")).lower() == "warning"]
     warning_results.sort(key=lambda r: pair_order.get(r["symbol"], 1_000_000))
 
-    spike_results = [r for r in all_results
-                      if "D1:fired" in str(r.get("telegram_detail", "")).split("|")]
-    spike_results.sort(key=lambda r: pair_order.get(r["symbol"], 1_000_000))
-
-    if not warning_results and not spike_results:
-        print("✅ Daily log: no warnings/spikes this cycle — nothing appended")
+    if not warning_results:
+        print("✅ Daily log: no warnings this cycle — nothing appended")
         return
 
     rows = [{
@@ -1629,20 +1627,10 @@ def update_daily_log(all_results: list):
         "Depth": f"{r.get('depth_1.25x', '')} / {r.get('depth_1.5x', '')}",
     } for r in warning_results]
 
-    for r in spike_results:
-        vol = r.get("d1_window_volume")
-        vol_str = f"{vol:,.2f}" if isinstance(vol, (int, float)) else str(vol)
-        rows.append({
-            "Timestamp": ts, "Market": r["symbol"], "Status": "SPIKE",
-            "Issues": "D1:HIGH",
-            "Depth": f"{r.get('d1_currency', '')}{vol_str} — {r.get('d1_context', '')}",
-        })
-
     new_df      = pd.DataFrame(rows)
     file_exists = os.path.exists(path)
     new_df.to_csv(path, mode="a", header=not file_exists, index=False)
-    print(f"✅ Daily log appended: {path} (+{len(rows)} row(s): "
-          f"{len(warning_results)} warning, {len(spike_results)} spike)")
+    print(f"✅ Daily log appended: {path} (+{len(rows)} warning row(s))")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1796,7 +1784,6 @@ async def process_pair(
                     "layer_churn_pct": "N/A", "layer_churn_baseline_pct": "N/A",
                     "telegram_fired": False, "telegram_detail": "",
                     "_actionable": [("A3", "CRITICAL", f"One-sided market — no {side} orders")],
-                    "_spikes": [],
                 }
 
             ask_layers, bid_layers = len(asks_df), len(bids_df)
@@ -1893,25 +1880,50 @@ async def process_pair(
             # ── D1 — Volume spike, with Quidax's own longer-term baseline as context ──
             # kline_vol_raw is D1's own independent fetch (fetch_kline_volume), not
             # the B4 kline_raw above — this is the point of the D1/B4 decoupling.
+            # As of the D1 consolidation, get_recent_spikes returns issue tuples
+            # in the standard ("D1", "HIGH", label) shape, so D1 rides the exact
+            # same pipeline as every other check from here on: dedupe, classify_tier,
+            # should_fire_telegram, the anomaly Telegram loop, and update_daily_log
+            # all treat it identically. No more parallel _spikes list, no more
+            # bespoke tier calc, no more separate spike Telegram message.
             window_info = compute_window_volume(kline_vol_raw, symbol)
             baseline, bucket_count = (None, 0)
             if window_info:
                 baseline, bucket_count = update_volume_baseline(symbol, window_info["quote_volume"], vol_hist_root)
-            spikes = get_recent_spikes(window_info, symbol, baseline, bucket_count)
+            issues += get_recent_spikes(window_info, symbol, baseline, bucket_count)
+
+            # Fold once more after D1 in case a dedupe is ever needed (D1 currently
+            # only emits 0 or 1 tuple, but this keeps the invariant "issues is deduped
+            # before status/tier/firing" holding regardless of future edits).
+            issues = dedupe_actionable(issues)
 
             is_poor = bool(issues)
-            # D1 spikes count as Tier 1 for display purposes
-            has_spikes = bool(spikes)
+            has_d1  = any(i[0] == "D1" for i in issues)  # dashboard flag; d1_spike below
+            tier    = worst_tier(issues)
 
-            # ── D1 dashboard surfacing ──────────────────────────────────────
-            # _spikes is stripped at the CSV boundary (the not-startswith("_")
-            # filter in run_cycle), so the dashboard never sees it. Expose D1 via
-            # plain fields that survive serialization. These are display-only and
-            # deliberately kept OUT of `issues`/`_actionable` so D1 stays isolated
-            # from status/tier/Tier-2-confirmation/B1-detection machinery.
+            # ── D1 dashboard detail fields (informational, not divergent behaviour) ──
+            # These populate the dashboard's dedicated D1 detail row (volume vs. floor,
+            # ref context). They're NOT alert plumbing — they're per-check data fields
+            # analogous to depth_1.25x or current_spread, kept alongside the rest of
+            # the row so the dashboard doesn't have to re-derive them from `issues`.
             d1_threshold = get_threshold(symbol)
-            if has_spikes:
-                d1_context = spikes[0].get("ref_context", "")
+            if has_d1:
+                # Same ref_context text that ends up in the issues label, extracted
+                # for the standalone dashboard field. Cheap to rebuild here rather
+                # than parse it back out of the label string.
+                if VOLUME_SPIKE_MODE == "baseline_relative" and baseline and bucket_count >= VOLUME_SPIKE_MIN_BUCKETS:
+                    ratio = window_info["quote_volume"] / baseline
+                    d1_context = (f"≈{ratio:.1f}x the typical {VOLUME_SPIKE_LOOKBACK_MINUTES}min volume "
+                                  f"(≥{VOLUME_SPIKE_RATIO:g}x baseline over {bucket_count} windows, "
+                                  f"floor {get_currency_symbol(symbol)}{d1_threshold:,.0f})")
+                elif baseline and bucket_count >= 2:
+                    ratio = window_info["quote_volume"] / baseline
+                    d1_context = (f"≈{ratio:.1f}x typical — fired on absolute floor "
+                                  f"{get_currency_symbol(symbol)}{d1_threshold:,.0f} (baseline warming, "
+                                  f"{bucket_count}/{VOLUME_SPIKE_MIN_BUCKETS} buckets)")
+                else:
+                    d1_context = (f"fired on absolute floor {get_currency_symbol(symbol)}{d1_threshold:,.0f} "
+                                  f"— baseline still building, no per-pair context yet")
             elif baseline and bucket_count >= 2 and window_info:
                 ratio_txt = f"≈{window_info['quote_volume'] / baseline:.1f}x typical"
                 if VOLUME_SPIKE_MODE == "baseline_relative" and bucket_count < VOLUME_SPIKE_MIN_BUCKETS:
@@ -1921,14 +1933,6 @@ async def process_pair(
                     d1_context = f"{ratio_txt} ({bucket_count}-window baseline)"
             else:
                 d1_context = "baseline building…"
-            # D1 spike present → at least Tier 1 for display (the stated intent).
-            # With other issues, keep the most urgent of (their tier, 1); with NO
-            # other issues the spike itself is the Tier-1 signal — min(0, 1) would
-            # otherwise yield 0 and hide the pair from the dashboard's default view.
-            if has_spikes:
-                tier = min(worst_tier(issues), 1) if issues else 1
-            else:
-                tier = worst_tier(issues)
 
             print(f"[{symbol}] {'⚠️ ' if is_poor else '✅'} spread={curr_spread:.4f}% mid={mid_price:,.4f} "
                   f"dws={dws:.4f} layers={ask_layers}/{bid_layers} issues={len(issues)}")
@@ -1961,13 +1965,12 @@ async def process_pair(
                 "layer_churn_baseline_pct": round(churn_baseline * 100, 1) if churn_baseline is not None else "N/A",
                 "telegram_fired":  False,   # set in run_cycle's firing loop once the
                 "telegram_detail": "",      # tier/cooldown gate has been evaluated
-                "d1_spike":         has_spikes,
+                "d1_spike":         has_d1,
                 "d1_window_volume": round(window_info["quote_volume"], 2) if window_info else "N/A",
                 "d1_threshold":     d1_threshold if d1_threshold is not None else "N/A",
                 "d1_currency":      get_currency_symbol(symbol),
                 "d1_context":       d1_context,
                 "_actionable":     issues,
-                "_spikes":         spikes,
             }
 
         except Exception as e:
@@ -2268,7 +2271,6 @@ async def run_cycle(shared_state: dict, session: aiohttp.ClientSession, cycle_nu
 
     warnings    = [r for r in results if r["status"] == "Warning"]
     alert_pairs = [r for r in warnings if r["should_alert"]]
-    spike_pairs = [r for r in results if r.get("_spikes")]
 
     elapsed = (ngt_now() - cycle_start).total_seconds()
     print(f"\n⏱  Cycle {cycle_num} complete in {elapsed:.1f}s — "
@@ -2344,9 +2346,9 @@ async def run_cycle(shared_state: dict, session: aiohttp.ClientSession, cycle_nu
     # ONLY after send_telegram confirms delivery, so a failed send is retried next
     # cycle rather than suppressed for the full window.
 
-    tg_pairs = []   # [(result_dict, [telegram_issues], [telegram_spikes])]
+    tg_pairs = []   # [(result_dict, [telegram_issues])]
     for r in results:
-        if not r.get("_actionable") and not r.get("_spikes"):
+        if not r.get("_actionable"):
             continue
 
         # ── Suspended pairs: mute Telegram, keep dashboard visibility ──────────
@@ -2363,7 +2365,6 @@ async def run_cycle(shared_state: dict, session: aiohttp.ClientSession, cycle_nu
             r["telegram_fired"]  = False
             r["suspended_until"] = suspensions.get(r["symbol"].lower())
             detail = [f"{iid}:suspended" for iid, _, _ in r.get("_actionable", [])]
-            detail += ["D1:suspended" for _ in r.get("_spikes", [])]
             r["telegram_detail"] = "|".join(detail)
             print(f"  [{r['symbol']}] suspended — {len(detail)} issue(s) muted, "
                   f"until {r['suspended_until']}")
@@ -2388,75 +2389,48 @@ async def run_cycle(shared_state: dict, session: aiohttp.ClientSession, cycle_nu
                 detail_parts.append(f"{issue_id}:{state}")
                 print(f"  [{r['symbol']}] [{issue_id}] tier={tier} suppressed ({state})")
 
-        # D1 spikes — Tier 1, fire immediately with their own cooldown key
-        spike_tg = []
-        for spike in r.get("_spikes", []):
-            if should_fire_telegram(shared_state, r["symbol"], "D1", "HIGH"):
-                spike_tg.append(spike)
-                detail_parts.append("D1:fired")
-            else:
-                detail_parts.append("D1:cooldown")   # D1 is Tier 1 — only cooldown suppresses it
-                print(f"  [{r['symbol']}] [D1] tier=1 suppressed (cooldown)")
-
         # Surface the firing state to api.py / dashboard.html. telegram_fired is True
-        # when at least one issue/spike passed the tier+cooldown gate this cycle — this
-        # is the field summary_stats counts as "alerts_fired" and the per-market badge
+        # when at least one issue passed the tier+cooldown gate this cycle — this is
+        # the field summary_stats counts as "alerts_fired" and the per-market badge
         # reads. (should_alert alone is True for ANY pair with issues, which is exactly
         # why the dashboard's fired-count was stuck at 0 before this field was emitted.)
         # telegram_detail is the compact breakdown shown when issues did NOT fire,
-        # e.g. "B1:2/3cyc|A4:flag-only".
-        r["telegram_fired"]  = bool(tg_issues or spike_tg)
+        # e.g. "B1:2/3cyc|A4:flag-only|D1:cooldown".
+        r["telegram_fired"]  = bool(tg_issues)
         r["telegram_detail"] = "|".join(detail_parts)
 
-        if tg_issues or spike_tg:
-            tg_pairs.append((r, tg_issues, spike_tg))
+        if tg_issues:
+            tg_pairs.append((r, tg_issues))
 
     if tg_pairs:
-        # Split into anomaly pairs and spike-only pairs for cleaner messages
-        anomaly_pairs  = [(r, issues) for r, issues, spikes in tg_pairs if issues]
-        spike_pairs_tg = [(r, spikes) for r, issues, spikes in tg_pairs if spikes]
-
-        if anomaly_pairs:
-            msg = f"⚠️ <b>Market Anomaly Alert</b>\n<i>{ngt_now().strftime('%Y-%m-%d %H:%M:%S')} (NGT)</i>\n{'─'*3}"
-            for r, issues in anomaly_pairs:
-                ids = ", ".join(alert_id for alert_id, _, _ in issues)
-                msg += f"\n<b>{r['symbol'].upper()}</b> — [{ids}]\n"
-                for alert_id, severity, label in issues:
-                    icon = "🚨" if severity == "CRITICAL" else ("⚠️" if severity == "HIGH" else "ℹ️")
-                    msg += f"    {icon} [{alert_id}] {label}\n"
-                if not r["monitor_only"] and r["target_spread"] != "N/A":
-                    msg += f"  Spread: {r['current_spread']}% (Target: {r['target_spread']}%, Diff: {r['percent_diff']}%)\n"
-                else:
-                    msg += f"  Spread: {r['current_spread']}%\n"
-                msg += f"  Mid: {r['mid_price']}"
-                if r.get("trusted_ref") not in (None, "N/A"):
-                    msg += f"  |  Reference: {r['trusted_ref']}"
-                msg += "\n"
-                msg += f"  Layers — Ask: {r['ask_layers']} | Bid: {r['bid_layers']}\n"
-            # Commit cooldown + counter reset ONLY on a confirmed delivery.
-            if await send_telegram(msg, session):
-                for r, issues in anomaly_pairs:
-                    for issue_id, _, _ in issues:
-                        start_cooldown(shared_state, r["symbol"], issue_id)
-                        reset_consecutive(shared_state, r["symbol"], issue_id)
+        # Single consolidated anomaly message — D1 rides this same path now
+        # (previously a second "Trade Spike Summary" message was sent separately,
+        # so a pair with both A4 and D1 firing produced two Telegrams instead of
+        # one; that divergence is removed).
+        msg = f"⚠️ <b>Market Anomaly Alert</b>\n<i>{ngt_now().strftime('%Y-%m-%d %H:%M:%S')} (NGT)</i>\n{'─'*3}"
+        for r, issues in tg_pairs:
+            ids = ", ".join(alert_id for alert_id, _, _ in issues)
+            msg += f"\n<b>{r['symbol'].upper()}</b> — [{ids}]\n"
+            for alert_id, severity, label in issues:
+                icon = "🚨" if severity == "CRITICAL" else ("⚠️" if severity == "HIGH" else "ℹ️")
+                msg += f"    {icon} [{alert_id}] {label}\n"
+            if not r["monitor_only"] and r["target_spread"] != "N/A":
+                msg += f"  Spread: {r['current_spread']}% (Target: {r['target_spread']}%, Diff: {r['percent_diff']}%)\n"
             else:
-                print("⚠️  Anomaly Telegram send failed — cooldowns NOT committed, will retry next cycle")
-
-        if spike_pairs_tg:
-            msg = f"🚨 <b>Trade Spike Summary</b>\n<i>{ngt_now().strftime('%Y-%m-%d %H:%M:%S')} (NGT)</i>\n{'─'*30}\n"
-            for r, spikes in spike_pairs_tg:
-                msg += f"\n<b>{r['symbol'].upper()}</b>\n"
-                for s in spikes:
-                    msg += f"  {s['window']} ({s['candle_count']} candles) — {s['currency']}{s['quote_volume']:,.2f}"
-                    if s.get("ref_context"):
-                        msg += f"  ({s['ref_context']})"
-                    msg += "\n"
-            # D1 cooldowns committed only on a confirmed delivery.
-            if await send_telegram(msg, session):
-                for r, _ in spike_pairs_tg:
-                    start_cooldown(shared_state, r["symbol"], "D1")
-            else:
-                print("⚠️  Spike Telegram send failed — D1 cooldowns NOT committed, will retry next cycle")
+                msg += f"  Spread: {r['current_spread']}%\n"
+            msg += f"  Mid: {r['mid_price']}"
+            if r.get("trusted_ref") not in (None, "N/A"):
+                msg += f"  |  Reference: {r['trusted_ref']}"
+            msg += "\n"
+            msg += f"  Layers — Ask: {r['ask_layers']} | Bid: {r['bid_layers']}\n"
+        # Commit cooldown + counter reset ONLY on a confirmed delivery.
+        if await send_telegram(msg, session):
+            for r, issues in tg_pairs:
+                for issue_id, _, _ in issues:
+                    start_cooldown(shared_state, r["symbol"], issue_id)
+                    reset_consecutive(shared_state, r["symbol"], issue_id)
+        else:
+            print("⚠️  Anomaly Telegram send failed — cooldowns NOT committed, will retry next cycle")
 
     # ── Persist ──────────────────────────────────────────────────────────────────
     # State is saved AFTER all Telegram sends so that cooldown timestamps written

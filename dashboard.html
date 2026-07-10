@@ -587,7 +587,6 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
 }
 .dl-status.ok     { background: var(--green-bg); color: var(--green-text); }
 .dl-status.warn   { background: var(--amber-bg); color: var(--amber-text); }
-.dl-status.spike  { background: var(--red-bg);   color: var(--red-text); }
 .dl-status.skip   { background: var(--bg-base);  color: var(--text-muted); }
 .dl-issues { font-family: var(--mono); font-size: 11px; color: var(--text-secondary); }
 .dl-depth  { font-family: var(--mono); font-size: 11px; color: var(--text-muted); }
@@ -811,7 +810,6 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
           <select id="dl-filter-status">
             <option value="">All statuses</option>
             <option value="WARNING">Warning only</option>
-            <option value="SPIKE">Spike only</option>
             <option value="CHECKED">Healthy only</option>
             <option value="SKIPPED">Skipped only</option>
           </select>
@@ -1564,12 +1562,12 @@ function renderPairs(pairs) {
     return;
   }
   // Default view: Tier 1 / Tier 2 issues (actionable) plus any pair with a live
-  // D1 volume spike — D1 fires to Telegram immediately and is surfaced via its own
-  // d1_spike field, so it must show here even when the pair has no other issue.
-  // "Show all" reveals Tier 3 flags and healthy pairs too
+  // "Show all" reveals Tier 3 flags and healthy pairs too. D1 spikes emit a
+  // standard issue tuple now (see get_recent_spikes) and flip alert_tier to 1
+  // like every other Tier-1 id, so no separate d1_spike gate is needed here.
   const visible = showAll
     ? pairs
-    : pairs.filter(p => (p.alert_tier === 1 || p.alert_tier === 2 || p.d1_spike));
+    : pairs.filter(p => (p.alert_tier === 1 || p.alert_tier === 2));
   document.getElementById("pairs-count-label").textContent = visible.length + " of " + pairs.length;
   if (!visible.length) {
     container.innerHTML = `<p class="empty-state empty-state-green"><i class="ti ti-circle-check" style="font-size:15px"></i> All ${pairs.length} pairs healthy or flagged only</p>`;
@@ -3158,8 +3156,8 @@ function renderDlPage() {
     const issues = r.Issues    || r.issues   || "";
     const depth  = r.Depth     || r.depth    || "";
 
-    const statusCls = status === "WARNING" ? "warn" : status === "SPIKE" ? "spike" : status === "SKIPPED" ? "skip" : "ok";
-    const statusIcon = status === "WARNING" ? "⚠️" : status === "SPIKE" ? "🚨" : status === "SKIPPED" ? "—" : "✓";
+    const statusCls = status === "WARNING" ? "warn" : status === "SKIPPED" ? "skip" : "ok";
+    const statusIcon = status === "WARNING" ? "⚠️" : status === "SKIPPED" ? "—" : "✓";
 
     // Render issue codes as colour-coded badges
     let issueHtml = "—";
