@@ -256,6 +256,7 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
 .stat-icon.green  { background: var(--green-bg);    color: var(--green); }
 .stat-icon.amber  { background: var(--amber-bg);    color: var(--amber); }
 .stat-icon.red    { background: var(--red-bg);      color: var(--red); }
+.stat-icon.blue   { background: var(--blue-bg);     color: var(--blue); }
 .stat-body { flex: 1; min-width: 0; }
 .stat-label { font-size: 11px; color: var(--text-muted); font-weight: 500; margin-bottom: 4px; text-transform: uppercase; letter-spacing: .04em; }
 .stat-value { font-size: 28px; font-weight: 600; line-height: 1; font-family: var(--mono); }
@@ -263,6 +264,7 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
 .stat-value.green  { color: var(--green); }
 .stat-value.amber  { color: var(--amber); }
 .stat-value.red    { color: var(--red); }
+.stat-value.blue   { color: var(--blue); }
 
 /* ─── Section header ────────────────────────────── */
 .section-header {
@@ -929,6 +931,14 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
             <div class="stat-label">Bid uptime · <span id="uptime-bid-1n-label">1₦</span></div>
             <div class="stat-value red" id="uptime-bid-1n">—</div>
             <div style="font-size:11px;color:var(--text-muted);margin-top:2px" id="uptime-bid-1n-sub">this hour · graphed</div>
+          </div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-icon blue"><i class="ti ti-arrows-horizontal"></i></div>
+          <div class="stat-body">
+            <div class="stat-label">Spread ≤ ₦1 compliance</div>
+            <div class="stat-value blue" id="spread-gap-1n">—</div>
+            <div style="font-size:11px;color:var(--text-muted);margin-top:2px" id="spread-gap-1n-sub">this hour · live only, not graphed</div>
           </div>
         </div>
       </div>
@@ -1757,6 +1767,18 @@ function renderDetailPanel(p) {
       passDesc: "Within normal trading range",
     },
     {
+      id: "G2", name: "Candle Wick / Anomalous Print",
+      desc: "Candle low ≤ 0, or high-low swing ≥ configured threshold, within the same k-line window as B4",
+      // Severity varies per firing — a zero/negative low is always CRITICAL
+      // regardless of swing size, while a swing-only anomaly is HIGH. Read
+      // the actual severity that fired (parsed into activeIssues from
+      // p.issues) rather than a fixed label, since this check — unlike the
+      // others above — can legitimately fire at either level.
+      severity: activeIssues["G2"] === "CRITICAL" ? "CRITICAL" : "HIGH",
+      test: () => activeIssues["G2"] === "CRITICAL" ? "crit" : activeIssues["G2"] ? "warn" : "pass",
+      passDesc: "No zero prints or anomalous wicks in window",
+    },
+    {
       id: "DWS", name: "Dynamic Weighted Spread",
       desc: `DWS: ${fmt(p.dws, 4, "")} ${p.dws_poor ? "⚠ above threshold" : "— within range"}`,
       severity: "HIGH",
@@ -2168,6 +2190,16 @@ async function fetchSlippageData(opts) {
       const windowAvg = computeUptimeWindowAverage(uptimeForChart.filter(p => !p.live));
       renderUptimeWindowAverage(windowAvg, mode, slippageRange);
     }
+
+    // ── Spread-gap compliance — always "this hour, live" ────────────────────
+    // Unlike uptime there's no condensed hourly history behind this metric
+    // (debug.py's condense_bucket deliberately doesn't persist it — see design
+    // note there), so it has nothing to show for 24h/7d/30d/archive views.
+    // It ignores the tab's date-range selector entirely and always reflects
+    // the current in-progress bucket, gated on the CURRENT wall-clock trading
+    // hours (not any sample's timestamp — this is about "right now", not a
+    // historical point).
+    renderSpreadGapStats(computeLiveSpreadGap(raw.samples || []));
   } catch (err) {
     if (!opts.silent) {
       showToast("Could not load slippage data: " + err.message, true);
@@ -2292,6 +2324,38 @@ function computeLiveUptime(samples) {
     askN, bidN,
     count: Math.max(askN, bidN),
   };
+}
+
+// Running spread-gap compliance for the in-progress bucket: fraction of usable
+// samples where best_ask - best_bid <= ₦1. Single-valued (no ask/bid split —
+// spread isn't a per-side quantity the way uptime's walk-price check is).
+// Mirrors computeLiveUptime's dynamic-denominator pattern: only samples
+// carrying the flag count (an empty-book poll never produced one).
+function computeLiveSpreadGap(samples) {
+  let pass = 0, n = 0;
+  samples.forEach(s => {
+    if (s.spread_gap_ok !== undefined && s.spread_gap_ok !== null) { n++; if (s.spread_gap_ok) pass++; }
+  });
+  return { pct: n ? pass / n : null, n };
+}
+
+// No condensed hourly history exists for this metric (see debug.py's
+// condense_bucket), so — unlike renderUptime1nStats / renderUptimeWindowAverage
+// — there's no window-average branch here. This always shows the current
+// in-progress hour, gated on the CURRENT wall-clock trading-hours window
+// (isTradingHourNgt takes a timestamp, so pass it "now").
+function renderSpreadGapStats(live) {
+  const pct = v => v == null ? "—" : (v * 100).toFixed(1) + "%";
+  const set2 = (id, t) => { const el = document.getElementById(id); if (el) el.textContent = t; };
+  if (!isTradingHourNgt(new Date().toISOString())) {
+    set2("spread-gap-1n", "—");
+    set2("spread-gap-1n-sub", "outside trading hours (9am–6pm NGT)");
+    return;
+  }
+  set2("spread-gap-1n", pct(live.pct));
+  set2("spread-gap-1n-sub", live.n
+    ? `${Math.round((live.pct || 0) * live.n)}/${live.n} polls · this hour · live only`
+    : "this hour · live only, not graphed");
 }
 
 // The 1₦ (fixed / graphed) cards show this hour's running fraction so far —

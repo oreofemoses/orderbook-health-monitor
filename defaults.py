@@ -23,6 +23,14 @@ import copy
 # the shared in-band weight.
 UPTIME_FIXED_STEP_NGN = 1.0
 
+# Fixed top-of-book spread ceiling, in naira, for the USDTNGN "spread ≤ ₦1
+# compliance" stat. Hardcoded by explicit design decision, matching
+# UPTIME_FIXED_STEP_NGN's value and its fixed (non-tunable) nature — though
+# unlike UPTIME_FIXED_STEP_NGN this isn't protecting a persisted/graphed
+# series (this metric has no chart or condensed history; it's a live-only
+# stat card computed from the in-progress raw bucket each poll).
+SPREAD_GAP_FIXED_NGN = 1.0
+
 
 # Canonical defaults. Every tunable the dashboard can edit has an entry here;
 # a stored monitor_config.json overrides these per-key via merge_config().

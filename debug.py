@@ -135,7 +135,7 @@ from typing import Optional
 import aiohttp
 import pandas as pd
 
-from defaults import merge_config, default_config, UPTIME_FIXED_STEP_NGN  # single source of truth for config
+from defaults import merge_config, default_config, UPTIME_FIXED_STEP_NGN, SPREAD_GAP_FIXED_NGN  # single source of truth for config
 
 try:
     from dotenv import load_dotenv
@@ -1482,6 +1482,12 @@ def compute_depth_walk_metrics(asks_df: pd.DataFrame, bids_df: pd.DataFrame,
     mid-1₦). uptime_band_pct / uptime_weight_usdt are accepted for call-site
     compatibility but are no longer read by this calculation — the resting-
     depth-in-a-percent-band check they used to configure was replaced.
+
+    Also computes spread-gap compliance: a single boolean (no ask/bid split)
+    on the RAW top-of-book spread — best_ask - best_bid <= SPREAD_GAP_FIXED_NGN
+    (₦1) — via compute_mid_and_spread, the same function A2 uses. Unlike
+    uptime this is never condensed into hourly history; it only ever backs a
+    live "this hour" stat card.
     """
     if asks_df.empty or bids_df.empty:
         return None
@@ -1529,6 +1535,16 @@ def compute_depth_walk_metrics(asks_df: pd.DataFrame, bids_df: pd.DataFrame,
     uptime_ask_ok = weighted_avg_buy  is not None and weighted_avg_buy  <= uptime_ask_target
     uptime_bid_ok = weighted_avg_sell is not None and weighted_avg_sell >= uptime_bid_target
 
+    # ── Spread-gap compliance — raw top-of-book check ────────────────────────
+    # Independent of the walk-based mid/uptime above: reuses compute_mid_and_spread,
+    # the SAME function the main 60s cycle uses for A2's current_spread/spread_abs,
+    # so this is exactly "the number A2 already uses" rather than a re-derived one.
+    # Single boolean per poll (spread has no ask/bid side split the way uptime
+    # does) — passes when best_ask - best_bid <= SPREAD_GAP_FIXED_NGN (₦1, fixed
+    # constant by design decision, not dashboard-configurable — see defaults.py).
+    _, spread_gap_ngn, _ = compute_mid_and_spread(asks_df, bids_df)
+    spread_gap_ok = spread_gap_ngn <= SPREAD_GAP_FIXED_NGN
+
     return {
         "mid":               mid,
         "mid_from_fallback": mid_from_fallback,
@@ -1544,6 +1560,10 @@ def compute_depth_walk_metrics(asks_df: pd.DataFrame, bids_df: pd.DataFrame,
         "uptime_bid_target": uptime_bid_target,
         "uptime_ask_ok":     uptime_ask_ok,
         "uptime_bid_ok":     uptime_bid_ok,
+        # Spread-gap compliance (this sample) — live stat card only, not
+        # condensed/persisted (see condense_bucket — deliberately untouched).
+        "spread_gap_ngn":    spread_gap_ngn,
+        "spread_gap_ok":     spread_gap_ok,
     }
 
 
