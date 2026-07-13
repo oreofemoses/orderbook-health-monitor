@@ -60,6 +60,14 @@ DEFAULT_CONFIG: dict = {
         "candle_minutes":   1,
         "lookback_minutes": 60,
     },
+    "g2": {
+        # G2 — candle wick / anomalous print detector. Reuses B4's own k-line
+        # feed (kline.candle_minutes / kline.lookback_minutes above) — no
+        # separate API call. Scans every candle in the window each cycle:
+        #   low <= 0                    -> CRITICAL, always, regardless of pct
+        #   (high-low)/open*100 >= this -> HIGH
+        "swing_pct": 5.0,
+    },
     "volume_spike": {
         "mode":                 "baseline_relative",  # "baseline_relative" | "absolute"
         "spike_ratio":          3.0,    # D1 fires when window volume >= this * the pair's own baseline

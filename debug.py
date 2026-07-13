@@ -57,6 +57,16 @@ Alert scope (see OHM spec doc for full definitions):
                                  best_ask/best_bid — so a lone dust order at the touch
                                  doesn't distort the reference. Falls back to top-of-book
                                  mid if either side can't supply even the mid walk weight.
+  G2 Candle Wick / Anomalous Print — implemented. Reuses B4's own kline_raw
+                                 (no separate fetch) — scans every candle in
+                                 the rolling window each cycle. low<=0 ->
+                                 CRITICAL (Tier 1) regardless of magnitude;
+                                 otherwise (high-low)/open*100 >= g2.swing_pct
+                                 -> HIGH (Tier 2). Catches single-tick prints
+                                 that revert between two depth polls, which
+                                 neither B4 (reads open only) nor D1 (volume,
+                                 not price) nor live depth polling (60s
+                                 cadence) can see.
 
   C1/C2/C3 (LM bot health) and E3 (bot feed heartbeat) are explicitly OUT OF SCOPE —
   none of these are derivable from public Depth/K-line/reference-ticker data; they
@@ -79,9 +89,9 @@ update_volume_baseline below) — no external volume data is fetched or used any
 
 NOTE on alert tiering & cooldowns:
   Tier 1 — fire on first occurrence, then 15-min cooldown per issue per pair:
-    A1, A3, A6 (CRITICAL/HIGH), B4-CRITICAL, D1, E1, E2
+    A1, A3, A6 (CRITICAL/HIGH), B4-CRITICAL, D1, E1, E2, G2-CRITICAL
   Tier 2 — fire only after N consecutive cycles of the same issue, then 15-min cooldown:
-    A2 (spread + shallow book), B1, B2, B3, B4-HIGH — N = TIER2_CONFIRM_CYCLES (3)
+    A2 (spread + shallow book), B1, B2, B3, B4-HIGH, G2-HIGH — N = TIER2_CONFIRM_CYCLES (3)
   Tier 3 — dashboard flag only, never fire Telegram:
     A4, A5, F1, A6-MEDIUM (monitor-only zero-baseline case — see check_layer_churn_stall)
 
@@ -206,6 +216,7 @@ def apply_config():
     global PRICE_DISCREPANCY_PCT, SOURCE_DIVERGENCE_PCT, SOURCE_DIVERGENCE_OVERRIDES, STALE_REFERENCE_CYCLES
     global STALE_UNCHANGED_CYCLES, STALE_MOVEMENT_EPSILON_PCT
     global CIRCUIT_BREAKER_PCT, CIRCUIT_BREAKER_WARN_RATIO, ARB_GAP_PCT
+    global G2_SWING_PCT
     global LAYER_CHURN_TOP_PCT, LAYER_CHURN_BASELINE_BUCKETS
     global LAYER_CHURN_RATIO_THRESHOLD
     global VOLUME_SPIKE_MODE, VOLUME_SPIKE_RATIO, VOLUME_SPIKE_MIN_BUCKETS, VOLUME_SPIKE_WARMUP_FALLBACK
@@ -269,6 +280,9 @@ def apply_config():
     CIRCUIT_BREAKER_PCT        = float(cfg["pricing"]["circuit_breaker_pct"])
     CIRCUIT_BREAKER_WARN_RATIO = float(cfg["pricing"]["circuit_breaker_warn_ratio"])
     ARB_GAP_PCT                = float(cfg["pricing"]["arb_gap_pct"])
+
+    # G2 — candle wick / anomalous print (reuses B4's kline_raw, no separate fetch)
+    G2_SWING_PCT = float(cfg.get("g2", {}).get("swing_pct", 5.0))
 
     # Layer churn (A6) thresholds
     LAYER_CHURN_TOP_PCT         = float(cfg["layer_churn"]["top_pct"])
@@ -341,6 +355,7 @@ STALE_MOVEMENT_EPSILON_PCT:  float = 0.0
 CIRCUIT_BREAKER_PCT:         float = 10.0
 CIRCUIT_BREAKER_WARN_RATIO:  float = 0.8
 ARB_GAP_PCT:                 float = 0.5
+G2_SWING_PCT:                float = 5.0
 LAYER_CHURN_TOP_PCT:          float = 0.5
 LAYER_CHURN_BASELINE_BUCKETS: int   = 20
 LAYER_CHURN_RATIO_THRESHOLD:  float = 0.2
@@ -1057,7 +1072,10 @@ def check_circuit_breaker_proximity(kline_raw: list, current_mid: float) -> list
     if not kline_raw or not current_mid:
         return []
     try:
-        window_open = float(kline_raw[0][1])  # [ts, open, high, low, close, vol] of oldest candle
+        # Quidax returns candles latest-to-earliest, so the oldest candle in the
+        # window — the true anchor for "moved X% over the last N minutes" — is
+        # the LAST element, not the first. [ts, open, close, high, low, vol].
+        window_open = float(kline_raw[-1][1])
     except (IndexError, ValueError, TypeError):
         return []
     if not window_open:
@@ -1073,6 +1091,63 @@ def check_circuit_breaker_proximity(kline_raw: list, current_mid: float) -> list
             f"Price moved {move_pct:+.2f}% within the {KLINE_LOOKBACK_MINUTES}min window — "
             f"approaching breaker threshold ({CIRCUIT_BREAKER_PCT}%, warn at {warn_level:.1f}%)")]
     return []
+
+
+def check_candle_wicks(kline_raw: list) -> list:
+    """
+    G2 — candle wick / anomalous print. Reuses B4's own kline_raw (1-minute
+    candles, KLINE_LOOKBACK_MINUTES window) — no separate API call.
+
+    Scans EVERY candle currently in the window each cycle (not just the
+    newest), because a wick can happen and fully revert between two 60s
+    depth polls — this is the check that closes that blind spot. A given
+    anomalous candle will naturally re-appear here on every cycle it's
+    still inside the window, which is what drives Tier-2 confirmation and
+    keeps it visible in the daily log for as long as it's relevant — no
+    separate dedup/persistence needed on top of the existing per-(symbol,
+    issue_id) cooldown machinery.
+
+    Per candle [ts, open, close, high, low, vol]:
+      low <= 0                         -> CRITICAL, always fires regardless
+                                           of swing_pct (low is the minimum
+                                           of the whole period, so this also
+                                           catches a zero open/close without
+                                           a separate check).
+      (high - low) / open * 100 >= G2_SWING_PCT -> HIGH, total-range swing.
+
+    Multiple candles firing in one cycle emit multiple ("G2", ...) tuples —
+    dedupe_actionable() (same as A2/B3) folds them into one, keeping the
+    highest severity and merging labels.
+    """
+    if not kline_raw:
+        return []
+
+    issues = []
+    for candle in kline_raw:
+        try:
+            ts, open_, _close, high, low = (
+                int(candle[0]), float(candle[1]), float(candle[2]),
+                float(candle[3]), float(candle[4]),
+            )
+        except (IndexError, ValueError, TypeError):
+            continue  # malformed candle — skip it, don't crash the cycle
+        if open_ <= 0:
+            continue  # can't compute a % swing off a zero/negative open
+
+        candle_time = datetime.fromtimestamp(ts / 1000, tz=timezone.utc).strftime("%H:%M UTC")
+
+        if low <= 0:
+            issues.append(("G2", "CRITICAL",
+                f"Candle at {candle_time} printed low={low:g} — price hit zero"))
+            continue  # zero print already flagged; skip the swing check for this candle
+
+        swing_pct = (high - low) / open_ * 100
+        if swing_pct >= G2_SWING_PCT:
+            issues.append(("G2", "HIGH",
+                f"Candle at {candle_time} swung {swing_pct:.2f}% "
+                f"(high {high:g} / low {low:g}) — at/beyond configured threshold ({G2_SWING_PCT}%)"))
+
+    return issues
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1910,6 +1985,9 @@ async def process_pair(
             # ── B4 — Circuit breaker proximity (reference-free) ─────────────
             issues += check_circuit_breaker_proximity(kline_raw, mid_price)
 
+            # ── G2 — Candle wick / anomalous print (same kline_raw as B4) ───
+            issues += check_candle_wicks(kline_raw)
+
             # ── Fold duplicate ids (A2 x2, B3 x2) BEFORE any tier/firing logic ──
             issues = dedupe_actionable(issues)
 
@@ -2065,6 +2143,8 @@ def classify_tier(issue_id: str, severity: str) -> int:
     if issue_id in _TIER3_IDS:
         return 3
     if issue_id == "B4":
+        return 1 if severity == "CRITICAL" else 2
+    if issue_id == "G2":
         return 1 if severity == "CRITICAL" else 2
     if severity == "MEDIUM" and issue_id in ("A6", "B3"):
         # A6: monitor-only zero-baseline case (see check_layer_churn_stall).
@@ -2325,7 +2405,7 @@ async def run_cycle(shared_state: dict, session: aiohttp.ClientSession, cycle_nu
         if sym not in active_issues_by_sym:
             continue   # pair failed to fetch — don't reset, leave counters as-is
         active = active_issues_by_sym[sym]
-        for tid in _TIER2_IDS | {"B4"}:
+        for tid in _TIER2_IDS | {"B4", "G2"}:
             if tid not in active:
                 reset_consecutive(shared_state, sym, tid)
 
