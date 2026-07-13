@@ -1542,8 +1542,18 @@ def compute_depth_walk_metrics(asks_df: pd.DataFrame, bids_df: pd.DataFrame,
     # Single boolean per poll (spread has no ask/bid side split the way uptime
     # does) — passes when best_ask - best_bid <= SPREAD_GAP_FIXED_NGN (₦1, fixed
     # constant by design decision, not dashboard-configurable — see defaults.py).
-    _, spread_gap_ngn, _ = compute_mid_and_spread(asks_df, bids_df)
-    spread_gap_ok = spread_gap_ngn <= SPREAD_GAP_FIXED_NGN
+    #
+    # compute_mid_and_spread pulls straight off the DataFrame (unlike
+    # walk_depth_weighted, which casts immediately via float(row.price)), so its
+    # return values are numpy.float64, not native float. That's harmless for
+    # arithmetic, but numpy.bool_ (the result of comparing a numpy.float64) is
+    # NOT json-serializable — it would crash save_depth_walk_raw()'s json.dump
+    # outside this function's try/except in depth_walk_loop, silently killing
+    # the whole fire-and-forget task on the very first sample. Cast to native
+    # float/bool explicitly so every field in this dict stays json-safe.
+    _, _spread_gap_raw, _ = compute_mid_and_spread(asks_df, bids_df)
+    spread_gap_ngn = float(_spread_gap_raw)
+    spread_gap_ok  = bool(spread_gap_ngn <= SPREAD_GAP_FIXED_NGN)
 
     return {
         "mid":               mid,
