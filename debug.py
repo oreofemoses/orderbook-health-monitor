@@ -957,6 +957,24 @@ def resolve_trusted_price(asset: str, m_price, m_ok: bool, k_price, k_ok: bool,
     m_pricing_stale = False
     k_pricing_stale = False
 
+    # Effective B2 threshold for THIS pair (override map, falling back to global).
+    # Hoisted above the B3 block so the frozen-but-agreeing gate can reuse it: a
+    # source that's frozen while its peer moves is only a *real* stale feed if the
+    # frozen price has actually drifted from the peer past this same threshold. If
+    # it still agrees, the price is fine — suppress B3 entirely and keep the source
+    # usable. Reused unchanged by the B2 section below.
+    div_thr = divergence_threshold if divergence_threshold is not None else SOURCE_DIVERGENCE_PCT
+
+    def _still_agrees(a, b) -> bool:
+        # True if two current prices are within the pair's B2 threshold of each
+        # other. Same divergence formula B2 uses. A missing side can't agree.
+        if a is None or b is None:
+            return False
+        avg = (a + b) / 2
+        if avg == 0:
+            return a == b
+        return abs(a - b) / avg * 100.0 <= div_thr
+
     # MEXC
     if ref_hist["m_unavail"] >= STALE_REFERENCE_CYCLES and ref_hist["m_ever_ok"]:
         sev = "CRITICAL" if ref_hist["m_unavail"] >= STALE_REFERENCE_CYCLES * 2 else "HIGH"
@@ -966,12 +984,18 @@ def resolve_trusted_price(asset: str, m_price, m_ok: bool, k_price, k_ok: bool,
     elif ref_hist["m_unchanged"] >= STALE_UNCHANGED_CYCLES and ref_hist["m_ever_ok"]:
         peer_moving = k_ok and _series_is_moving(
             ref_hist["kucoin"][-STALE_UNCHANGED_CYCLES:], STALE_MOVEMENT_EPSILON_PCT)
-        if peer_moving:
+        # B2-gate: a frozen source whose (frozen) price still agrees with the
+        # peer's current price isn't a problem yet — its price is still good.
+        # Suppress entirely and keep it usable. Only escalate once the peer has
+        # moved far enough that the frozen price has drifted past the B2 threshold.
+        if peer_moving and not _still_agrees(m_price, k_price):
             sev = "CRITICAL" if ref_hist["m_unchanged"] >= STALE_UNCHANGED_CYCLES * 2 else "HIGH"
             issues.append(("B3", sev,
                 f"MEXC {asset}USDT feed frozen — unchanged for {ref_hist['m_unchanged']} cycles "
-                f"while KuCoin still moving"))
+                f"while KuCoin still moving and price now diverges"))
             m_pricing_stale = True
+        elif peer_moving:
+            pass  # frozen but still agrees with peer — price is fine, stay silent & usable
         else:
             issues.append(("B3", "MEDIUM",
                 f"MEXC {asset}USDT unchanged for {ref_hist['m_unchanged']} cycles "
@@ -986,12 +1010,16 @@ def resolve_trusted_price(asset: str, m_price, m_ok: bool, k_price, k_ok: bool,
     elif ref_hist["k_unchanged"] >= STALE_UNCHANGED_CYCLES and ref_hist["k_ever_ok"]:
         peer_moving = m_ok and _series_is_moving(
             ref_hist["mexc"][-STALE_UNCHANGED_CYCLES:], STALE_MOVEMENT_EPSILON_PCT)
-        if peer_moving:
+        # B2-gate (see MEXC branch above): suppress while the frozen price still
+        # agrees with the moving peer; only fire once it has drifted past B2 thr.
+        if peer_moving and not _still_agrees(k_price, m_price):
             sev = "CRITICAL" if ref_hist["k_unchanged"] >= STALE_UNCHANGED_CYCLES * 2 else "HIGH"
             issues.append(("B3", sev,
                 f"KuCoin {asset}-USDT feed frozen — unchanged for {ref_hist['k_unchanged']} cycles "
-                f"while MEXC still moving"))
+                f"while MEXC still moving and price now diverges"))
             k_pricing_stale = True
+        elif peer_moving:
+            pass  # frozen but still agrees with peer — price is fine, stay silent & usable
         else:
             issues.append(("B3", "MEDIUM",
                 f"KuCoin {asset}-USDT unchanged for {ref_hist['k_unchanged']} cycles "
@@ -1001,8 +1029,7 @@ def resolve_trusted_price(asset: str, m_price, m_ok: bool, k_price, k_ok: bool,
     usable_k = k_price if (k_ok and not k_pricing_stale) else None
 
     # ---- B2: source divergence ----
-    # Effective threshold is per-pair (override map), falling back to the global.
-    div_thr = divergence_threshold if divergence_threshold is not None else SOURCE_DIVERGENCE_PCT
+    # Effective threshold `div_thr` was resolved above (hoisted for the B3 gate).
     trusted = None
     if usable_m is not None and usable_k is not None:
         avg = (usable_m + usable_k) / 2
