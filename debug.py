@@ -216,7 +216,7 @@ def apply_config():
     global PRICE_DISCREPANCY_PCT, SOURCE_DIVERGENCE_PCT, SOURCE_DIVERGENCE_OVERRIDES, STALE_REFERENCE_CYCLES
     global STALE_UNCHANGED_CYCLES, STALE_MOVEMENT_EPSILON_PCT
     global CIRCUIT_BREAKER_PCT, CIRCUIT_BREAKER_WARN_RATIO, ARB_GAP_PCT
-    global G2_SWING_PCT
+    global G2_SWING_PCT, G2_MAX_FIRES
     global LAYER_CHURN_TOP_PCT, LAYER_CHURN_BASELINE_BUCKETS
     global LAYER_CHURN_RATIO_THRESHOLD
     global VOLUME_SPIKE_MODE, VOLUME_SPIKE_RATIO, VOLUME_SPIKE_MIN_BUCKETS, VOLUME_SPIKE_WARMUP_FALLBACK
@@ -283,6 +283,9 @@ def apply_config():
 
     # G2 — candle wick / anomalous print (reuses B4's kline_raw, no separate fetch)
     G2_SWING_PCT = float(cfg.get("g2", {}).get("swing_pct", 5.0))
+    # Cap on Telegram deliveries per G2 episode (see should_fire_telegram / the
+    # episode-fire counter). Floored at 1 so a bad config can never fully mute G2.
+    G2_MAX_FIRES = max(1, int(cfg.get("g2", {}).get("max_fires", 2)))
 
     # Layer churn (A6) thresholds
     LAYER_CHURN_TOP_PCT         = float(cfg["layer_churn"]["top_pct"])
@@ -356,6 +359,7 @@ CIRCUIT_BREAKER_PCT:         float = 10.0
 CIRCUIT_BREAKER_WARN_RATIO:  float = 0.8
 ARB_GAP_PCT:                 float = 0.5
 G2_SWING_PCT:                float = 5.0
+G2_MAX_FIRES:                int   = 2
 LAYER_CHURN_TOP_PCT:          float = 0.5
 LAYER_CHURN_BASELINE_BUCKETS: int   = 20
 LAYER_CHURN_RATIO_THRESHOLD:  float = 0.2
@@ -2313,6 +2317,28 @@ def reset_consecutive(shared_state: dict, symbol: str, issue_id: str):
     _alert_state(shared_state, symbol).pop(f"consec_{issue_id}", None)
 
 
+# ── Episode fire counter (currently only G2) ──────────────────────────────────
+# Counts confirmed Telegram deliveries within a single continuous "episode" of an
+# issue — i.e. an unbroken run of cycles in which the issue keeps re-appearing.
+# Used to cap G2 at G2_MAX_FIRES deliveries per episode (the anomalous candle
+# lingers in the k-line window and re-detects every cycle; without this it would
+# re-fire once per cooldown for the window's whole life). Reset when the issue
+# clears for a cycle (run_cycle's reset loop), which re-arms the next episode.
+def get_episode_fires(shared_state: dict, symbol: str, issue_id: str) -> int:
+    return _alert_state(shared_state, symbol).get(f"fires_{issue_id}", 0)
+
+
+def increment_episode_fires(shared_state: dict, symbol: str, issue_id: str) -> int:
+    state = _alert_state(shared_state, symbol)
+    key   = f"fires_{issue_id}"
+    state[key] = state.get(key, 0) + 1
+    return state[key]
+
+
+def reset_episode_fires(shared_state: dict, symbol: str, issue_id: str):
+    _alert_state(shared_state, symbol).pop(f"fires_{issue_id}", None)
+
+
 def should_fire_telegram(shared_state: dict, symbol: str,
                           issue_id: str, severity: str) -> bool:
     """
@@ -2340,6 +2366,15 @@ def should_fire_telegram(shared_state: dict, symbol: str,
         # may have already resolved and re-triggered within the window, and
         # counting those cycles would make it fire again the instant the cooldown
         # expires.
+        return False
+
+    # Per-episode delivery cap (G2 only). Once an episode has hit its cap, stay
+    # silent for the rest of it regardless of cooldown state or severity — a
+    # HIGH→CRITICAL escalation on the same lingering candle does NOT break through.
+    # Checked before the Tier-2 increment below so a capped issue never bumps its
+    # consecutive counter. The counter is reset (re-arming the next episode) by
+    # run_cycle's reset loop once the issue clears for a cycle.
+    if issue_id == "G2" and get_episode_fires(shared_state, symbol, issue_id) >= G2_MAX_FIRES:
         return False
 
     if tier == 1:
@@ -2478,6 +2513,12 @@ async def run_cycle(shared_state: dict, session: aiohttp.ClientSession, cycle_nu
         for tid in _TIER2_IDS | {"B4", "G2"}:
             if tid not in active:
                 reset_consecutive(shared_state, sym, tid)
+        # G2 episode re-arm: a cycle with no G2 anomaly in the window ends the
+        # episode, so the per-episode delivery cap resets for the next one. Same
+        # fetch-failure guard as above (via the `continue`), so a transient fetch
+        # miss can't spuriously re-arm and let G2 re-blast.
+        if "G2" not in active:
+            reset_episode_fires(shared_state, sym, "G2")
 
     # ── E1: outage detection — Tier 1, uses its own "E1" cooldown key on "_global" ──
     # Cooldown is committed only on a confirmed send (delivery-gated) so a dropped
@@ -2568,6 +2609,10 @@ async def run_cycle(shared_state: dict, session: aiohttp.ClientSession, cycle_nu
                     state = "flag-only"
                 elif is_in_cooldown(shared_state, r["symbol"], issue_id):
                     state = "cooldown"
+                elif (issue_id == "G2"
+                      and get_episode_fires(shared_state, r["symbol"], issue_id) >= G2_MAX_FIRES):
+                    # Episode delivery cap reached — silent until the window clears.
+                    state = "capped"
                 else:
                     consec = get_consecutive(shared_state, r["symbol"], issue_id)
                     need   = TIER2_CONFIRM_CYCLES
@@ -2615,6 +2660,9 @@ async def run_cycle(shared_state: dict, session: aiohttp.ClientSession, cycle_nu
                 for issue_id, _, _ in issues:
                     start_cooldown(shared_state, r["symbol"], issue_id)
                     reset_consecutive(shared_state, r["symbol"], issue_id)
+                    # Count this confirmed delivery toward the per-episode cap.
+                    if issue_id == "G2":
+                        increment_episode_fires(shared_state, r["symbol"], issue_id)
         else:
             print("⚠️  Anomaly Telegram send failed — cooldowns NOT committed, will retry next cycle")
 

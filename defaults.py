@@ -74,6 +74,14 @@ DEFAULT_CONFIG: dict = {
         #   low <= 0                    -> CRITICAL, always, regardless of pct
         #   (high-low)/open*100 >= this -> HIGH
         "swing_pct": 5.0,
+        # Max Telegram deliveries per G2 "episode" for a pair. An anomalous candle
+        # lingers in B4's k-line window (kline.lookback_minutes) for its whole life,
+        # and G2 re-detects it every cycle — so without a cap it re-fires once per
+        # cooldown for the full window. This caps deliveries at N per episode (fire
+        # on detection, then one final fire after the cooldown), after which G2 stays
+        # dashboard-visible but silent until the window clears of anomalies and the
+        # episode re-arms. Counts confirmed deliveries, not attempts.
+        "max_fires": 2,
     },
     "volume_spike": {
         "mode":                 "baseline_relative",  # "baseline_relative" | "absolute"

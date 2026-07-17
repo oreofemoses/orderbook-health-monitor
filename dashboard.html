@@ -1666,6 +1666,7 @@ function formatTelegramDetail(detail) {
     if (state === "fired") return `${id} sent`;
     if (state === "suspended") return `${id} muted`;
     if (state === "cooldown") return `${id} in cooldown`;
+    if (state === "capped") return `${id} episode limit reached`;
     if (state.endsWith("cyc")) return `${id} ${state.replace("cyc", "")} cycles`;
     return `${id} ${state}`;
   }).join(" · ");
