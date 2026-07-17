@@ -24,11 +24,10 @@ import copy
 UPTIME_FIXED_STEP_NGN = 1.0
 
 # Fixed top-of-book spread ceiling, in naira, for the USDTNGN "spread ≤ ₦1
-# compliance" stat. Hardcoded by explicit design decision, matching
-# UPTIME_FIXED_STEP_NGN's value and its fixed (non-tunable) nature — though
-# unlike UPTIME_FIXED_STEP_NGN this isn't protecting a persisted/graphed
-# series (this metric has no chart or condensed history; it's a live-only
-# stat card computed from the in-progress raw bucket each poll).
+# compliance" metric (best_ask - best_bid <= this). Like UPTIME_FIXED_STEP_NGN
+# above, this is deliberately NOT a config knob — it defines a persisted and
+# graphed hourly series, so the stored history must stay comparable over time
+# rather than shifting meaning whenever someone retunes a dashboard field.
 SPREAD_GAP_FIXED_NGN = 1.0
 
 

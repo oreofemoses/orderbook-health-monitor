@@ -1485,9 +1485,9 @@ def compute_depth_walk_metrics(asks_df: pd.DataFrame, bids_df: pd.DataFrame,
 
     Also computes spread-gap compliance: a single boolean (no ask/bid split)
     on the RAW top-of-book spread — best_ask - best_bid <= SPREAD_GAP_FIXED_NGN
-    (₦1) — via compute_mid_and_spread, the same function A2 uses. Unlike
-    uptime this is never condensed into hourly history; it only ever backs a
-    live "this hour" stat card.
+    (₦1) — via compute_mid_and_spread, the same function A2 uses. Condensed
+    into an hourly pass-rate by condense_bucket and persisted/graphed exactly
+    like uptime.
     """
     if asks_df.empty or bids_df.empty:
         return None
@@ -1570,8 +1570,8 @@ def compute_depth_walk_metrics(asks_df: pd.DataFrame, bids_df: pd.DataFrame,
         "uptime_bid_target": uptime_bid_target,
         "uptime_ask_ok":     uptime_ask_ok,
         "uptime_bid_ok":     uptime_bid_ok,
-        # Spread-gap compliance (this sample) — live stat card only, not
-        # condensed/persisted (see condense_bucket — deliberately untouched).
+        # Spread-gap compliance (this sample). Condensed into an hourly
+        # pass-rate by condense_bucket and persisted/graphed like uptime.
         "spread_gap_ngn":    spread_gap_ngn,
         "spread_gap_ok":     spread_gap_ok,
     }
@@ -1628,6 +1628,15 @@ def condense_bucket(bucket_start: str, samples: list) -> Optional[dict]:
                  for s in samples if s.get("uptime_ask_ok") is not None]
     bid_flags = [1.0 if s.get("uptime_bid_ok") else 0.0
                  for s in samples if s.get("uptime_bid_ok") is not None]
+    # Spread-gap compliance = fraction of usable samples this hour whose raw
+    # top-of-book gap (best_ask - best_bid) sat within SPREAD_GAP_FIXED_NGN.
+    # Same dynamic-denominator treatment as the uptime flags above: samples
+    # predating this feature lack the key entirely and are excluded rather than
+    # counted as failures, so the first partial hour isn't diluted by blanks.
+    # Single-sided (no ask/bid split) — a spread is a property of the book as a
+    # whole, so one poll yields exactly one flag.
+    gap_flags = [1.0 if s.get("spread_gap_ok") else 0.0
+                 for s in samples if s.get("spread_gap_ok") is not None]
     return {
         "ts":                bucket_start,
         "buy_slip_pct":      _mean([s.get("buy_slip_pct")  for s in samples]),
@@ -1643,6 +1652,10 @@ def condense_bucket(bucket_start: str, samples: list) -> Optional[dict]:
         "uptime_bid":        (sum(bid_flags) / len(bid_flags)) if bid_flags else None,
         "uptime_ask_samples": len(ask_flags),
         "uptime_bid_samples": len(bid_flags),
+        # Spread ≤ ₦1 compliance, 0..1 decimal (None if no flagged samples).
+        # Persisted and graphed alongside uptime.
+        "spread_gap":         (sum(gap_flags) / len(gap_flags)) if gap_flags else None,
+        "spread_gap_samples": len(gap_flags),
     }
 
 

@@ -938,7 +938,7 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
           <div class="stat-body">
             <div class="stat-label">Spread ≤ ₦1 compliance</div>
             <div class="stat-value blue" id="spread-gap-1n">—</div>
-            <div style="font-size:11px;color:var(--text-muted);margin-top:2px" id="spread-gap-1n-sub">this hour · live only, not graphed</div>
+            <div style="font-size:11px;color:var(--text-muted);margin-top:2px" id="spread-gap-1n-sub">this hour · graphed</div>
           </div>
         </div>
       </div>
@@ -971,7 +971,7 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
       <!-- Liquidity uptime chart -->
       <div class="chart-card">
         <div class="chart-header">
-          <div class="chart-title">USDTNGN — liquidity uptime <span style="font-size:11px;font-weight:500;color:var(--text-muted)">(trading hours 9am–6pm NGT)</span></div>
+          <div class="chart-title">USDTNGN — liquidity uptime &amp; spread compliance <span style="font-size:11px;font-weight:500;color:var(--text-muted)">(trading hours 9am–6pm NGT)</span></div>
           <button class="btn" onclick="downloadUptimeCsv()" title="Download completed hourly buckets in the selected window as CSV (trading hours only)">
             <i class="ti ti-download"></i> Download CSV
           </button>
@@ -979,6 +979,7 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
         <div class="legend">
           <span><span class="swatch" style="background:var(--green)"></span><span id="uptime-legend-ask">Ask uptime %</span></span>
           <span><span class="swatch" style="background:var(--red)"></span><span id="uptime-legend-bid">Bid uptime %</span></span>
+          <span><span class="swatch" style="background:var(--blue)"></span><span>Spread ≤ ₦1 % (dashed)</span></span>
         </div>
         <div style="position:relative;height:280px">
           <canvas id="uptimeChart" role="img" aria-label="USDTNGN liquidity uptime over time"></canvas>
@@ -991,6 +992,11 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
           Each hourly point is the fraction of that hour's usable polls that passed, per side. The highlighted point
           is the current in-progress hour — the same value shown live in the ±<span id="uptime-explainer-pct2">0.071</span>% stat cards above,
           so you don't have to wait for the hour to close. A poll where the book was empty on a side produces no sample and doesn't count either way.
+          <br><br>
+          The dashed blue line is <b>spread ≤ ₦1 compliance</b>: on the same 5-second poll, the raw top-of-book gap
+          (<b>best ask − best bid</b>) scores 1 if it's within <b>₦1</b>, else 0 — and each hourly point is the fraction of that hour's
+          polls that passed. It's a fixed ₦1 (not a dashboard knob) so the stored history stays comparable over time.
+          Hours recorded before this metric shipped show a gap in the line rather than 0%.
         </div>
       </div>
 
@@ -2138,7 +2144,11 @@ async function fetchSlippageData(opts) {
     // point (only fully-completed buckets).
     const uptimePoints = [];
     (hist.points || []).forEach(p => {
-      if (p.uptime_ask == null && p.uptime_bid == null) return; // pre-feature hour
+      // Pre-feature hour — nothing plottable on any series. spread_gap is part
+      // of the guard because hours persisted before IT shipped carry uptime but
+      // no spread_gap, and (in principle) vice versa; a point is only dropped
+      // when every series is blank.
+      if (p.uptime_ask == null && p.uptime_bid == null && p.spread_gap == null) return;
       uptimePoints.push({
         ts: p.ts, ask: p.uptime_ask, bid: p.uptime_bid,
         // Per-side denominators (a poll can score ask but not bid, or vice
@@ -2146,16 +2156,23 @@ async function fetchSlippageData(opts) {
         // predating the per-side split fall back to the combined sample_count.
         ask_samples: p.uptime_ask_samples ?? p.sample_count ?? null,
         bid_samples: p.uptime_bid_samples ?? p.sample_count ?? null,
+        // Spread ≤ ₦1 compliance. Null for hours persisted before this feature
+        // shipped — Chart.js spanGaps + the null-guards below render those as a
+        // gap in the line rather than a misleading 0%.
+        gap: p.spread_gap ?? null,
+        gap_samples: p.spread_gap_samples ?? null,
         sample_count: p.sample_count ?? null, live: false,
       });
     });
 
     const live = computeLiveUptime(raw.samples || []);
+    const liveGap = computeLiveSpreadGap(raw.samples || []);
     if (live.count > 0) {
       uptimePoints.push({
         ts: raw.bucket_start || (raw.samples[raw.samples.length - 1] || {}).ts,
         ask: live.ask, bid: live.bid,
         ask_samples: live.askN, bid_samples: live.bidN,
+        gap: liveGap.pct, gap_samples: liveGap.n,
         sample_count: live.count, live: true,
       });
     }
@@ -2183,23 +2200,20 @@ async function fetchSlippageData(opts) {
     // trading-hours-only buckets in the window — excluding the still-open
     // current hour, so the card always reflects fully-settled data outside
     // the 1h view.
+    // Spread-gap compliance now rides this exact same branch: it's persisted and
+    // graphed like uptime, so 24h/7d/30d/archive show the pooled window average
+    // over completed trading-hours buckets, and the 1h view shows the running
+    // in-progress hour. computeUptimeWindowAverage pools all three series from
+    // the same points, so no separate window pass is needed.
     const isLiveHourView = mode !== "archive" && slippageRange === "1h";
     if (isLiveHourView) {
       renderUptime1nStats(live);
+      renderSpreadGapStats(liveGap);
     } else {
       const windowAvg = computeUptimeWindowAverage(uptimeForChart.filter(p => !p.live));
       renderUptimeWindowAverage(windowAvg, mode, slippageRange);
+      renderSpreadGapWindowAverage(windowAvg, mode, slippageRange);
     }
-
-    // ── Spread-gap compliance — always "this hour, live" ────────────────────
-    // Unlike uptime there's no condensed hourly history behind this metric
-    // (debug.py's condense_bucket deliberately doesn't persist it — see design
-    // note there), so it has nothing to show for 24h/7d/30d/archive views.
-    // It ignores the tab's date-range selector entirely and always reflects
-    // the current in-progress bucket, gated on the CURRENT wall-clock trading
-    // hours (not any sample's timestamp — this is about "right now", not a
-    // historical point).
-    renderSpreadGapStats(computeLiveSpreadGap(raw.samples || []));
   } catch (err) {
     if (!opts.silent) {
       showToast("Could not load slippage data: " + err.message, true);
@@ -2285,13 +2299,18 @@ function downloadUptimeCsv() {
     return s.includes(",") || s.includes('"') || s.includes("\n")
       ? `"${s.replace(/"/g, '""')}"` : s;
   };
-  const header = ["timestamp", "ask_uptime_pct", "bid_uptime_pct", "sample_count"];
+  const header = ["timestamp", "ask_uptime_pct", "bid_uptime_pct",
+                  "spread_lte_1ngn_pct", "spread_samples", "sample_count"];
   const lines  = [header.join(",")];
   rows.forEach(r => {
     lines.push([
       esc(fmtTs(r.ts)),
       esc(pct(r.ask)),
       esc(pct(r.bid)),
+      // Blank (not 0) for hours predating this metric — an empty cell reads as
+      // "not recorded", whereas 0 would read as "spread was never within ₦1".
+      esc(pct(r.gap)),
+      esc(r.gap_samples ?? ""),
       esc(r.sample_count ?? ""),
     ].join(","));
   });
@@ -2339,23 +2358,17 @@ function computeLiveSpreadGap(samples) {
   return { pct: n ? pass / n : null, n };
 }
 
-// No condensed hourly history exists for this metric (see debug.py's
-// condense_bucket), so — unlike renderUptime1nStats / renderUptimeWindowAverage
-// — there's no window-average branch here. This always shows the current
-// in-progress hour, gated on the CURRENT wall-clock trading-hours window
-// (isTradingHourNgt takes a timestamp, so pass it "now").
+// Live "this hour" counterpart to renderSpreadGapWindowAverage — used on the 1h
+// view only. Like renderUptime1nStats, this is NOT trading-hours gated: the gate
+// applies to the persisted/graphed series (and the window averages drawn from
+// it), never to a live running figure for the hour you're currently in.
 function renderSpreadGapStats(live) {
   const pct = v => v == null ? "—" : (v * 100).toFixed(1) + "%";
   const set2 = (id, t) => { const el = document.getElementById(id); if (el) el.textContent = t; };
-  if (!isTradingHourNgt(new Date().toISOString())) {
-    set2("spread-gap-1n", "—");
-    set2("spread-gap-1n-sub", "outside trading hours (9am–6pm NGT)");
-    return;
-  }
   set2("spread-gap-1n", pct(live.pct));
   set2("spread-gap-1n-sub", live.n
-    ? `${Math.round((live.pct || 0) * live.n)}/${live.n} polls · this hour · live only`
-    : "this hour · live only, not graphed");
+    ? `${Math.round((live.pct || 0) * live.n)}/${live.n} polls · this hour`
+    : "this hour · graphed");
 }
 
 // The 1₦ (fixed / graphed) cards show this hour's running fraction so far —
@@ -2377,16 +2390,22 @@ function renderUptime1nStats(live) {
 // trading-hours-filtered, and have the live in-progress hour excluded by the
 // caller (see the isLiveHourView branch in fetchSlippageData).
 function computeUptimeWindowAverage(points) {
-  let askPass = 0, askN = 0, bidPass = 0, bidN = 0, hours = 0;
+  let askPass = 0, askN = 0, bidPass = 0, bidN = 0, gapPass = 0, gapN = 0, hours = 0;
   points.forEach(p => {
     if (p.ask != null && p.ask_samples) { askPass += p.ask * p.ask_samples; askN += p.ask_samples; }
     if (p.bid != null && p.bid_samples) { bidPass += p.bid * p.bid_samples; bidN += p.bid_samples; }
-    if (p.ask != null || p.bid != null) hours++;
+    // Sample-weighted, not a mean-of-means: a partial hour with 40 polls must
+    // not carry the same weight as a full one with 720. Same treatment the two
+    // uptime series get above. Hours predating the spread-gap feature have
+    // gap == null and simply contribute nothing.
+    if (p.gap != null && p.gap_samples) { gapPass += p.gap * p.gap_samples; gapN += p.gap_samples; }
+    if (p.ask != null || p.bid != null || p.gap != null) hours++;
   });
   return {
     ask: askN ? askPass / askN : null,
     bid: bidN ? bidPass / bidN : null,
-    askN, bidN, hours,
+    gap: gapN ? gapPass / gapN : null,
+    askN, bidN, gapN, hours,
   };
 }
 
@@ -2408,6 +2427,22 @@ function renderUptimeWindowAverage(avg, mode, range) {
   set2("uptime-bid-1n-sub", avg.bidN
     ? `${Math.round(avg.bid * avg.bidN)}/${avg.bidN} polls · ${label} · trading hrs`
     : `${label} · no completed hours yet`);
+}
+
+// Window-average counterpart to renderSpreadGapStats, for 24h/7d/30d/archive.
+// Reads the pooled `gap` off the same windowAvg object the uptime cards use.
+// Note the sub-label distinguishes "no completed hours yet" (nothing in the
+// window at all) from a window that has uptime history but no spread-gap
+// history — the latter is expected for any window reaching back before this
+// feature shipped, and shouldn't read as a bug.
+function renderSpreadGapWindowAverage(avg, mode, range) {
+  const pct = v => v == null ? "—" : (v * 100).toFixed(1) + "%";
+  const set2 = (id, t) => { const el = document.getElementById(id); if (el) el.textContent = t; };
+  const label = uptimeWindowLabel(mode, range);
+  set2("spread-gap-1n", pct(avg.gap));
+  set2("spread-gap-1n-sub", avg.gapN
+    ? `${Math.round(avg.gap * avg.gapN)}/${avg.gapN} polls · ${label} · trading hrs`
+    : (avg.hours ? `${label} · no spread data in window yet` : `${label} · no completed hours yet`));
 }
 
 function _mean(vals) {
@@ -2572,6 +2607,12 @@ function initSlippageCharts() {
         tension: .2, pointRadius: 0, pointHoverRadius: 4, borderWidth: 2, fill: true, spanGaps: true },
       { label: "Bid uptime %", data: [], borderColor: "#ef4444", backgroundColor: "rgba(239,68,68,.10)",
         tension: .2, pointRadius: 0, pointHoverRadius: 4, borderWidth: 2, fill: true, spanGaps: true },
+      // Spread ≤ ₦1 compliance. Same 0–100% axis as the two uptime series, but
+      // unfilled — three stacked translucent fills turn the plot to mud, and
+      // this is a distinct metric rather than another side of the same one.
+      { label: "Spread ≤ ₦1 %", data: [], borderColor: "#3b82f6", backgroundColor: "rgba(59,130,246,.10)",
+        tension: .2, pointRadius: 0, pointHoverRadius: 4, borderWidth: 2, fill: false, spanGaps: true,
+        borderDash: [5, 3] },
     ]},
     options: {
       responsive: true, maintainAspectRatio: false,
@@ -2626,10 +2667,13 @@ function renderUptimeChart(points) {
   uptimeChart.data.labels = labels;
   uptimeChart.data.datasets[0].data = points.map(p => p.ask != null ? p.ask * 100 : null);
   uptimeChart.data.datasets[1].data = points.map(p => p.bid != null ? p.bid * 100 : null);
+  uptimeChart.data.datasets[2].data = points.map(p => p.gap != null ? p.gap * 100 : null);
   uptimeChart.data.datasets[0].pointRadius = radii;
   uptimeChart.data.datasets[1].pointRadius = radii;
+  uptimeChart.data.datasets[2].pointRadius = radii;
   uptimeChart.data.datasets[0].pointStyle = styles;
   uptimeChart.data.datasets[1].pointStyle = styles;
+  uptimeChart.data.datasets[2].pointStyle = styles;
   uptimeChart.update();
 }
 
