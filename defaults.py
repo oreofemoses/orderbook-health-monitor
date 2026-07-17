@@ -99,6 +99,14 @@ DEFAULT_CONFIG: dict = {
         # lookback_minutes. Default 6 * 240min = 24h, matching the old
         # 24 * 60min = 24h span from before candle/lookback were split out.
         "baseline_buckets": 6,
+        # Max Telegram deliveries per D1 "episode" for a pair. A volume spike stays
+        # elevated in the rolling window (lookback_minutes — 4h at the defaults) and
+        # D1 re-detects it every cycle, so without a cap it re-fires once per cooldown
+        # for the window's whole life. Caps deliveries at N per episode (fire on
+        # detection, then one final fire after the cooldown), after which D1 stays
+        # dashboard-visible but silent until the window clears and the episode
+        # re-arms. Counts confirmed deliveries, not attempts. Mirrors g2.max_fires.
+        "max_fires": 2,
     },
     "layer_churn": {
         "top_pct":          0.5,  # A6 — fraction of each side's layers treated as "near-touch"

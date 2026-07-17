@@ -219,7 +219,7 @@ def apply_config():
     global G2_SWING_PCT, G2_MAX_FIRES
     global LAYER_CHURN_TOP_PCT, LAYER_CHURN_BASELINE_BUCKETS
     global LAYER_CHURN_RATIO_THRESHOLD
-    global VOLUME_SPIKE_MODE, VOLUME_SPIKE_RATIO, VOLUME_SPIKE_MIN_BUCKETS, VOLUME_SPIKE_WARMUP_FALLBACK
+    global VOLUME_SPIKE_MODE, VOLUME_SPIKE_RATIO, VOLUME_SPIKE_MIN_BUCKETS, VOLUME_SPIKE_WARMUP_FALLBACK, D1_MAX_FIRES
     global VOLUME_SPIKE_CANDLE_MINUTES, VOLUME_SPIKE_LOOKBACK_MINUTES, VOLUME_BASELINE_BUCKETS
     global DEPTH_WALK_WEIGHT_USDT, DEPTH_WALK_POLL_INTERVAL_SECONDS
     global DEPTH_WALK_RAW_RETENTION_SECONDS, DEPTH_WALK_CONDENSED_RETENTION_DAYS
@@ -299,6 +299,9 @@ def apply_config():
     VOLUME_SPIKE_RATIO           = float(vs.get("spike_ratio", 3.0))
     VOLUME_SPIKE_MIN_BUCKETS     = int(vs.get("min_baseline_buckets", 4))
     VOLUME_SPIKE_WARMUP_FALLBACK = str(vs.get("warmup_fallback", "absolute"))
+    # Per-episode Telegram delivery cap for D1 (see should_fire_telegram / the
+    # episode-fire counter). Floored at 1 so a bad config can't fully mute D1.
+    D1_MAX_FIRES                 = max(1, int(vs.get("max_fires", 2)))
     # D1's own k-line window — independent of kline.* above (B4-only). .get
     # fallbacks reproduce the pre-split behaviour (1min candles/60min lookback)
     # for any config saved before this split existed.
@@ -367,6 +370,7 @@ VOLUME_SPIKE_MODE:            str   = "baseline_relative"
 VOLUME_SPIKE_RATIO:           float = 3.0
 VOLUME_SPIKE_MIN_BUCKETS:     int   = 4
 VOLUME_SPIKE_WARMUP_FALLBACK: str   = "absolute"
+D1_MAX_FIRES:                int   = 2
 VOLUME_SPIKE_CANDLE_MINUTES:  int   = 1
 VOLUME_SPIKE_LOOKBACK_MINUTES: int  = 60
 VOLUME_BASELINE_BUCKETS:      int   = 24
@@ -2180,6 +2184,25 @@ _TIER1_IDS = {"A1", "A3", "A6", "D1"}    # fire immediately on first occurrence
 _TIER2_IDS = {"A2", "B1", "B2", "B3"}    # require consecutive cycles
 _TIER3_IDS = {"A4", "A5", "F1"}          # dashboard flag only — never Telegram
 
+# ── Per-episode delivery caps ─────────────────────────────────────────────────
+# Issues whose anomaly lingers in a rolling window and re-detects every cycle, so
+# they'd re-fire once per cooldown for the window's whole life. For these we cap
+# Telegram deliveries per "episode" (an unbroken run of cycles in which the issue
+# keeps re-appearing): fire on detection, one final fire after the cooldown, then
+# silent-but-dashboard-visible until the window clears and the episode re-arms.
+# The cap value is a per-issue config global; _episode_fire_cap() maps id → value.
+# Both G2 (k-line wick window) and D1 (volume window) qualify.
+_EPISODE_CAPPED_IDS = {"G2", "D1"}
+
+
+def _episode_fire_cap(issue_id: str) -> Optional[int]:
+    """Per-episode Telegram delivery cap for `issue_id`, or None if uncapped."""
+    if issue_id == "G2":
+        return G2_MAX_FIRES
+    if issue_id == "D1":
+        return D1_MAX_FIRES
+    return None
+
 ALERT_COOLDOWN_MINUTES  = 15
 TIER2_CONFIRM_CYCLES    = 3
 
@@ -2317,13 +2340,13 @@ def reset_consecutive(shared_state: dict, symbol: str, issue_id: str):
     _alert_state(shared_state, symbol).pop(f"consec_{issue_id}", None)
 
 
-# ── Episode fire counter (currently only G2) ──────────────────────────────────
+# ── Episode fire counter (G2, D1 — see _EPISODE_CAPPED_IDS) ───────────────────
 # Counts confirmed Telegram deliveries within a single continuous "episode" of an
 # issue — i.e. an unbroken run of cycles in which the issue keeps re-appearing.
-# Used to cap G2 at G2_MAX_FIRES deliveries per episode (the anomalous candle
-# lingers in the k-line window and re-detects every cycle; without this it would
-# re-fire once per cooldown for the window's whole life). Reset when the issue
-# clears for a cycle (run_cycle's reset loop), which re-arms the next episode.
+# Used to cap G2/D1 at their configured per-episode limit (the anomaly lingers in
+# a rolling window and re-detects every cycle; without this it would re-fire once
+# per cooldown for the window's whole life). Reset when the issue clears for a
+# cycle (run_cycle's reset loop), which re-arms the next episode.
 def get_episode_fires(shared_state: dict, symbol: str, issue_id: str) -> int:
     return _alert_state(shared_state, symbol).get(f"fires_{issue_id}", 0)
 
@@ -2368,13 +2391,14 @@ def should_fire_telegram(shared_state: dict, symbol: str,
         # expires.
         return False
 
-    # Per-episode delivery cap (G2 only). Once an episode has hit its cap, stay
-    # silent for the rest of it regardless of cooldown state or severity — a
-    # HIGH→CRITICAL escalation on the same lingering candle does NOT break through.
-    # Checked before the Tier-2 increment below so a capped issue never bumps its
-    # consecutive counter. The counter is reset (re-arming the next episode) by
-    # run_cycle's reset loop once the issue clears for a cycle.
-    if issue_id == "G2" and get_episode_fires(shared_state, symbol, issue_id) >= G2_MAX_FIRES:
+    # Per-episode delivery cap (G2, D1 — see _EPISODE_CAPPED_IDS). Once an episode
+    # has hit its cap, stay silent for the rest of it regardless of cooldown state
+    # or severity — e.g. a HIGH→CRITICAL escalation on the same lingering G2 candle
+    # does NOT break through. Checked before the Tier-2 increment below so a capped
+    # issue never bumps its consecutive counter. The counter is reset (re-arming the
+    # next episode) by run_cycle's reset loop once the issue clears for a cycle.
+    cap = _episode_fire_cap(issue_id)
+    if cap is not None and get_episode_fires(shared_state, symbol, issue_id) >= cap:
         return False
 
     if tier == 1:
@@ -2513,12 +2537,13 @@ async def run_cycle(shared_state: dict, session: aiohttp.ClientSession, cycle_nu
         for tid in _TIER2_IDS | {"B4", "G2"}:
             if tid not in active:
                 reset_consecutive(shared_state, sym, tid)
-        # G2 episode re-arm: a cycle with no G2 anomaly in the window ends the
-        # episode, so the per-episode delivery cap resets for the next one. Same
+        # Episode re-arm (G2, D1): a cycle with no such anomaly in the window ends
+        # the episode, so its per-episode delivery cap resets for the next one. Same
         # fetch-failure guard as above (via the `continue`), so a transient fetch
-        # miss can't spuriously re-arm and let G2 re-blast.
-        if "G2" not in active:
-            reset_episode_fires(shared_state, sym, "G2")
+        # miss can't spuriously re-arm and let a capped issue re-blast.
+        for tid in _EPISODE_CAPPED_IDS:
+            if tid not in active:
+                reset_episode_fires(shared_state, sym, tid)
 
     # ── E1: outage detection — Tier 1, uses its own "E1" cooldown key on "_global" ──
     # Cooldown is committed only on a confirmed send (delivery-gated) so a dropped
@@ -2609,8 +2634,9 @@ async def run_cycle(shared_state: dict, session: aiohttp.ClientSession, cycle_nu
                     state = "flag-only"
                 elif is_in_cooldown(shared_state, r["symbol"], issue_id):
                     state = "cooldown"
-                elif (issue_id == "G2"
-                      and get_episode_fires(shared_state, r["symbol"], issue_id) >= G2_MAX_FIRES):
+                elif (issue_id in _EPISODE_CAPPED_IDS
+                      and get_episode_fires(shared_state, r["symbol"], issue_id)
+                          >= _episode_fire_cap(issue_id)):
                     # Episode delivery cap reached — silent until the window clears.
                     state = "capped"
                 else:
@@ -2660,8 +2686,9 @@ async def run_cycle(shared_state: dict, session: aiohttp.ClientSession, cycle_nu
                 for issue_id, _, _ in issues:
                     start_cooldown(shared_state, r["symbol"], issue_id)
                     reset_consecutive(shared_state, r["symbol"], issue_id)
-                    # Count this confirmed delivery toward the per-episode cap.
-                    if issue_id == "G2":
+                    # Count this confirmed delivery toward the per-episode cap
+                    # (G2, D1 — no-op for uncapped issues).
+                    if issue_id in _EPISODE_CAPPED_IDS:
                         increment_episode_fires(shared_state, r["symbol"], issue_id)
         else:
             print("⚠️  Anomaly Telegram send failed — cooldowns NOT committed, will retry next cycle")
