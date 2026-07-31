@@ -971,7 +971,7 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
       <!-- Liquidity uptime chart -->
       <div class="chart-card">
         <div class="chart-header">
-          <div class="chart-title">USDTNGN — liquidity uptime &amp; spread compliance <span style="font-size:11px;font-weight:500;color:var(--text-muted)">(trading hours 9am–6pm NGT)</span></div>
+          <div class="chart-title">USDTNGN — liquidity uptime &amp; spread compliance <span style="font-size:11px;font-weight:500;color:var(--text-muted)">(trading hours Mon–Fri 9am–6pm NGT)</span></div>
           <button class="btn" onclick="downloadUptimeCsv()" title="Download completed hourly buckets in the selected window as CSV (trading hours only)">
             <i class="ti ti-download"></i> Download CSV
           </button>
@@ -2138,11 +2138,12 @@ async function fetchSlippageData(opts) {
     // figure also drives the "this hour" stat cards.
     //
     // Trading-hours filter: uptime is only meaningful during trading hours
-    // (9am–6pm NGT). We apply it as a permanent filter on the plotted series
-    // — bucket_start hour in [9, 18) NGT — so off-hours points never render
-    // regardless of the selected window. The CSV download uses the same
-    // trading-hours filter and additionally excludes the live in-progress
-    // point (only fully-completed buckets).
+    // (Mon–Fri 9am–6pm NGT). We apply it as a permanent filter on the plotted
+    // series — bucket_start hour in [9, 18) NGT and weekday Mon–Fri — so
+    // off-hours and weekend points never render regardless of the selected
+    // window. The CSV download uses the same trading-hours filter and
+    // additionally excludes the live in-progress point (only fully-completed
+    // buckets).
     const uptimePoints = [];
     (hist.points || []).forEach(p => {
       // Pre-feature hour — nothing plottable on any series. spread_gap is part
@@ -2225,19 +2226,31 @@ async function fetchSlippageData(opts) {
 
 // ── Trading-hours + CSV export helpers ─────────────────────────────────────
 // Uptime is only plotted / exported for hourly buckets whose bucket_start
-// falls within trading hours (9am–6pm NGT). Filter is on bucket_start hour
-// as agreed — buckets are labelled by start time, so the 9:00–10:00 bucket
-// counts, up to and including the 17:00–18:00 bucket. formatToParts avoids
-// per-locale quirks around "24" vs "00" for midnight in some ICU builds.
+// falls within trading hours (Mon–Fri 9am–6pm NGT). Filter is on bucket_start
+// hour as agreed — buckets are labelled by start time, so the 9:00–10:00
+// bucket counts, up to and including the 17:00–18:00 bucket. Sat/Sun buckets
+// are excluded entirely regardless of hour. formatToParts avoids per-locale
+// quirks around "24" vs "00" for midnight in some ICU builds.
 function isTradingHourNgt(tsString) {
   try {
     const parts = new Intl.DateTimeFormat("en-GB", {
       timeZone: "Africa/Lagos",
       hour: "numeric",
+      weekday: "short",
       hour12: false,
     }).formatToParts(new Date(tsString));
     const hourPart = parts.find(p => p.type === "hour");
-    if (!hourPart) return false;
+    const weekdayPart = parts.find(p => p.type === "weekday");
+    if (!hourPart || !weekdayPart) return false;
+    // Weekend gate — Sat/Sun by NGT calendar date, same tz basis as the hour
+    // check below. Applied here (not as a separate filter step) so every
+    // caller of isTradingHourNgt — chart, window averages, CSV export —
+    // picks it up automatically, same as the existing hour gate. The live
+    // "this hour" stat cards deliberately do NOT go through this function
+    // (they read straight off computeLiveUptime/computeLiveSpreadGap), so
+    // they keep showing on weekends by design — only the persisted/graphed
+    // series and its derived averages are weekend-gated.
+    if (weekdayPart.value === "Sat" || weekdayPart.value === "Sun") return false;
     let hour = parseInt(hourPart.value, 10);
     if (hour === 24) hour = 0;   // midnight edge case in some locales
     return hour >= 9 && hour < 18;
