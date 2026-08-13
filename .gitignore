@@ -1,13 +1,13 @@
-<<<<<<< HEAD
+# Secrets — Telegram bot token / chat ids are read from here (see debug.py)
 .env
+
+# Python
 __pycache__/
 *.pyc
-=======
 venv/
+
+# Runtime state written by the monitor and API: latest.csv, daily_log_*.csv,
+# health_state.json, monitor_config.json, suspensions.json, the depth-walk
+# slippage files and usdtngn_volume_hourly.json. In production this lives on the
+# Fly volume at /app/data; locally it lands here.
 data/
-__pycache__/
-*.pyc
-.env
-*.csv
-*.json
->>>>>>> 2548ad4ca4a5f0786f75e1c0fe9662135c71e73b

@@ -38,7 +38,27 @@ To watch it live, just keep your monitor running alongside uvicorn.
 | `GET /api/history` | today's daily_log CSV as JSON |
 | `GET /api/state` | health_state.json with anomaly age in minutes |
 | `GET /api/pairs` | list of known pair symbols |
+| `GET /api/usdtngn-volume` | USDTNGN hourly base volume (USDT); `?start=&end=` (ISO date or datetime, NGT) |
+| `GET /api/usdtngn-volume/rolling` | USDTNGN trailing-window volume, `?minutes=` (default 60) |
 | `GET /health` | liveness check |
+
+### USDTNGN volume
+
+Shown on the Depth-walk slippage tab: a trailing-60m stat card plus an hourly bar
+chart. Volume is **base** volume (USDT traded) — not the naira quote volume the D1
+spike alert thresholds on.
+
+Two things about the k-line API shape this feature:
+
+- **No in-progress candle.** An hourly candle only appears once the hour closes,
+  so the chart's newest bar is the last *completed* hour. The trailing-60m card
+  covers "now" instead, rebuilt from 1-minute candles (so it lags by up to a minute).
+- **300 candles per response, anchored at the newest.** The documented limit of
+  10000 is not honoured — the server clamps to 300 at every period, and there's no
+  way to page backwards. A live fetch therefore reaches only ~12.5 days at hourly
+  resolution. `debug.py`'s `kline_volume_loop` writes each closed hour to
+  `data/usdtngn_volume_hourly.json`, and beyond that wall the archive is the **only**
+  source — so 30-day views fill in over time rather than being complete immediately.
 
 ## Production (VPS)
 

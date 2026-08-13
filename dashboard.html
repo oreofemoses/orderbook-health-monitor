@@ -941,6 +941,14 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
             <div style="font-size:11px;color:var(--text-muted);margin-top:2px" id="spread-gap-1n-sub">this hour · graphed</div>
           </div>
         </div>
+        <div class="stat-card">
+          <div class="stat-icon purple"><i class="ti ti-chart-bar"></i></div>
+          <div class="stat-body">
+            <div class="stat-label" id="vol-rolling-label">Volume · trailing 60m</div>
+            <div class="stat-value purple" id="vol-rolling">—</div>
+            <div style="font-size:11px;color:var(--text-muted);margin-top:2px" id="vol-rolling-sub">USDT traded</div>
+          </div>
+        </div>
       </div>
       </div>
 
@@ -997,6 +1005,45 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
           (<b>best ask − best bid</b>) scores 1 if it's within <b>₦1</b>, else 0 — and each hourly point is the fraction of that hour's
           polls that passed. It's a fixed ₦1 (not a dashboard knob) so the stored history stays comparable over time.
           Hours recorded before this metric shipped show a gap in the line rather than 0%.
+        </div>
+      </div>
+
+      <!-- Hourly traded volume -->
+      <div class="chart-card">
+        <div class="chart-header">
+          <div class="chart-title">USDTNGN — hourly traded volume <span style="font-size:11px;font-weight:500;color:var(--text-muted)">(USDT, all hours)</span></div>
+          <button class="btn" onclick="downloadVolumeCsv()" title="Download the hourly volume series for the selected window as CSV">
+            <i class="ti ti-download"></i> Download CSV
+          </button>
+        </div>
+        <div class="legend">
+          <span><span class="swatch" style="background:var(--accent)"></span><span id="vol-legend-label">Volume per hour (USDT)</span></span>
+          <span id="vol-archive-note" style="display:none;color:var(--text-muted)"></span>
+        </div>
+        <div style="position:relative;height:280px">
+          <canvas id="volumeChart" role="img" aria-label="USDTNGN hourly traded volume"></canvas>
+        </div>
+        <div style="font-size:11px;color:var(--text-muted);margin-top:10px;line-height:1.5">
+          Each bar is one <b>closed</b> NGT hour of <b>base</b> volume — USDT traded, straight from the
+          exchange's hourly candle. This is <i>not</i> the naira turnover the D1 volume-spike alert
+          thresholds on (that one multiplies by the candle close); it's the raw quantity.
+          The <b>current hour is never a bar</b>: the k-line feed publishes an hourly candle only once
+          the hour closes. On the <b>1h</b> range the stat card above covers "right now" instead — a
+          trailing 60 minutes rebuilt from 1-minute candles, so it lags real time by up to a minute.
+          On every other range that card totals the selected window, and says how many hours the
+          total is actually summed from.
+          <br><br>
+          Bars are fetched live, but the exchange only serves <b>300 candles per request</b>, always
+          ending at the present, and <b>60 minutes is the largest candle it supports</b> — so a live
+          fetch reaches just <b>~12.5 days</b> back and no coarser candle can buy more. Older hours
+          come from the monitor's own archive, which records each hour as it closes; the legend says
+          how many bars came from there. That also means longer windows fill in over time rather than
+          being complete straight away.
+          <br><br>
+          Over <b>14 days</b> the bars switch from hourly to <b>daily</b> — 30 days of hourly bars is 720
+          of them, too fine to read. Each daily bar is simply the sum of its hours (volume adds up, so
+          nothing is distorted), and a day built from fewer than 24 hours says so on hover. The
+          underlying data, the CSV export and the stat card above all stay hourly regardless.
         </div>
       </div>
 
@@ -1374,7 +1421,10 @@ let showAll = false;
 let selectedSym = null;
 
 // ── Slippage tab state ────────────────────────────────────────────────────────
-let slippageChart, slippagePriceChart, uptimeChart;
+let slippageChart, slippagePriceChart, uptimeChart, volumeChart;
+// Hourly volume series for the current window, kept for the CSV export so the
+// download always matches what's on screen (same contract as _lastUptimeCsvRows).
+let _lastVolumeRows = [];
 let slippageRange = "1h";       // "1h" | "24h" | "7d" | "30d"
 let slippageDateStart = null;    // ISO date string (overrides range preset)
 let slippageDateEnd   = null;
@@ -2222,6 +2272,12 @@ async function fetchSlippageData(opts) {
     }
     console.error("Slippage fetch failed:", err);
   }
+
+  // Volume rides the same window/poll but hits different endpoints, so it's
+  // deliberately outside the try above and un-awaited: a slippage failure
+  // shouldn't blank the volume widgets, and a volume failure (handled inside
+  // fetchVolumeData) shouldn't delay or break the slippage render.
+  fetchVolumeData();
 }
 
 // ── Trading-hours + CSV export helpers ─────────────────────────────────────
@@ -2613,6 +2669,61 @@ function initSlippageCharts() {
     },
   });
 
+  // Hourly traded volume — bars, not a line: each point is a discrete closed
+  // hour's total, not a sample of a continuous quantity like slippage or uptime.
+  const ctxV = document.getElementById("volumeChart").getContext("2d");
+  volumeChart = new Chart(ctxV, {
+    type: "bar",
+    data: { labels: [], datasets: [
+      { label: "Volume (USDT)", data: [], backgroundColor: "rgba(139,92,246,.55)",
+        borderColor: "#8b5cf6", borderWidth: 1, borderRadius: 2 },
+    ]},
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      interaction: { mode: "index", intersect: false },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            title: (items) => {
+              const i = items[0] && items[0].dataIndex;
+              const meta = volumeChart._bucketMeta && volumeChart._bucketMeta[i];
+              let suffix = "";
+              if (meta) {
+                // Daily bar: say whether ALL its hours came from the archive or
+                // only some, since a day straddling the 12.5-day wall is mixed.
+                if (meta.archived > 0) {
+                  suffix = meta.archived === meta.present ? "  · from archive" : "  · partly from archive";
+                }
+              } else if (volumeChart._archivedFlags && volumeChart._archivedFlags[i]) {
+                suffix = "  · from archive";
+              }
+              return (items[0] ? items[0].label : "") + suffix;
+            },
+            // Full precision in the tooltip — the axis is abbreviated (12.5k),
+            // but anyone hovering a specific bar wants the actual number.
+            label: (item) => {
+              const v = item.parsed.y;
+              if (v == null) return "Volume: —";
+              const out = ["Volume: " + v.toLocaleString(undefined, { maximumFractionDigits: 4 }) + " USDT"];
+              // Flag a day summed from fewer than 24 hours, so a partial day at
+              // the edge of the archive can't be misread as a genuinely quiet one.
+              const meta = volumeChart._bucketMeta && volumeChart._bucketMeta[item.dataIndex];
+              if (meta && meta.present < meta.total) {
+                out.push(`(${meta.present} of ${meta.total} hours)`);
+              }
+              return out;
+            },
+          },
+        },
+      },
+      scales: {
+        x: { ticks: { maxRotation: 0, autoSkip: true, maxTicksLimit: 10, font: { size: 10 } } },
+        y: { beginAtZero: true, ticks: { callback: v => fmtVolShort(v), font: { size: 10 } } },
+      },
+    },
+  });
+
   const ctx3 = document.getElementById("uptimeChart").getContext("2d");
   uptimeChart = new Chart(ctx3, {
     type: "line",
@@ -2736,6 +2847,314 @@ function renderSlippageCharts(points) {
     const w = fmtUsdtQty(slippageWeightUsdt);
     titleEl.textContent = `USDTNGN — ${w} depth-walk slippage · ${label} · ${points.length} point${points.length === 1 ? "" : "s"}`;
   }
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// USDTNGN hourly traded volume
+// ══════════════════════════════════════════════════════════════════════════════
+// Rides the slippage tab's existing range/archive controls and poll timer —
+// fetchVolumeData() is called from fetchSlippageData(), so changing the range,
+// picking archive dates, hitting Reload, or the 5s tick all refresh it too.
+//
+// Two endpoints, mirroring the raw/history split next door:
+//   /api/usdtngn-volume          → closed hourly bars for the window
+//   /api/usdtngn-volume/rolling  → the trailing-60m stat card
+// Both are served with a short server-side cache, so polling them every 5s costs
+// at most one upstream Quidax call per minute.
+
+// Axis/stat abbreviation. Distinct from fmtUsdtQty (which labels config weights
+// and always appends " USDT") — this is for volumes, where the unit is stated
+// once in the card label rather than repeated on every axis tick.
+function fmtVolShort(v) {
+  if (v == null) return "—";
+  const n = Number(v);
+  if (!isFinite(n)) return "—";
+  const abs = Math.abs(n);
+  if (n === 0)              return "0";   // axis baseline — "0.0000" is just noise
+  if (abs >= 1_000_000_000) return (n / 1_000_000_000).toFixed(2) + "B";
+  if (abs >= 1_000_000)     return (n / 1_000_000).toFixed(2) + "M";
+  if (abs >= 1_000)         return (n / 1_000).toFixed(1) + "k";
+  return n.toFixed(abs >= 1 ? 1 : 4);
+}
+
+// Windows longer than this get daily bars instead of hourly ones. 14 days ≈ 336
+// hourly bars, around the point they stop being individually resolvable; it also
+// keeps the 7d preset (168 bars) on hourly, where the intraday shape still reads.
+const VOLUME_DAILY_BUCKET_ABOVE_HOURS = 14 * 24;
+
+// "2026-08-13" for a timestamp, in NGT. Hoisted formatter — this runs once per
+// hour-slot when bucketing a long window (720 times for 30d), and constructing
+// an Intl.DateTimeFormat per call there is measurably wasteful.
+const _NGT_DAY_FMT = new Intl.DateTimeFormat("en-CA", {
+  timeZone: "Africa/Lagos", year: "numeric", month: "2-digit", day: "2-digit",
+});
+function _ngtDayKey(ms) {
+  return _NGT_DAY_FMT.format(new Date(ms));
+}
+
+// "10:41–11:41" from two ISO timestamps, rendered in NGT regardless of where the
+// browser is — the whole dashboard is NGT-native and a viewer in another zone
+// shouldn't see a window that disagrees with the clock in the topbar.
+function _ngtHhMm(iso) {
+  try {
+    return new Intl.DateTimeFormat("en-GB", {
+      timeZone: "Africa/Lagos", hour: "2-digit", minute: "2-digit", hour12: false,
+    }).format(new Date(iso));
+  } catch { return "—"; }
+}
+
+async function fetchVolumeData() {
+  const { start, end, mode } = computeSlippageWindow();
+
+  // The stat card tracks the range selector, same rule the uptime and spread
+  // cards use (see fetchSlippageData's isLiveHourView): on the live 1h view it's
+  // a "right now" readout, on every other range it totals the selected window.
+  // Keeping the rule identical means the whole card row switches together
+  // instead of one tile disagreeing with its neighbours.
+  const liveHourView = mode !== "archive" && slippageRange === "1h";
+
+  // Only send bounds we actually have — an archive filter with just one date set
+  // leaves the other null, and the endpoint's own defaults are the right
+  // behaviour there.
+  const params = [];
+  if (start) params.push(`start=${encodeURIComponent(start.toISOString())}`);
+  if (end)   params.push(`end=${encodeURIComponent(end.toISOString())}`);
+  const qs = params.length ? `?${params.join("&")}` : "";
+
+  try {
+    const [winRes, rollRes] = await Promise.all([
+      fetch(`${API_BASE}/api/usdtngn-volume${qs}`),
+      // Skip the rolling call entirely when the card isn't showing it — no point
+      // paying for a fetch whose result would be discarded.
+      liveHourView ? fetch(`${API_BASE}/api/usdtngn-volume/rolling`) : Promise.resolve(null),
+    ]);
+    if (!winRes.ok) throw new Error(`volume HTTP ${winRes.status}`);
+
+    const win = await winRes.json();
+
+    if (liveHourView) {
+      const roll = rollRes && rollRes.ok ? await rollRes.json() : { stale: true };
+      renderVolumeStat(roll);
+    } else {
+      renderVolumeWindowTotal(win);
+    }
+    renderVolumeChart(win);
+  } catch (err) {
+    // Non-fatal: the rest of the tab (slippage, uptime) is independent, so a
+    // volume outage blanks these two widgets rather than breaking the page.
+    renderVolumeStat({ stale: true });
+  }
+}
+
+// Window-total variant of the stat card, for every range except the live 1h view.
+function renderVolumeWindowTotal(win) {
+  const labelEl = document.getElementById("vol-rolling-label");
+  const valEl   = document.getElementById("vol-rolling");
+  const subEl   = document.getElementById("vol-rolling-sub");
+  if (!labelEl || !valEl || !subEl) return;
+
+  const scope = (slippageDateStart || slippageDateEnd) ? "archive" : slippageRange;
+  labelEl.textContent = `Volume · ${scope} total`;
+
+  const points = (win && win.points) || [];
+  if (!points.length) {
+    valEl.textContent = "—";
+    subEl.textContent = win && win.stale ? "feed unavailable" : "no data in window";
+    return;
+  }
+  valEl.textContent = fmtVolShort(win.total);
+
+  // Coverage is the whole story on long windows: a 30d "total" built from 348 of
+  // 720 hours is NOT a 30-day figure, and showing it bare would overstate nothing
+  // but imply completeness. Always say what it's actually summed from.
+  const have = points.length;
+  const want = win.expected_count || have;
+  subEl.textContent = have < want
+    ? `USDT · ${have} of ${want} hours`
+    : `USDT · ${have} hours`;
+}
+
+function renderVolumeStat(roll) {
+  const labelEl = document.getElementById("vol-rolling-label");
+  const valEl   = document.getElementById("vol-rolling");
+  const subEl   = document.getElementById("vol-rolling-sub");
+  if (!valEl || !subEl) return;
+  // Reset the label — renderVolumeWindowTotal rewrites it for other ranges, and
+  // this is also the error path, which can fire from any range.
+  if (labelEl) labelEl.textContent = "Volume · trailing 60m";
+
+  if (!roll || roll.stale || roll.volume == null) {
+    valEl.textContent = "—";
+    subEl.textContent = "feed unavailable";
+    return;
+  }
+  valEl.textContent = fmtVolShort(roll.volume);
+
+  // Flag a short read explicitly: a quiet hour still returns a candle per minute
+  // with volume 0, so a missing candle means dropped data, not silence — without
+  // this the number would just look low for no visible reason.
+  const gaps = (roll.expected_count || 0) - (roll.retrieved_count || 0);
+  const window = `${_ngtHhMm(roll.start)}–${_ngtHhMm(roll.end)}`;
+  subEl.textContent = gaps > 0
+    ? `USDT · ${window} · ${gaps} min missing`
+    : `USDT · ${window}`;
+}
+
+function renderVolumeChart(win) {
+  initSlippageCharts();
+  const points = (win && win.points) || [];
+  // CSV keeps the raw HOURLY rows regardless of how the chart is bucketed —
+  // the export is for analysis, where the finer series is strictly more useful,
+  // and the button says "hourly" so there's no surprise.
+  _lastVolumeRows = points;
+
+  // Plot every hour in the requested window, not just the hours we have — an
+  // absent hour becomes a null (no bar) rather than being dropped. Dropping them
+  // would silently close the gap and render, say, 27 Jul flush against 1 Aug as
+  // if they were consecutive. Same convention as the uptime chart, which draws a
+  // gap rather than a 0% for hours it has no data for.
+  const archivedCount = win.archive_only_points || 0;
+  // The API reports only a COUNT of archive-served points, and they're always the
+  // oldest ones (the wall is a time boundary), so the first N are the archived set.
+  const archivedTs = new Set(points.slice(0, archivedCount).map(p => p.ts));
+  const byTs = new Map(points.map(p => [new Date(p.ts).getTime(), p]));
+
+  const startMs = new Date(win.start).getTime();
+  const endMs   = new Date(win.end).getTime();
+
+  const hours = [];
+  for (let t = startMs; t < endMs; t += 3600_000) {
+    const p = byTs.get(t);
+    hours.push({
+      ms: t,
+      volume:   p ? p.volume : null,
+      present:  !!p,
+      archived: p ? archivedTs.has(p.ts) : false,
+    });
+  }
+
+  // Bucket long windows into daily bars. 30 days of hourly bars is 720 bars in
+  // ~1000px — they fuse into a solid block and no individual hour is readable.
+  // Safe to do here because VOLUME IS ADDITIVE: a day bar is just the sum of its
+  // hours, so nothing is distorted. (The uptime/slippage charts can't do this —
+  // averaging a rate changes what it means.) Display only: the archive, the CSV
+  // and the trailing-60m card all stay hourly.
+  const daily = (endMs - startMs) / 3600_000 > VOLUME_DAILY_BUCKET_ABOVE_HOURS;
+
+  let labels, data, archivedFlags, bucketMeta;
+  if (!daily) {
+    // Reuse the uptime label helper — same hourly cadence, same long-window
+    // date-granularity problem.
+    labels        = hours.map(h => _labelForUptimePoint({ ts: new Date(h.ms).toISOString() }));
+    data          = hours.map(h => h.volume);
+    archivedFlags = hours.map(h => h.archived);
+    bucketMeta    = hours.map(() => null);
+  } else {
+    // Group by NGT CALENDAR day, not by 24h from the window start, so bars line
+    // up with dates an operator can reconcile against anything else NGT-based.
+    const order = [], groups = new Map();
+    hours.forEach(h => {
+      const key = _ngtDayKey(h.ms);
+      if (!groups.has(key)) { groups.set(key, { sum: 0, present: 0, total: 0, archived: 0 }); order.push(key); }
+      const g = groups.get(key);
+      g.total++;
+      if (h.present) {
+        g.sum += (h.volume || 0);
+        g.present++;
+        if (h.archived) g.archived++;
+      }
+    });
+    labels        = order.map(k => k.slice(5));            // YYYY-MM-DD -> MM-DD
+    // A day with no hours at all stays null (a gap); a day with SOME hours sums
+    // what it has and reports the shortfall in the tooltip, rather than pretending
+    // a partly-missing day is a genuinely quiet one.
+    data          = order.map(k => groups.get(k).present ? groups.get(k).sum : null);
+    archivedFlags = order.map(k => groups.get(k).archived > 0);
+    bucketMeta    = order.map(k => groups.get(k));
+  }
+
+  volumeChart.data.labels = labels;
+  volumeChart.data.datasets[0].data = data;
+  volumeChart._archivedFlags = archivedFlags;
+  volumeChart._bucketMeta    = bucketMeta;
+  volumeChart._daily         = daily;
+  volumeChart.update();
+
+  const legendEl = document.getElementById("vol-legend-label");
+  if (legendEl) legendEl.textContent = daily ? "Volume per day (USDT)" : "Volume per hour (USDT)";
+
+  // Surface the archive/stale state in the legend rather than silently showing a
+  // series with different provenance.
+  // Surface provenance and short coverage in the legend rather than silently
+  // showing a series that's partly archived, or shorter than the window asked
+  // for. `expected_count` is the full hour count of the window; the gap between
+  // that and points.length is what the 300-candle wall cost us.
+  const noteEl = document.getElementById("vol-archive-note");
+  if (noteEl) {
+    const short = Math.max(0, (win.expected_count || 0) - points.length);
+    const parts = [];
+    if (win.stale) parts.push("live feed unavailable");
+    if (archivedCount > 0) {
+      parts.push(`${archivedCount} hour${archivedCount === 1 ? "" : "s"} from the monitor's archive`);
+    }
+    if (short > 0) {
+      // Not an error — the exchange simply can't reach these, and the archive
+      // only holds hours recorded since the monitor started keeping them.
+      parts.push(`${short} hour${short === 1 ? "" : "s"} unavailable (past the exchange's 300-candle reach, not yet archived)`);
+    }
+    noteEl.style.display = parts.length ? "" : "none";
+    noteEl.textContent = parts.length ? "· " + parts.join(" · ") : "";
+  }
+}
+
+function downloadVolumeCsv() {
+  const rows = _lastVolumeRows;
+  if (!rows || !rows.length) {
+    showToast("No hourly volume in this window", true);
+    return;
+  }
+  const fmtDay = d => d ? new Intl.DateTimeFormat("en-CA", {
+                        timeZone: "Africa/Lagos", year: "numeric",
+                        month: "2-digit", day: "2-digit",
+                      }).format(d) : null;
+  const { start, end } = computeSlippageWindow();
+  const todayNgt = new Date().toLocaleDateString("en-CA", { timeZone: "Africa/Lagos" });
+  const startTag = fmtDay(start) || todayNgt;
+  const endTag   = fmtDay(end)   || todayNgt;
+
+  // Same D/M/YYYY H:MM NGT convention as the uptime export.
+  const fmtTs = iso => {
+    try {
+      const parts = new Intl.DateTimeFormat("en-GB", {
+        timeZone: "Africa/Lagos",
+        day: "numeric", month: "numeric", year: "numeric",
+        hour: "numeric", minute: "2-digit", hour12: false,
+      }).formatToParts(new Date(iso));
+      const get = t => (parts.find(p => p.type === t) || {}).value || "";
+      let h = parseInt(get("hour"), 10);
+      if (h === 24) h = 0;
+      return `${parseInt(get("day"), 10)}/${parseInt(get("month"), 10)}/${get("year")} ${h}:${get("minute")}`;
+    } catch { return iso; }
+  };
+  const esc = v => {
+    const s = String(v ?? "");
+    return s.includes(",") || s.includes('"') || s.includes("\n")
+      ? `"${s.replace(/"/g, '""')}"` : s;
+  };
+
+  const lines = [["hour_ngt", "volume_usdt"].join(",")];
+  rows.forEach(r => lines.push([esc(fmtTs(r.ts)), esc(r.volume ?? "")].join(",")));
+
+  const blob = new Blob([lines.join("\r\n")], { type: "text/csv;charset=utf-8;" });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement("a");
+  a.href     = url;
+  a.download = `usdtngn_volume_${startTag}_${endTag}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+  showToast(`Downloaded ${rows.length} hourly bar${rows.length === 1 ? "" : "s"}`);
 }
 
 // ── Config panel ──────────────────────────────────────────────────────────────

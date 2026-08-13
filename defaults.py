@@ -30,6 +30,15 @@ UPTIME_FIXED_STEP_NGN = 1.0
 # rather than shifting meaning whenever someone retunes a dashboard field.
 SPREAD_GAP_FIXED_NGN = 1.0
 
+# How long the USDTNGN hourly base-volume archive is kept, in days. Deliberately
+# NOT a config knob: the k-line API clamps every response to 300 candles anchored
+# at the newest, so it can only ever serve ~12.5 days of hourly history (see
+# kline_volume.py). Everything older exists ONLY in this archive, and letting an
+# operator shrink the retention from a dashboard field would permanently destroy
+# data nothing can re-fetch. 2 years at hourly resolution is ~17.5k points — a
+# couple of MB of JSON, which the Fly volume comfortably holds.
+VOLUME_ARCHIVE_RETENTION_DAYS = 730
+
 
 # Canonical defaults. Every tunable the dashboard can edit has an entry here;
 # a stored monitor_config.json overrides these per-key via merge_config().

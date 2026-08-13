@@ -135,7 +135,13 @@ from typing import Optional
 import aiohttp
 import pandas as pd
 
-from defaults import merge_config, default_config, UPTIME_FIXED_STEP_NGN, SPREAD_GAP_FIXED_NGN  # single source of truth for config
+from defaults import (merge_config, default_config, UPTIME_FIXED_STEP_NGN,
+                      SPREAD_GAP_FIXED_NGN, VOLUME_ARCHIVE_RETENTION_DAYS)  # single source of truth for config
+# Pure candle-parsing/aggregation helpers, shared with api.py so the OCHLV field
+# convention and NGT hour bucketing can't drift between the two processes. Only
+# the pure functions are used here — the module's urllib fetch is for api.py's
+# threadpool routes; this process fetches over aiohttp like everything else.
+import kline_volume as klv
 
 try:
     from dotenv import load_dotenv
@@ -182,6 +188,18 @@ SUSPENSIONS_FILE = os.path.join(DATA_DIR, "suspensions.json")
 DEPTH_WALK_SYMBOL        = "usdtngn"
 DEPTH_WALK_RAW_FILE       = os.path.join(DATA_DIR, "usdtngn_slippage_raw.json")
 DEPTH_WALK_CONDENSED_FILE = os.path.join(DATA_DIR, "usdtngn_slippage_hourly.json")
+
+# USDTNGN hourly BASE-volume archive (dashboard volume series). Written here,
+# read by api.py — same monitor-writes/api-reads direction as the depth-walk
+# files above, so there's no cross-process write race.
+#
+# The API serves recent hours on demand, but only recent ones: it clamps every
+# response to 300 candles and anchors them at the newest, so ~12.5 days back is
+# the hard wall at hourly resolution. Hours persisted here stay readable after
+# they fall off that wall, which makes this file the only possible source for
+# the dashboard's longer windows.
+KLINE_VOLUME_SYMBOL = "usdtngn"
+KLINE_VOLUME_FILE   = os.path.join(DATA_DIR, "usdtngn_volume_hourly.json")
 
 # ── Default configuration ─────────────────────────────────────────────────────
 # Canonical defaults now live in defaults.py, shared verbatim with api.py so the
@@ -395,6 +413,14 @@ HIGH_VOL_TOKENS  = {"BTC", "ETH", "SOL", "USDC"}
 
 REF_HISTORY_LEN = 8   # rolling readings kept per asset/exchange for B2 drift detection
 
+# USDTNGN volume archive top-up (kline_volume_loop). Not dashboard-configurable:
+# these tune how the archive repairs itself, not what it measures.
+VOLUME_TOPUP_HOURS          = 6    # hours re-fetched each pass; the overlap lets a
+                                    # candle that wasn't published yet on one pass
+                                    # get filled in on the next
+VOLUME_TOPUP_DELAY_SECONDS  = 120  # wait this long after the hour boundary before
+                                    # topping up, so the just-closed candle exists
+
 LAYER_CHURN_MIN_HISTORY_BUCKETS = 5   # A6 cold-start gate — min prior churn readings
                                        # needed before the self-baseline is trusted at
                                        # all (not dashboard-configurable, same spirit as
@@ -565,6 +591,29 @@ async def fetch_kline_volume(session: aiohttp.ClientSession, symbol: str) -> lis
     url = (f"{BASE_API_URL}/markets/{symbol}/k"
            f"?period={VOLUME_SPIKE_CANDLE_MINUTES}&limit={candle_count}&timestamp={lookback_ts}")
     payload = await _request_json(session, url)
+    return payload["data"]
+
+
+async def fetch_kline_volume_hourly(session: aiohttp.ClientSession, symbol: str,
+                                     limit: int, timestamp_s: int) -> list:
+    """
+    Hourly candles for the USDTNGN volume archive (kline_volume_loop). A THIRD
+    k-line call site, deliberately separate from fetch_kline (B4) and
+    fetch_kline_volume (D1) for the same reason those two are separate: this one
+    is pinned to 60-minute candles by the persisted series' definition, and must
+    not start moving because someone retunes a D1 or B4 window in the dashboard.
+
+    Unlike its siblings it takes an explicit `timestamp_s`/`limit` rather than
+    deriving them from config globals — the caller sizes the request differently
+    for a cold-start backfill vs. an hourly top-up.
+
+    `timestamp` is SECONDS since epoch and is an EXCLUSIVE lower bound; the
+    caller subtracts 1s so the boundary candle is included. See fetch_kline's
+    docstring for the full treatment.
+    """
+    url = (f"{BASE_API_URL}/markets/{symbol}/k"
+           f"?period={klv.HOUR_MINUTES}&limit={limit}&timestamp={timestamp_s}")
+    payload = await _request_json(session, url, timeout=30)
     return payload["data"]
 
 
@@ -1762,6 +1811,138 @@ async def depth_walk_loop(session: aiohttp.ClientSession):
         await asyncio.sleep(DEPTH_WALK_POLL_INTERVAL_SECONDS)
 
 
+# ── USDTNGN hourly volume archive ─────────────────────────────────────────────
+# One point per closed NGT hour: {"ts": iso, "volume": base_volume}. Kept sorted
+# ascending by ts and unique per hour, so api.py can merge it with a live fetch
+# by ts without deduping surprises.
+
+def load_volume_archive() -> list:
+    if os.path.exists(KLINE_VOLUME_FILE):
+        try:
+            with open(KLINE_VOLUME_FILE) as f:
+                data = json.load(f)
+            return data if isinstance(data, list) else []
+        except Exception as exc:
+            print(f"⚠️  Could not read {KLINE_VOLUME_FILE}: {exc} — starting fresh")
+    return []
+
+
+def save_volume_archive(points: list):
+    os.makedirs(DATA_DIR, exist_ok=True)
+    with open(KLINE_VOLUME_FILE, "w") as f:
+        json.dump(points, f, indent=2)
+
+
+def merge_volume_points(archive: list, fresh: list) -> list:
+    """
+    Upsert `fresh` into `archive`, keyed by hour ts, newest value winning.
+
+    Upsert rather than append because the top-up deliberately re-fetches a few
+    already-stored hours each time (see kline_volume_loop): a candle that was
+    briefly incomplete or missing on one pass gets corrected on the next instead
+    of being frozen wrong forever, and a restart mid-hour can't double-write.
+    """
+    by_ts = {p["ts"]: p for p in archive if isinstance(p, dict) and "ts" in p}
+    for p in fresh:
+        by_ts[p["ts"]] = p
+    return [by_ts[ts] for ts in sorted(by_ts)]
+
+
+def prune_volume_archive(points: list, retention_days: float) -> list:
+    """Drop points older than the retention window. Mirrors prune_condensed."""
+    if not points or retention_days <= 0:
+        return points
+    cutoff = ngt_now() - timedelta(days=retention_days)
+    out = []
+    for pt in points:
+        try:
+            ts = datetime.fromisoformat(pt["ts"])
+        except (KeyError, ValueError, TypeError):
+            continue
+        if ts >= cutoff:
+            out.append(pt)
+    return out
+
+
+async def _refresh_volume_archive(session: aiohttp.ClientSession, hours: int) -> int:
+    """
+    Fetch the last `hours` closed hourly candles and upsert them into the archive.
+    Returns how many points the archive holds afterwards. Raises on fetch failure —
+    the caller decides whether that's fatal (it isn't).
+    """
+    now = ngt_now()
+    # Snap to the current hour boundary and step back `hours`, then subtract 1s so
+    # the boundary candle at exactly that ts is inclusive (the query's lower bound
+    # is exclusive). Same alignment reasoning as fetch_kline_volume.
+    current_boundary = klv.floor_to_period(now, klv.HOUR_MINUTES)
+    start_dt = current_boundary - timedelta(hours=hours)
+
+    rows = await fetch_kline_volume_hourly(
+        session, KLINE_VOLUME_SYMBOL,
+        limit=min(hours + 2, klv.MAX_LIMIT),
+        timestamp_s=int(start_dt.timestamp()) - 1,
+    )
+    # end_excl = current_boundary excludes the in-progress hour. The API never
+    # returns it anyway, but bounding the window explicitly means a future change
+    # in that behaviour can't quietly persist a half-finished hour as if it were
+    # final.
+    result = klv.aggregate(rows, start_dt, current_boundary, klv.HOUR_MINUTES)
+
+    archive = merge_volume_points(load_volume_archive(), result["series"])
+    archive = prune_volume_archive(archive, VOLUME_ARCHIVE_RETENTION_DAYS)
+    save_volume_archive(archive)
+    return len(archive)
+
+
+async def kline_volume_loop(session: aiohttp.ClientSession):
+    """
+    Maintains the USDTNGN hourly volume archive. Independent of the main cycle and
+    of depth_walk_loop — it only wakes once an hour.
+
+    THIS LOOP IS LOAD-BEARING, not a cache warmer. The k-line endpoint clamps every
+    response to 300 candles and anchors them at the newest one, so a single call
+    reaches only ~12.5 days back at hourly resolution and there is no way to page
+    further (see kline_volume.py). Every hour older than that exists ONLY here.
+    Cold start seeds the full 300 hours the API can still see; everything beyond
+    that accumulates from the moment this loop first runs, so the dashboard's 30d
+    view fills in over time rather than being complete on day one.
+
+    Why re-fetch hours already stored: the top-up runs a few minutes after the
+    boundary, and a candle occasionally isn't published yet at that moment. The
+    overlap means the next pass fills it in, so a transient miss doesn't leave a
+    permanent hole — which matters more than it looks, because once an hour ages
+    past the 300-candle wall a hole in it can never be repaired from the API.
+    A single failed pass is still recoverable (the next pass re-covers it), so
+    errors are logged and skipped rather than retried aggressively.
+    """
+    # Cold start: only backfill if the archive is empty. A populated archive just
+    # gets topped up — re-pulling the full 300-candle window on every restart
+    # would be a lot of payload for data we already hold.
+    try:
+        if not load_volume_archive():
+            count = await _refresh_volume_archive(session, hours=klv.MAX_LIMIT)
+            print(f"🚀 USDTNGN volume archive backfilled — {count} hourly points")
+        else:
+            count = await _refresh_volume_archive(session, hours=VOLUME_TOPUP_HOURS)
+            print(f"🚀 USDTNGN volume archive loaded — {count} hourly points")
+    except Exception as e:
+        print(f"⚠️  Volume archive initial load failed: {e} — will retry next hour")
+
+    while True:
+        # Sleep to just past the next hour boundary. Recomputed each iteration
+        # rather than sleeping a flat 3600s so the loop can't drift off the hour
+        # over long uptimes.
+        now = ngt_now()
+        next_boundary = klv.floor_to_period(now, klv.HOUR_MINUTES) + timedelta(hours=1)
+        await asyncio.sleep(max(30.0, (next_boundary - now).total_seconds()
+                                + VOLUME_TOPUP_DELAY_SECONDS))
+        try:
+            count = await _refresh_volume_archive(session, hours=VOLUME_TOPUP_HOURS)
+            print(f"  [VOL] USDTNGN volume archive updated — {count} hourly points")
+        except Exception as e:
+            print(f"⚠️  Volume archive update error: {e}")
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # PERSISTENCE
 # ══════════════════════════════════════════════════════════════════════════════
@@ -2730,6 +2911,11 @@ async def main(run_once: bool = False):
         depth_walk_task = asyncio.create_task(depth_walk_loop(session))
         print(f"🚀 Starting USDTNGN depth-walk tracker — {DEPTH_WALK_POLL_INTERVAL_SECONDS}s poll, "
               f"{DEPTH_WALK_WEIGHT_USDT:,.0f} USDT weight")
+
+        # USDTNGN hourly volume archive — wakes once an hour, same fire-and-forget
+        # treatment as the depth-walk task above (it swallows its own errors per
+        # pass and never raises out to here).
+        volume_task = asyncio.create_task(kline_volume_loop(session))
 
         while True:
             cycle_num += 1

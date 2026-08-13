@@ -29,6 +29,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 
 from defaults import default_config, merge_config, UPTIME_FIXED_STEP_NGN  # single source of truth for config
+# Candle fetching + aggregation for the USDTNGN volume endpoints. Import-only
+# module (no side effects, no async), shared with debug.py so the OCHLV field
+# convention and NGT hour bucketing stay identical across both processes.
+import kline_volume as klv
 
 
 def _sanitize(obj):
@@ -59,6 +63,11 @@ SUSPENSIONS_FILE = DATA_DIR / "suspensions.json"
 # G1 depth-walk slippage tracker files (written by debug.py's depth_walk_loop)
 DEPTH_WALK_RAW_FILE       = DATA_DIR / "usdtngn_slippage_raw.json"
 DEPTH_WALK_CONDENSED_FILE = DATA_DIR / "usdtngn_slippage_hourly.json"
+# USDTNGN hourly volume archive (written by debug.py's kline_volume_loop). Read
+# here to cover hours older than a live fetch can reach (~300 hours) — recent
+# hours come from the live call, so an absent file just means "no deep history".
+VOLUME_SYMBOL       = "usdtngn"
+VOLUME_ARCHIVE_FILE = DATA_DIR / "usdtngn_volume_hourly.json"
 STATIC_DIR  = Path(".")          # dashboard.html lives next to api.py
 NIGERIAN_TZ = timezone(timedelta(hours=1))
 
@@ -363,6 +372,33 @@ async def post_suspension(request: Request):
 # stat card just averages whatever points fall inside the window (raw and
 # hourly samples are treated as equal-weight per user spec).
 
+def _parse_iso_bound(bound: Optional[str]) -> Optional[datetime]:
+    """
+    Parse a ?start=/?end= query bound into an NGT-aware datetime, or None if it's
+    absent/unparseable (callers treat None as "unbounded").
+
+    Query-string decoding turns "+" into " " — e.g. "2026-07-02T00:00:00+01:00"
+    arrives as "2026-07-02T00:00:00 01:00". Flip it back before ISO parsing so
+    clients that forget to percent-encode don't silently get an unfiltered result.
+
+    Bare date/datetime strings arrive without tz — assume NGT for consistency with
+    how the monitor writes ts values.
+    """
+    if not bound:
+        return None
+    if " " in bound and "T" in bound:
+        head, sep, tail = bound.rpartition(" ")
+        if ":" in tail and len(tail) <= 6:
+            bound = head + "+" + tail
+    try:
+        dt = datetime.fromisoformat(bound)
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=NIGERIAN_TZ)
+    return dt
+
+
 def _load_json_file(path: Path, fallback):
     """Read a JSON file or return the fallback if missing/malformed. Isolated so
     a corrupt file on disk can't take down the API — the dashboard just sees an
@@ -428,28 +464,8 @@ def get_usdtngn_slippage_history(start: Optional[str] = None,
     if not isinstance(condensed, list):
         condensed = []
 
-    def _parse(bound: Optional[str]) -> Optional[datetime]:
-        if not bound:
-            return None
-        # Query-string decoding turns "+" into " " — e.g. "2026-07-02T00:00:00+01:00"
-        # arrives as "2026-07-02T00:00:00 01:00". Flip it back before ISO parsing so
-        # clients that forget to percent-encode don't silently get an unfiltered result.
-        if " " in bound and "T" in bound:
-            head, sep, tail = bound.rpartition(" ")
-            if ":" in tail and len(tail) <= 6:
-                bound = head + "+" + tail
-        try:
-            dt = datetime.fromisoformat(bound)
-        except ValueError:
-            return None
-        # Bare date/datetime strings arrive without tz — assume NGT for
-        # consistency with how the monitor writes ts values.
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=NIGERIAN_TZ)
-        return dt
-
-    start_dt = _parse(start)
-    end_dt   = _parse(end)
+    start_dt = _parse_iso_bound(start)
+    end_dt   = _parse_iso_bound(end)
 
     out = []
     for pt in condensed:
@@ -468,6 +484,188 @@ def get_usdtngn_slippage_history(start: Optional[str] = None,
         "end":    end,
         "points": out,
     }))
+
+
+# ── USDTNGN hourly base volume ───────────────────────────────────────────────
+# Two endpoints, both USDT (BASE) volume — deliberately NOT the naira quote
+# volume D1 thresholds on:
+#   /api/usdtngn-volume          — hourly series for a window
+#   /api/usdtngn-volume/rolling  — trailing-60m total, rebuilt from 1-min candles
+#
+# Unlike the slippage endpoints (pure file reads), these call Quidax at request
+# time, which is what makes any window work without waiting for data to
+# accumulate. But the reach is short: responses are clamped to 300 candles and
+# anchored at the newest, so a live call covers only ~12.5 days of hours. The
+# monitor's archive is merged underneath for everything older, and for windows
+# past that wall it is the only source — see debug.py's kline_volume_loop.
+#
+# These routes are sync `def` like every other route here, so FastAPI runs them in
+# its threadpool and kline_volume's blocking urllib fetch never touches the event
+# loop. Don't convert them to `async def` without also switching to an async
+# client.
+
+# Request-time cache so the dashboard's 5s poll can't hammer Quidax. Keys are
+# built from HOUR- or MINUTE-floored window bounds, so a moving window
+# ("last 24h") produces a STABLE key for the whole hour/minute it's valid for —
+# without that, every poll would be a cache miss on a slightly different window.
+# Single-process uvicorn, so a plain dict is sufficient.
+_VOLUME_CACHE: dict = {}
+_VOLUME_CACHE_TTL_SECONDS = 90
+
+
+def _volume_cache_get(key):
+    hit = _VOLUME_CACHE.get(key)
+    if not hit:
+        return None
+    expires_at, payload = hit
+    if ngt_now() >= expires_at:
+        _VOLUME_CACHE.pop(key, None)
+        return None
+    return payload
+
+
+def _volume_cache_set(key, payload):
+    _VOLUME_CACHE[key] = (ngt_now() + timedelta(seconds=_VOLUME_CACHE_TTL_SECONDS), payload)
+    # Bound the cache — window bounds roll forward forever, so without this the
+    # dict would grow one entry per distinct window for the process's lifetime.
+    if len(_VOLUME_CACHE) > 64:
+        for stale_key in [k for k, (exp, _) in _VOLUME_CACHE.items() if ngt_now() >= exp]:
+            _VOLUME_CACHE.pop(stale_key, None)
+    return payload
+
+
+@app.get("/api/usdtngn-volume")
+def get_usdtngn_volume(start: Optional[str] = None, end: Optional[str] = None):
+    """
+    Hourly USDTNGN base volume (USDT) for a window. Optional ?start=&end= (ISO
+    date or datetime, NGT assumed); defaults to the last 24 hours.
+
+    Both bounds snap to hour boundaries, and the upper bound is capped at the
+    current hour — the in-progress hour is never included, because the k-line API
+    has no candle for it at any period (verified: at 11:41 the newest 60m candle
+    is 10:00). The trailing-60m endpoint below covers "right now" instead.
+
+    Points are {ts, volume} in chronological order. `archive_only_points` counts
+    how many came from the monitor's file because the live call couldn't reach
+    them — expect this to be most of a 30-day window, since a live call only
+    reaches ~300 hours back. `reachable` is false whenever the window starts
+    beyond that wall, and `stale` is true when the live fetch failed outright and
+    the response is archive-only. The dashboard surfaces both rather than showing
+    a silently short series.
+    """
+    now = ngt_now()
+    current_hour = klv.floor_to_period(now, klv.HOUR_MINUTES)
+
+    start_dt = _parse_iso_bound(start) or (current_hour - timedelta(hours=24))
+    end_dt   = _parse_iso_bound(end)   or now
+    # A DATE-only bound means the whole day, matching kline_volume.py's CLI —
+    # "?end=2026-08-11" should give all 24 hours of the 11th, not just its 00:00
+    # candle. A full datetime is honoured as given, which is what the dashboard
+    # sends (its archive pickers already expand to T23:59:59).
+    if end and "T" not in end:
+        end_dt = end_dt + timedelta(days=1) - timedelta(seconds=1)
+    start_dt = klv.floor_to_period(start_dt, klv.HOUR_MINUTES)
+    # end is inclusive-of-that-hour for the caller; internally we want a half-open
+    # upper bound, hence +1h — then capped so we never ask for the open hour.
+    end_excl = min(klv.floor_to_period(end_dt, klv.HOUR_MINUTES) + timedelta(hours=1),
+                   current_hour)
+
+    if end_excl <= start_dt:
+        # Window is entirely inside the current (unfinished) hour, or inverted.
+        return JSONResponse({"symbol": VOLUME_SYMBOL, "unit": "USDT",
+                             "start": start_dt.isoformat(), "end": end_excl.isoformat(),
+                             "points": [], "total": 0.0, "expected_count": 0,
+                             "archive_only_points": 0, "reachable": True, "stale": False})
+
+    cache_key = ("window", start_dt.isoformat(), end_excl.isoformat())
+    cached = _volume_cache_get(cache_key)
+    if cached is not None:
+        return JSONResponse(cached)
+
+    # Archive first — it's the only source for hours past the API's reach.
+    archive = _load_json_file(VOLUME_ARCHIVE_FILE, [])
+    if not isinstance(archive, list):
+        archive = []
+    by_ts = {}
+    for pt in archive:
+        try:
+            ts = datetime.fromisoformat(pt["ts"])
+        except (KeyError, ValueError, TypeError):
+            continue
+        if start_dt <= ts < end_excl:
+            by_ts[pt["ts"]] = {"ts": pt["ts"], "volume": pt.get("volume")}
+
+    # Live fetch layered on top: fresher, and covers the last ~300 hours even if
+    # the monitor has never run. A failure here degrades to archive-only rather
+    # than a 500 — same spirit as _load_json_file above.
+    reachable, stale = True, False
+    live_ts: set = set()
+    try:
+        live = klv.hourly_series(VOLUME_SYMBOL, start_dt, end_excl, now=now)
+        reachable = live["reachable"]
+        for pt in live["series"]:
+            by_ts[pt["ts"]] = pt
+            live_ts.add(pt["ts"])
+    except RuntimeError:
+        stale = True
+
+    points = [by_ts[ts] for ts in sorted(by_ts)]
+    payload = _sanitize({
+        "symbol":              VOLUME_SYMBOL,
+        "unit":                "USDT",
+        "start":               start_dt.isoformat(),
+        "end":                 end_excl.isoformat(),
+        "points":              points,
+        "total":               sum(p["volume"] for p in points if p.get("volume") is not None),
+        "expected_count":      int((end_excl - start_dt).total_seconds() // 3600),
+        # Points the live call couldn't supply — i.e. served purely from the
+        # monitor's archive. Non-zero means the window reaches past the API wall
+        # (or the live fetch failed), which is exactly when the archive earns
+        # its keep.
+        "archive_only_points": sum(1 for p in points if p["ts"] not in live_ts),
+        "reachable":           reachable,
+        "stale":               stale,
+    })
+    return JSONResponse(_volume_cache_set(cache_key, payload))
+
+
+@app.get("/api/usdtngn-volume/rolling")
+def get_usdtngn_volume_rolling(minutes: int = 60):
+    """
+    Trailing-window USDTNGN base volume (USDT), default the last 60 minutes,
+    rebuilt from 1-MINUTE candles.
+
+    Minute candles rather than the hourly feed because there is no in-progress
+    hourly candle to read — see kline_volume.trailing_window_total. The window
+    ends at the last CLOSED minute, so the figure lags real time by up to ~1
+    minute; `start`/`end` say exactly what was covered so the dashboard can label
+    it honestly instead of implying it's to-the-second.
+
+    retrieved_count vs expected_count distinguishes a genuinely quiet hour from a
+    feed with holes: a zero-trade minute still returns a candle with volume 0.
+    """
+    if minutes <= 0 or minutes > 1440:
+        raise HTTPException(status_code=400, detail="minutes must be between 1 and 1440")
+
+    now = ngt_now()
+    # Minute-floored key: one upstream call per minute at most, regardless of how
+    # many dashboards are polling every 5s.
+    cache_key = ("rolling", minutes, klv.floor_to_period(now, 1).isoformat())
+    cached = _volume_cache_get(cache_key)
+    if cached is not None:
+        return JSONResponse(cached)
+
+    try:
+        result = klv.trailing_window_total(VOLUME_SYMBOL, minutes=minutes, now=now)
+    except RuntimeError as e:
+        # Quidax unreachable — report it as data-unavailable rather than a 500 so
+        # the stat card can show "—" while the rest of the tab keeps working.
+        return JSONResponse({"symbol": VOLUME_SYMBOL, "unit": "USDT", "minutes": minutes,
+                             "volume": None, "stale": True, "error": str(e)})
+
+    result.update({"symbol": VOLUME_SYMBOL, "unit": "USDT",
+                   "minutes": minutes, "stale": False})
+    return JSONResponse(_sanitize(result))
 
 
 @app.get("/api/config")
