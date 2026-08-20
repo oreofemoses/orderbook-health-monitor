@@ -39,6 +39,26 @@ SPREAD_GAP_FIXED_NGN = 1.0
 # couple of MB of JSON, which the Fly volume comfortably holds.
 VOLUME_ARCHIVE_RETENTION_DAYS = 730
 
+# Issue ids an operator can acknowledge from the dashboard, i.e. tick to say
+# "seen it, stop paging me until it clears". Lives here rather than in either
+# process because BOTH need the same answer and for different reasons: debug.py
+# sweeps this set each cycle to auto-clear acks whose issue has resolved, while
+# api.py validates incoming ack requests against it. Two copies would drift into
+# a state where an id can be acked but never auto-cleared (a permanent mute) or
+# swept but never settable.
+#
+# E1/E2 are deliberately absent: both are global infrastructure alerts keyed
+# "_global" rather than to a symbol, so there is no market row to tick.
+#
+# debug.py asserts at import that this covers every id in its tier tables, so
+# adding a check there without adding it here fails loudly instead of shipping a
+# silently un-acknowledgeable alert.
+ACKABLE_ISSUE_IDS = frozenset({
+    "A1", "A2", "A3", "A4", "A5", "A6",
+    "B1", "B2", "B3", "B4",
+    "D1", "F1", "G2",
+})
+
 
 # Canonical defaults. Every tunable the dashboard can edit has an entry here;
 # a stored monitor_config.json overrides these per-key via merge_config().
@@ -70,11 +90,26 @@ DEFAULT_CONFIG: dict = {
         "arb_gap_pct":                0.5,   # F1 — % gap between actual and implied cross price
     },
     "kline": {
-        # B4 (circuit breaker) ONLY as of the D1/B4 decoupling below. D1 has its
-        # own independent candle_minutes/lookback_minutes under volume_spike —
-        # changing these no longer touches D1's window, and vice versa.
-        "candle_minutes":   1,
-        "lookback_minutes": 60,
+        # Feeds BOTH B4 (circuit breaker) and G2 (candle wicks) — check_candle_wicks
+        # reads the same kline_raw as check_circuit_breaker_proximity, so these two
+        # values set the window for both. D1 is the one that's decoupled: it has its
+        # own independent candle_minutes/lookback_minutes under volume_spike, and
+        # changing these no longer touches D1's window or vice versa.
+        #
+        # 60/240 rather than the original 1/60: at a 60-minute window an anomalous
+        # print aged out of G2's view about an hour after it happened, so an
+        # operator looking shortly afterwards saw nothing. 240 minutes keeps it
+        # visible for four hours.
+        #
+        # The cost of the 60-minute CANDLE is real and worth knowing: G2 measures
+        # (high - low) / open per candle, so a brief wick is now weighed against a
+        # whole hour's range instead of one minute's. Small anomalies that would
+        # clear 5% of a 1-minute candle can be diluted below the threshold. If that
+        # matters more than window length, keep lookback_minutes at 240 and put
+        # candle_minutes back to 1 — 240 one-minute candles, same reach, full
+        # resolution, at the cost of a larger API response per pair per cycle.
+        "candle_minutes":   60,
+        "lookback_minutes": 240,
     },
     "g2": {
         # G2 — candle wick / anomalous print detector. Reuses B4's own k-line

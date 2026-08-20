@@ -28,7 +28,8 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 
-from defaults import default_config, merge_config, UPTIME_FIXED_STEP_NGN  # single source of truth for config
+from defaults import (default_config, merge_config, UPTIME_FIXED_STEP_NGN,
+                      ACKABLE_ISSUE_IDS)  # single source of truth for config
 # Candle fetching + aggregation for the USDTNGN volume endpoints. Import-only
 # module (no side effects, no async), shared with debug.py so the OCHLV field
 # convention and NGT hour bucketing stay identical across both processes.
@@ -60,6 +61,18 @@ CONFIG_FILE = DATA_DIR / "monitor_config.json"
 # suspend written here mid-cycle. Same api-writes / monitor-reads direction as
 # monitor_config.json, so there's no cross-process write race.
 SUSPENSIONS_FILE = DATA_DIR / "suspensions.json"
+# Per-(pair, issue) acknowledgements — {symbol: {issue_id: ISO acked_at (NGT)}}.
+# This process owns writing it (the checkbox on each check row); the monitor only
+# reads it, at its fire gate.
+#
+# An ack expires when the issue next reaches a good state, but this process never
+# sees a cycle and so cannot observe that. The monitor records the clear instead,
+# as `resolved_at` inside health_state.json (a file it already owns outright), and
+# BOTH processes decide liveness by the same comparison — acked_at > resolved_at.
+# That keeps expiry working without either process writing the other's file, so
+# there is no cross-process write race in either direction. See debug.py's
+# ALERT_ACKS_FILE comment for the monitor half.
+ALERT_ACKS_FILE = DATA_DIR / "alert_acks.json"
 # G1 depth-walk slippage tracker files (written by debug.py's depth_walk_loop)
 DEPTH_WALK_RAW_FILE       = DATA_DIR / "usdtngn_slippage_raw.json"
 DEPTH_WALK_CONDENSED_FILE = DATA_DIR / "usdtngn_slippage_hourly.json"
@@ -117,7 +130,8 @@ def parse_latest_csv() -> list[dict]:
     df = pd.read_csv(LATEST_CSV)
 
     # Normalise types — booleans arrive as strings from CSV
-    for col in ("monitor_only", "should_alert", "telegram_fired", "dws_poor", "d1_spike"):
+    for col in ("monitor_only", "should_alert", "telegram_fired", "dws_poor", "d1_spike",
+                "ref_mexc_usable", "ref_kucoin_usable"):
         if col in df.columns:
             df[col] = df[col].map(
                 lambda v: str(v).strip().lower() in ("true", "1", "yes")
@@ -125,11 +139,40 @@ def parse_latest_csv() -> list[dict]:
             )
 
     # Numeric coercion (percent_diff / imbalance_ratio may be "N/A")
+    # Per-check evidence columns (see process_pair's `metrics`) land here too.
+    # They are absent from rows written on an A3 short-circuit and from any row
+    # predating the feature, so every one is optional — `if col in df.columns`
+    # below already handles that, and pd.to_numeric(errors="coerce") turns the
+    # per-row gaps into NaN, which _sanitize renders as null.
     for col in ("current_spread", "spread_abs", "percent_diff",
                 "mid_price", "dws", "imbalance_ratio",
                 "ask_layers", "bid_layers", "trusted_ref",
                 "layer_churn_pct", "layer_churn_baseline_pct",
-                "d1_window_volume", "d1_threshold"):
+                "d1_window_volume", "d1_threshold",
+                # A1 / A2
+                "best_ask", "best_bid", "spread_diff_pp",
+                "min_orderbook_layers", "dws_threshold", "min_abs_spread_diff_pct",
+                # A4 / A5
+                "depth_band_value", "thin_depth_threshold",
+                "band_bid_value", "band_ask_value", "imbalance_threshold",
+                # A6
+                "layer_churn_ratio", "layer_churn_samples",
+                "layer_churn_ratio_floor", "layer_churn_min_history",
+                # B1
+                "b1_diff_pct", "b1_expected_offset_pct", "b1_threshold_pct",
+                # B2 / B3
+                "ref_mexc", "ref_kucoin", "ref_divergence_pct",
+                "ref_divergence_threshold_pct",
+                "ref_mexc_unavail", "ref_kucoin_unavail",
+                "ref_mexc_unchanged", "ref_kucoin_unchanged",
+                # B4
+                "b4_window_open", "b4_move_pct", "b4_warn_pct", "b4_breaker_pct",
+                "kline_lookback_minutes",
+                # G2
+                "g2_worst_swing_pct", "g2_candles_scanned",
+                "g2_zero_prints", "g2_swing_threshold_pct",
+                # F1
+                "f1_gap_pct", "f1_implied", "f1_actual", "f1_threshold_pct"):
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce")
 
@@ -194,6 +237,64 @@ def prune_suspensions(data: dict) -> dict:
                 live[sym] = expiry
         except (ValueError, TypeError):
             continue
+    return live
+
+
+def load_alert_acks() -> dict:
+    """Read alert_acks.json -> {symbol: {issue_id: ISO acked_at}}. Missing/corrupt -> {}."""
+    if not ALERT_ACKS_FILE.exists():
+        return {}
+    try:
+        with open(ALERT_ACKS_FILE) as f:
+            data = json.load(f)
+        if not isinstance(data, dict):
+            return {}
+        return {str(s).lower(): v for s, v in data.items() if isinstance(v, dict)}
+    except Exception:
+        return {}
+
+
+def save_alert_acks(data: dict):
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    with open(ALERT_ACKS_FILE, "w") as f:
+        json.dump(data, f, indent=2)
+
+
+def _resolved_at(state: dict, symbol: str, issue_id: str) -> Optional[str]:
+    """
+    When the monitor last saw `issue_id` ABSENT for `symbol`, from health_state.json.
+    None means it has never been seen absent (which includes "never observed").
+    """
+    return (((state.get(symbol) or {}).get("_alert") or {})
+            .get("resolved_at") or {}).get(issue_id)
+
+
+def prune_alert_acks(data: dict, state: dict) -> dict:
+    """
+    Drop acks the monitor has since seen clear — acked_at <= resolved_at — plus any
+    unparseable row. Mirrors debug.is_acked exactly; the two must agree, or the
+    dashboard would show a checkbox state the engine isn't acting on.
+
+    An ack with no resolved_at is KEPT: the issue has not been observed clear since
+    it was acknowledged, which is precisely when the mute should still apply.
+    """
+    live: dict = {}
+    for sym, issues in data.items():
+        if not isinstance(issues, dict):
+            continue
+        for issue_id, acked_at in issues.items():
+            try:
+                acked_ts = datetime.fromisoformat(acked_at)
+            except (ValueError, TypeError):
+                continue
+            resolved_at = _resolved_at(state, sym, issue_id)
+            if resolved_at:
+                try:
+                    if acked_ts <= datetime.fromisoformat(resolved_at):
+                        continue        # cleared since the ack — retire it
+                except (ValueError, TypeError):
+                    pass                # corrupt resolved_at: keep the ack
+            live.setdefault(sym, {})[issue_id] = acked_at
     return live
 
 
@@ -361,6 +462,92 @@ async def post_suspension(request: Request):
     return JSONResponse({"status": "suspended", "symbol": symbol,
                          "suspended_until": expiry, "minutes": minutes,
                          "suspensions": data})
+
+
+# ── Per-(pair, issue) alert acknowledgements ─────────────────────────────────
+# The narrower sibling of a suspension. A suspension mutes a whole pair for a
+# fixed 30 minutes; an ack mutes ONE issue on ONE pair, with no clock — it lasts
+# until that issue reaches a good state, at which point it retires itself and the
+# checkbox comes back empty, ready to be ticked again on the next occurrence.
+#
+# The two are independent and compose: either one alone is enough to mute, and an
+# acked issue on a suspended pair stays acked when the suspension lapses.
+#
+# Expiry is a comparison, not a delete — see ALERT_ACKS_FILE above.
+
+@app.get("/api/alert-acks")
+def get_alert_acks():
+    """
+    Live acknowledgements: {symbol: {issue_id: ISO acked_at}}, with any whose issue
+    has since cleared pruned out. The pruned view is written back so the file
+    self-cleans on read (same contract as /api/suspensions).
+
+    `ackable` is served alongside so the dashboard renders a checkbox on exactly
+    the rows the engine can actually mute, without hardcoding the list twice.
+    """
+    live = prune_alert_acks(load_alert_acks(), load_state())
+    try:
+        save_alert_acks(live)
+    except Exception:
+        pass    # best-effort: it just gets pruned again on the next read
+    return JSONResponse({"acks": live, "ackable": sorted(ACKABLE_ISSUE_IDS)})
+
+
+@app.post("/api/alert-acks")
+async def post_alert_ack(request: Request):
+    """
+    Set or clear one acknowledgement. Body:
+        {"symbol": "btcusdt", "issue_id": "B1", "ack": true}   -> mute until it clears
+        {"symbol": "btcusdt", "issue_id": "B1", "ack": false}  -> un-acknowledge now
+
+    Applies immediately, independent of the config Save flow, so it can't be lost
+    among unsaved config edits.
+
+    Setting an ack stamps NOW. That timestamp is the whole mechanism: the monitor
+    compares it against the last time it saw the issue absent, so re-acking an
+    issue that already cleared correctly starts a fresh mute rather than reviving
+    the old one.
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON body")
+
+    symbol = body.get("symbol")
+    if not isinstance(symbol, str) or not symbol.strip():
+        raise HTTPException(status_code=400, detail="symbol is required")
+    symbol = symbol.strip().lower()
+
+    issue_id = body.get("issue_id")
+    if not isinstance(issue_id, str) or not issue_id.strip():
+        raise HTTPException(status_code=400, detail="issue_id is required")
+    issue_id = issue_id.strip().upper()
+    if issue_id not in ACKABLE_ISSUE_IDS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"issue_id must be one of {sorted(ACKABLE_ISSUE_IDS)}")
+
+    ack = body.get("ack", True)
+    if not isinstance(ack, bool):
+        raise HTTPException(status_code=400, detail="ack must be a boolean")
+
+    state = load_state()
+    data  = prune_alert_acks(load_alert_acks(), state)
+
+    if not ack:
+        if symbol in data:
+            data[symbol].pop(issue_id, None)
+            if not data[symbol]:
+                del data[symbol]        # don't leave empty per-symbol shells behind
+        save_alert_acks(data)
+        return JSONResponse({"status": "cleared", "symbol": symbol,
+                             "issue_id": issue_id, "acked_at": None, "acks": data})
+
+    acked_at = ngt_now().isoformat()
+    data.setdefault(symbol, {})[issue_id] = acked_at
+    save_alert_acks(data)
+    return JSONResponse({"status": "acked", "symbol": symbol, "issue_id": issue_id,
+                         "acked_at": acked_at, "acks": data})
 
 
 # ── G1 USDTNGN depth-walk slippage ──────────────────────────────────────────

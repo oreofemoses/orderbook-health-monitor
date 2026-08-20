@@ -136,7 +136,8 @@ import aiohttp
 import pandas as pd
 
 from defaults import (merge_config, default_config, UPTIME_FIXED_STEP_NGN,
-                      SPREAD_GAP_FIXED_NGN, VOLUME_ARCHIVE_RETENTION_DAYS)  # single source of truth for config
+                      SPREAD_GAP_FIXED_NGN, VOLUME_ARCHIVE_RETENTION_DAYS,
+                      ACKABLE_ISSUE_IDS)  # single source of truth for config
 # Pure candle-parsing/aggregation helpers, shared with api.py so the OCHLV field
 # convention and NGT hour bucketing can't drift between the two processes. Only
 # the pure functions are used here — the module's urllib fetch is for api.py's
@@ -180,6 +181,27 @@ CONFIG_FILE = os.path.join(DATA_DIR, "monitor_config.json")
 # while a cycle was in flight. This mirrors the monitor_config.json direction
 # (api writes / debug reads), so there's no cross-process write race.
 SUSPENSIONS_FILE = os.path.join(DATA_DIR, "suspensions.json")
+
+# Per-(pair, issue) alert acknowledgements — "I've seen this one, stop paging me
+# about it until it actually clears". Written by api.py when an operator ticks the
+# checkbox on a check row; read here at the fire gate. Shape:
+#     {"btcusdt": {"B1": "2026-08-20T14:03:11+01:00"}}   # value = when it was acked
+#
+# Same api-writes / monitor-reads direction as suspensions.json, and for the same
+# reason. But an ack has to EXPIRE ON ITS OWN once the issue clears, which means
+# somebody has to notice the clear — and that somebody is this process, which is
+# the only one that sees a cycle's results.
+#
+# Rather than have both processes write this file (a real race: the API writes
+# out-of-band while a cycle is in flight), the expiry is expressed as a COMPARISON
+# instead of a delete. This process records, per (pair, issue), the last time the
+# issue was observed ABSENT — `resolved_at`, kept in health_state.json, which it
+# already owns and rewrites wholesale each cycle. An ack counts as live only while
+#     acked_at > resolved_at
+# so a clear invalidates it without anyone touching this file. api.py applies the
+# same comparison when reporting ack state to the dashboard, and prunes dead rows
+# on its own writes. Neither process ever needs to write the other's file.
+ALERT_ACKS_FILE = os.path.join(DATA_DIR, "alert_acks.json")
 
 # G1 — USDTNGN depth-walk slippage tracker persistence. Separate files from
 # STATE_FILE deliberately: this data updates every 5s (vs. the main 60s cycle)
@@ -748,7 +770,8 @@ def calculate_dws(asks_df: pd.DataFrame, bids_df: pd.DataFrame,
 
 
 def calculate_depth_imbalance(asks_df: pd.DataFrame, bids_df: pd.DataFrame,
-                               mid: float, spread_pct_range: float) -> tuple:
+                               mid: float, spread_pct_range: float,
+                               metrics: Optional[dict] = None) -> tuple:
     if asks_df.empty or bids_df.empty:
         return None, None
     upper = mid * (1 + spread_pct_range / 100)
@@ -757,6 +780,12 @@ def calculate_depth_imbalance(asks_df: pd.DataFrame, bids_df: pd.DataFrame,
              bids_df.loc[bids_df["price"] >= lower, "amount"]).sum()
     ask_d = (asks_df.loc[asks_df["price"] <= upper, "price"] *
              asks_df.loc[asks_df["price"] <= upper, "amount"]).sum()
+    # The two sides behind the ratio. A5 reports "3.2x, bids heavier", which says
+    # nothing about whether that's $300 vs $95 or $3M vs $940k — the dashboard row
+    # shows both legs so the operator can tell those apart at a glance.
+    if metrics is not None:
+        metrics["band_bid_value"] = float(bid_d)
+        metrics["band_ask_value"] = float(ask_d)
     if ask_d == 0 and bid_d == 0:
         return 1.0, "balanced"
     lighter = min(bid_d, ask_d)
@@ -928,7 +957,8 @@ def _series_is_moving(series: list, eps_pct: float) -> bool:
 
 def resolve_trusted_price(asset: str, m_price, m_ok: bool, k_price, k_ok: bool,
                            ref_hist: dict,
-                           divergence_threshold: Optional[float] = None) -> tuple[Optional[float], list]:
+                           divergence_threshold: Optional[float] = None,
+                           metrics: Optional[dict] = None) -> tuple[Optional[float], list]:
     """
     Per-asset reference resolution: detects B3 (stale feed) per source, then B2
     (source divergence) between the two surviving sources, and returns a single
@@ -1085,18 +1115,42 @@ def resolve_trusted_price(asset: str, m_price, m_ok: bool, k_price, k_ok: bool,
     usable_m = m_price if (m_ok and not m_pricing_stale) else None
     usable_k = k_price if (k_ok and not k_pricing_stale) else None
 
+    # ---- Per-source detail for the dashboard's B2 / B3 rows ----
+    # Both checks are resolved per ASSET, once, before any pair is processed, so
+    # these numbers are otherwise invisible from a pair's row — a B2 row could
+    # only say "MEXC and KuCoin agree" without being able to show what either one
+    # actually said. Recorded on every cycle, firing or not.
+    #
+    # *_usable is the distinction that matters when reading these: a source can
+    # have resolved fine and still be excluded from the trusted price because B3
+    # ruled it stale, and the raw price alone doesn't show that.
+    if metrics is not None:
+        metrics["ref_mexc"]             = float(m_price) if m_price is not None else None
+        metrics["ref_kucoin"]           = float(k_price) if k_price is not None else None
+        metrics["ref_mexc_usable"]      = usable_m is not None
+        metrics["ref_kucoin_usable"]    = usable_k is not None
+        metrics["ref_mexc_unavail"]     = ref_hist["m_unavail"]
+        metrics["ref_kucoin_unavail"]   = ref_hist["k_unavail"]
+        metrics["ref_mexc_unchanged"]   = ref_hist["m_unchanged"]
+        metrics["ref_kucoin_unchanged"] = ref_hist["k_unchanged"]
+        metrics["ref_divergence_threshold_pct"] = round(div_thr, 4)
+
     # ---- B2: source divergence ----
     # Effective threshold `div_thr` was resolved above (hoisted for the B3 gate).
     trusted = None
     if usable_m is not None and usable_k is not None:
         avg = (usable_m + usable_k) / 2
         divergence_pct = abs(usable_m - usable_k) / avg * 100 if avg else 0
+        if metrics is not None:
+            metrics["ref_divergence_pct"] = round(divergence_pct, 4)
         if divergence_pct > div_thr:
             m_mean = sum(ref_hist["mexc"]) / len(ref_hist["mexc"]) if ref_hist["mexc"] else usable_m
             k_mean = sum(ref_hist["kucoin"]) / len(ref_hist["kucoin"]) if ref_hist["kucoin"] else usable_k
             outlier_is_mexc = abs(usable_m - m_mean) > abs(usable_k - k_mean)
             outlier = "MEXC" if outlier_is_mexc else "KuCoin"
             trusted = usable_k if outlier_is_mexc else usable_m
+            if metrics is not None:
+                metrics["ref_outlier"] = outlier
             issues.append(("B2", "HIGH",
                 f"Source divergence {divergence_pct:.2f}% on {asset} "
                 f"(fires past {div_thr:.2f}%) — "
@@ -1114,7 +1168,8 @@ def resolve_trusted_price(asset: str, m_price, m_ok: bool, k_price, k_ok: bool,
 
 
 def check_price_discrepancy(quidax_mid: float, trusted_price: Optional[float],
-                             target_spread: Optional[float] = None) -> list:
+                             target_spread: Optional[float] = None,
+                             metrics: Optional[dict] = None) -> list:
     """
     B1 — Quidax mid price vs. trusted external reference. USDT-quoted pairs only
     (caller-gated).
@@ -1138,6 +1193,13 @@ def check_price_discrepancy(quidax_mid: float, trusted_price: Optional[float],
     diff_pct = (quidax_mid - trusted_price) / trusted_price * 100
     expected_offset_pct = (target_spread / 2.0) if target_spread else 0.0
     threshold_pct = expected_offset_pct + PRICE_DISCREPANCY_PCT
+    # Recorded whether or not this fires: the dashboard's B1 row shows the live
+    # numbers on a passing check too, and the firing point is per-pair (see above),
+    # so it can't be re-derived from a single global constant on the client.
+    if metrics is not None:
+        metrics["b1_diff_pct"]            = round(diff_pct, 4)
+        metrics["b1_expected_offset_pct"] = round(expected_offset_pct, 4)
+        metrics["b1_threshold_pct"]       = round(threshold_pct, 4)
     if abs(diff_pct) >= threshold_pct:
         severity = "CRITICAL" if abs(diff_pct) >= expected_offset_pct + (PRICE_DISCREPANCY_PCT * 2) else "HIGH"
         return [("B1", severity,
@@ -1148,7 +1210,8 @@ def check_price_discrepancy(quidax_mid: float, trusted_price: Optional[float],
     return []
 
 
-def check_circuit_breaker_proximity(kline_raw: list, current_mid: float) -> list:
+def check_circuit_breaker_proximity(kline_raw: list, current_mid: float,
+                                    metrics: Optional[dict] = None) -> list:
     """
     B4 — reference-free: compares current mid against the open of the oldest candle
     in the k-line lookback window. circuit_breaker_pct/warn_ratio are dashboard-configurable.
@@ -1166,6 +1229,11 @@ def check_circuit_breaker_proximity(kline_raw: list, current_mid: float) -> list
         return []
     move_pct  = (current_mid - window_open) / window_open * 100
     warn_level = CIRCUIT_BREAKER_PCT * CIRCUIT_BREAKER_WARN_RATIO
+    if metrics is not None:
+        metrics["b4_window_open"]  = round(window_open, 8)
+        metrics["b4_move_pct"]     = round(move_pct, 4)
+        metrics["b4_warn_pct"]     = round(warn_level, 4)
+        metrics["b4_breaker_pct"]  = CIRCUIT_BREAKER_PCT
     if abs(move_pct) >= CIRCUIT_BREAKER_PCT:
         return [("B4", "CRITICAL",
             f"Price moved {move_pct:+.2f}% within the {KLINE_LOOKBACK_MINUTES}min window — "
@@ -1177,7 +1245,7 @@ def check_circuit_breaker_proximity(kline_raw: list, current_mid: float) -> list
     return []
 
 
-def check_candle_wicks(kline_raw: list) -> list:
+def check_candle_wicks(kline_raw: list, metrics: Optional[dict] = None) -> list:
     """
     G2 — candle wick / anomalous print. Reuses B4's own kline_raw (1-minute
     candles, KLINE_LOOKBACK_MINUTES window) — no separate API call.
@@ -1207,6 +1275,13 @@ def check_candle_wicks(kline_raw: list) -> list:
         return []
 
     issues = []
+    # Widest swing seen anywhere in the window, tracked even when nothing fires:
+    # the dashboard's G2 row reports "worst candle in window" as the passing-state
+    # evidence, which is only meaningful if it's measured on every cycle.
+    worst_swing_pct  = None
+    worst_swing_time = None
+    scanned          = 0
+    zero_prints      = 0
     for candle in kline_raw:
         try:
             ts, open_, _close, high, low = (
@@ -1220,16 +1295,28 @@ def check_candle_wicks(kline_raw: list) -> list:
 
         candle_time = datetime.fromtimestamp(ts / 1000, tz=timezone.utc).strftime("%H:%M UTC")
 
+        scanned += 1
+
         if low <= 0:
+            zero_prints += 1
             issues.append(("G2", "CRITICAL",
                 f"Candle at {candle_time} printed low={low:g} — price hit zero"))
             continue  # zero print already flagged; skip the swing check for this candle
 
         swing_pct = (high - low) / open_ * 100
+        if worst_swing_pct is None or swing_pct > worst_swing_pct:
+            worst_swing_pct, worst_swing_time = swing_pct, candle_time
         if swing_pct >= G2_SWING_PCT:
             issues.append(("G2", "HIGH",
                 f"Candle at {candle_time} swung {swing_pct:.2f}% "
                 f"(high {high:g} / low {low:g}) — at/beyond configured threshold ({G2_SWING_PCT}%)"))
+
+    if metrics is not None:
+        metrics["g2_worst_swing_pct"] = round(worst_swing_pct, 4) if worst_swing_pct is not None else None
+        metrics["g2_worst_candle"]    = worst_swing_time
+        metrics["g2_candles_scanned"] = scanned
+        metrics["g2_zero_prints"]     = zero_prints
+        metrics["g2_swing_threshold_pct"] = G2_SWING_PCT
 
     return issues
 
@@ -2100,6 +2187,7 @@ async def process_pair(
     ref_issues: list,
     vol_hist_root: dict,
     layer_hist_root: dict,
+    ref_metrics: Optional[dict] = None,
 ) -> Optional[dict]:
     """
     Fetches depth + kline (B4) + kline-volume (D1, its own independent call — see
@@ -2109,7 +2197,15 @@ async def process_pair(
     resolve_trusted_price) and only populated for USDT-quoted pairs. `vol_hist_root`
     is the persisted per-pair volume-bucket history D1 uses for its own baseline.
     `layer_hist_root` is the persisted per-pair near-touch-level history A6 uses for
-    its own churn self-baseline.
+    its own churn self-baseline. `ref_metrics` carries the B2/B3 per-source detail
+    already resolved for this pair's asset, which is merged into the returned row
+    so the dashboard can show what each reference exchange actually quoted.
+
+    Alongside the issue list, every check records the numbers it judged — into
+    `metrics` below, which is flattened into the returned row. These are reported
+    whether or not the check fired: a passing row that can show its own evidence
+    ("churn 41% vs 38% typical") is worth considerably more than one that just
+    says "pass", and it's the same data either way.
 
     The collected issue list is run through dedupe_actionable before it becomes
     `_actionable` (and before the dashboard `issues` string is built), so any id
@@ -2161,12 +2257,19 @@ async def process_pair(
             dws      = calculate_dws(asks_df, bids_df, mid_price)
             depth_25 = calculate_liquidity_depth(asks_df, bids_df, mid_price, curr_spread * 1.25)
             depth_50 = calculate_liquidity_depth(asks_df, bids_df, mid_price, curr_spread * 1.50)
-            imbalance_ratio, heavier_side = calculate_depth_imbalance(asks_df, bids_df, mid_price, curr_spread * 1.25)
+            # Per-check evidence for the dashboard, filled in as the checks run
+            # below and flattened into the returned row. Seeded with the B2/B3
+            # detail resolved once per asset back in run_cycle.
+            metrics: dict = dict(ref_metrics or {})
+            imbalance_ratio, heavier_side = calculate_depth_imbalance(
+                asks_df, bids_df, mid_price, curr_spread * 1.25, metrics=metrics)
 
             issues = []
 
             # ── A1 — Crossed orderbook ──────────────────────────────────────
             best_ask, best_bid = asks_df["price"].iloc[0], bids_df["price"].iloc[0]
+            metrics["best_ask"] = float(best_ask)
+            metrics["best_bid"] = float(best_bid)
             if best_bid >= best_ask:
                 issues.append(("A1", "CRITICAL",
                     f"Crossed orderbook — best bid {best_bid:,.6g} ≥ best ask {best_ask:,.6g}"))
@@ -2190,6 +2293,11 @@ async def process_pair(
             if not monitor_only and target:
                 diff = ((curr_spread - target) / target) * 100
                 abs_diff_pp = abs(curr_spread - target)
+                # The absolute miss in percentage POINTS, which is the gate that
+                # stops a tiny-target pair firing on rounding noise. Recorded
+                # separately from `diff` (a relative %) because the A2 row has to
+                # explain both, and they disagree constantly on thin pairs.
+                metrics["spread_diff_pp"] = round(abs_diff_pp, 6)
                 spread_anomaly = (
                     (diff > 100 or diff < -75)
                     and abs_diff_pp >= MIN_ABS_SPREAD_DIFF_PCT
@@ -2226,6 +2334,15 @@ async def process_pair(
             if churn_score is not None:
                 churn_baseline, churn_bucket_count = update_layer_churn_baseline(
                     symbol, churn_score, layer_hist_root)
+            # A6's verdict is a RATIO against the pair's own baseline, not either
+            # raw number — surface it directly rather than making the dashboard
+            # re-divide two rounded percentages and land somewhere slightly else.
+            metrics["layer_churn_ratio"] = (
+                round(churn_score / churn_baseline, 3)
+                if churn_score is not None and churn_baseline else None)
+            metrics["layer_churn_samples"]     = churn_bucket_count
+            metrics["layer_churn_ratio_floor"] = LAYER_CHURN_RATIO_THRESHOLD
+            metrics["layer_churn_min_history"] = LAYER_CHURN_MIN_HISTORY_BUCKETS
             issues += check_layer_churn_stall(churn_score, churn_baseline, churn_bucket_count, monitor_only)
             # Snapshot written only when both sides are present (A3 early-return skips this)
             layer_hist["last_top_asks"] = curr_top_asks
@@ -2234,7 +2351,7 @@ async def process_pair(
             # ── B1 — Price discrepancy (USDT-quoted pairs only) ─────────────
             _, quote = split_symbol(symbol)
             if quote == "usdt":
-                issues += check_price_discrepancy(mid_price, trusted_price, target)
+                issues += check_price_discrepancy(mid_price, trusted_price, target, metrics=metrics)
 
             # ── B2 / B3 — carried in from the per-asset reference pass ──────
             # ref_issues may carry two ("B3", ...) tuples (MEXC + KuCoin); the
@@ -2242,10 +2359,10 @@ async def process_pair(
             issues += ref_issues
 
             # ── B4 — Circuit breaker proximity (reference-free) ─────────────
-            issues += check_circuit_breaker_proximity(kline_raw, mid_price)
+            issues += check_circuit_breaker_proximity(kline_raw, mid_price, metrics=metrics)
 
             # ── G2 — Candle wick / anomalous print (same kline_raw as B4) ───
-            issues += check_candle_wicks(kline_raw)
+            issues += check_candle_wicks(kline_raw, metrics=metrics)
 
             # ── Fold duplicate ids (A2 x2, B3 x2) BEFORE any tier/firing logic ──
             issues = dedupe_actionable(issues)
@@ -2269,6 +2386,19 @@ async def process_pair(
             # only emits 0 or 1 tuple, but this keeps the invariant "issues is deduped
             # before status/tier/firing" holding regardless of future edits).
             issues = dedupe_actionable(issues)
+
+            # Thresholds each check judged against. Carried on the row rather than
+            # fetched separately by the dashboard so a row always explains itself
+            # with the values that were actually in force when it was written —
+            # these are live-editable from the config drawer, and a row rendered
+            # against a threshold edited since would quietly misreport why it fired.
+            metrics["depth_band_value"]          = float(depth_25)
+            metrics["thin_depth_threshold"]      = THIN_DEPTH_THRESHOLD
+            metrics["min_orderbook_layers"]      = MIN_ORDERBOOK_LAYERS
+            metrics["dws_threshold"]             = DWS_POOR_THRESHOLD
+            metrics["imbalance_threshold"]       = DEPTH_IMBALANCE_RATIO
+            metrics["min_abs_spread_diff_pct"]   = MIN_ABS_SPREAD_DIFF_PCT
+            metrics["kline_lookback_minutes"]    = KLINE_LOOKBACK_MINUTES
 
             is_poor = bool(issues)
             has_d1  = any(i[0] == "D1" for i in issues)  # dashboard flag; d1_spike below
@@ -2311,6 +2441,9 @@ async def process_pair(
                   f"dws={dws:.4f} layers={ask_layers}/{bid_layers} issues={len(issues)}")
 
             return {
+                # Per-check evidence first: every fixed field below is written
+                # after it, so a metric key can never shadow one of them.
+                **metrics,
                 "timestamp":       ngt_now().strftime("%Y-%m-%d %H:%M:%S"),
                 "symbol":          symbol,
                 "monitor_only":    monitor_only,
@@ -2364,6 +2497,22 @@ FAILED_PAIR_RATIO_FOR_OUTAGE_ALERT = 0.5   # ≥50% of pairs failing looks like 
 _TIER1_IDS = {"A1", "A3", "A6", "D1"}    # fire immediately on first occurrence
 _TIER2_IDS = {"A2", "B1", "B2", "B3"}    # require consecutive cycles
 _TIER3_IDS = {"A4", "A5", "F1"}          # dashboard flag only — never Telegram
+
+# ── Acknowledgeable issue ids ─────────────────────────────────────────────────
+# The per-(pair, issue) checkbox operates on these. It is exactly the set of ids a
+# PAIR can carry, which is why E1/E2 are absent: both are global (keyed "_global",
+# not a symbol), so there is no market to tick the box against. Tier-3 ids are
+# included even though they never reach Telegram — acking one still parks it on
+# the dashboard, and keeping the set uniform means the auto-clear sweep below
+# doesn't need a second rule for them.
+_ACKABLE_IDS = ACKABLE_ISSUE_IDS
+
+# Drift guard: every per-pair id this engine can emit must be acknowledgeable, or
+# the auto-clear sweep in run_cycle would skip it and an ack on it would never
+# retire. B4/G2 aren't in the tier sets above (their tier depends on severity, so
+# classify_tier special-cases them) — they're named here so the check stays total.
+_missing_acks = (_TIER1_IDS | _TIER2_IDS | _TIER3_IDS | {"B4", "G2"}) - set(_ACKABLE_IDS)
+assert not _missing_acks, f"ACKABLE_ISSUE_IDS is missing {sorted(_missing_acks)} — see defaults.py"
 
 # ── Per-episode delivery caps ─────────────────────────────────────────────────
 # Issues whose anomaly lingers in a rolling window and re-detects every cycle, so
@@ -2481,6 +2630,79 @@ def is_suspended(suspensions: dict, symbol: str) -> bool:
         return False
 
 
+def load_alert_acks() -> dict:
+    """
+    Read alert_acks.json -> {symbol: {issue_id: ISO acked_at (NGT)}}. Missing or
+    corrupt file yields an empty map (fail-open: a bad file must never silence an
+    alert, and must never crash the cycle). Read once per cycle in run_cycle.
+
+    Rows are NOT validated against live PAIRS here. A stale entry for a delisted
+    pair is inert — nothing looks it up — and dropping it would mean writing this
+    file, which this process deliberately never does (see ALERT_ACKS_FILE).
+    """
+    if not os.path.exists(ALERT_ACKS_FILE):
+        return {}
+    try:
+        with open(ALERT_ACKS_FILE) as f:
+            data = json.load(f)
+        if not isinstance(data, dict):
+            return {}
+        # Coerce to the nested shape; a malformed per-symbol value is dropped
+        # rather than allowed to blow up the lookup below.
+        return {str(sym).lower(): v for sym, v in data.items() if isinstance(v, dict)}
+    except Exception as exc:
+        print(f"⚠️  Could not read {ALERT_ACKS_FILE}: {exc} — treating as no acks")
+        return {}
+
+
+def get_resolved_at(shared_state: dict, symbol: str, issue_id: str) -> Optional[str]:
+    """
+    ISO timestamp of the last cycle in which `issue_id` was observed ABSENT for
+    `symbol`, or None if it has never been seen absent (which includes "we have
+    never looked", e.g. a pair added this cycle).
+    """
+    return _alert_state(shared_state, symbol).get("resolved_at", {}).get(issue_id)
+
+
+def mark_resolved(shared_state: dict, symbol: str, issue_id: str, when: str):
+    """
+    Record that `issue_id` is absent for `symbol` as of `when`. This is what
+    expires an acknowledgement (see ALERT_ACKS_FILE) — it is written on the cycle
+    the issue is NOT present, so an ack taken while the issue was live stops
+    applying the moment the market returns to a good state.
+    """
+    _alert_state(shared_state, symbol).setdefault("resolved_at", {})[issue_id] = when
+
+
+def is_acked(acks: dict, shared_state: dict, symbol: str, issue_id: str) -> bool:
+    """
+    True if an operator has acknowledged (symbol, issue_id) and the issue has NOT
+    returned to a good state since. Unparseable timestamps read as "not acked" —
+    fail-open, matching load_alert_acks: a corrupt ack must never mute an alert.
+    """
+    acked_at = (acks.get(symbol.lower()) or {}).get(issue_id)
+    if not acked_at:
+        return False
+    # Parse the ack BEFORE the never-resolved shortcut below. Checking it only on
+    # the comparison path would let an unparseable acked_at mute an alert outright
+    # whenever no resolved_at exists yet — which is the common case for a pair
+    # whose issue has been continuously present, i.e. exactly when muting matters.
+    try:
+        acked_ts = datetime.fromisoformat(acked_at)
+    except (ValueError, TypeError):
+        return False
+    resolved_at = get_resolved_at(shared_state, symbol, issue_id)
+    if not resolved_at:
+        return True     # acked, never seen clear since — still live
+    try:
+        return acked_ts > datetime.fromisoformat(resolved_at)
+    except (ValueError, TypeError):
+        # resolved_at is corrupt: treat the clear as unproven and keep the ack.
+        # Erring the other way would resurrect an alert the operator already
+        # acknowledged, on the strength of a field this process itself wrote.
+        return True
+
+
 def _alert_state(shared_state: dict, symbol: str) -> dict:
     """Return (and lazily create) the _alert sub-dict for a pair."""
     pair = shared_state.setdefault(symbol, {})
@@ -2596,6 +2818,7 @@ def should_fire_telegram(shared_state: dict, symbol: str,
 async def run_cycle(shared_state: dict, session: aiohttp.ClientSession, cycle_num: int):
     apply_config()   # pick up any dashboard edits without restarting
     suspensions = load_suspensions()   # per-pair Telegram mutes, set from the dashboard
+    acks        = load_alert_acks()    # per-(pair, issue) "seen it" checkboxes
     cycle_start = ngt_now()
     semaphore   = asyncio.Semaphore(MAX_CONCURRENT_PAIRS)
 
@@ -2627,6 +2850,9 @@ async def run_cycle(shared_state: dict, session: aiohttp.ClientSession, cycle_nu
 
     trusted_prices: dict[str, Optional[float]] = {}
     ref_issues_by_asset: dict[str, list] = {}
+    # B2/B3 detail per asset, for the dashboard's reference rows. Resolved here
+    # (once per asset) and handed to every pair built on that asset.
+    ref_metrics_by_asset: dict[str, dict] = {}
 
     for asset in assets:
         aliases = asset_aliases.get(asset, {})
@@ -2638,11 +2864,14 @@ async def run_cycle(shared_state: dict, session: aiohttp.ClientSession, cycle_nu
         k_price, k_ok = (k["price"], True) if k else (None, False)
 
         asset_hist = ref_hist_root.setdefault(asset, {})
+        asset_metrics: dict = {}
         trusted, issues = resolve_trusted_price(
             asset, m_price, m_ok, k_price, k_ok, asset_hist,
-            divergence_threshold=asset_divergence_pct.get(asset, SOURCE_DIVERGENCE_PCT))
+            divergence_threshold=asset_divergence_pct.get(asset, SOURCE_DIVERGENCE_PCT),
+            metrics=asset_metrics)
         trusted_prices[asset] = trusted
         ref_issues_by_asset[asset] = issues
+        ref_metrics_by_asset[asset] = asset_metrics
 
     # ── Step 3: per-pair checks (A-series, B1, B4, D1) ──────────────────────────
     tasks = []
@@ -2654,6 +2883,7 @@ async def run_cycle(shared_state: dict, session: aiohttp.ClientSession, cycle_nu
             sym, tgt, session, semaphore,
             trusted_price=trusted_prices.get(asset) if is_usdt_pair else None,
             ref_issues=ref_issues_by_asset.get(asset, []) if is_usdt_pair else [],
+            ref_metrics=ref_metrics_by_asset.get(asset, {}) if is_usdt_pair else {},
             vol_hist_root=vol_hist_root,
             layer_hist_root=layer_hist_root,
         ))
@@ -2687,6 +2917,15 @@ async def run_cycle(shared_state: dict, session: aiohttp.ClientSession, cycle_nu
             continue
         label = (f"Arb gap {gap['gap_pct']:+.2f}% vs implied {gap['implied']:,.6g} "
                  f"(legs: {'/'.join(gap['legs'])}) — suspect leg: {gap['suspect']}")
+        # F1 detail for the dashboard row. Only set on pairs that actually
+        # breached — a triangle's gap is computed from OTHER pairs' mids, so a
+        # quiet pair has no F1 numbers of its own to show and its row says so.
+        r["f1_gap_pct"]  = round(gap["gap_pct"], 4)
+        r["f1_implied"]  = float(gap["implied"])
+        r["f1_actual"]   = float(gap["actual"])
+        r["f1_legs"]     = "/".join(gap["legs"])
+        r["f1_suspect"]  = gap["suspect"]
+        r["f1_threshold_pct"] = ARB_GAP_PCT
         issue = ("F1", gap["severity"], label)
         r["issues"] = (r["issues"] + "|" if r["issues"] else "") + f"{issue[0]}:{issue[1]}"
         r["_actionable"].append(issue)
@@ -2694,6 +2933,26 @@ async def run_cycle(shared_state: dict, session: aiohttp.ClientSession, cycle_nu
         r["should_alert"] = True
         # Recalculate tier — F1 is Tier 3, but don't raise it if pair already has a lower tier
         r["alert_tier"] = worst_tier(r["_actionable"])
+
+    # ── Acknowledgement auto-clear ────────────────────────────────────────────
+    # An ack lasts only until the issue reaches a good state, and THIS is where a
+    # good state is observed: any ackable id that is not in a pair's issue set this
+    # cycle gets its resolved_at stamped, which retires an ack taken before now
+    # (is_acked compares acked_at > resolved_at) and returns the dashboard checkbox
+    # to unticked.
+    #
+    # Only pairs present in `results` are swept. A pair whose fetch failed this
+    # cycle isn't in there at all, and that is deliberate: a failed fetch is not
+    # evidence the issue cleared, so its acks must survive the gap rather than
+    # being silently dropped by a transient API error.
+    #
+    # Runs after the F1 block above so F1 is already in `_actionable` — sweeping
+    # earlier would stamp F1 resolved on the very cycle it fired.
+    resolved_stamp = ngt_now().isoformat()
+    for r in results:
+        present = {iid for iid, _, _ in r.get("_actionable", [])}
+        for issue_id in _ACKABLE_IDS - present:
+            mark_resolved(shared_state, r["symbol"], issue_id, resolved_stamp)
 
     warnings    = [r for r in results if r["status"] == "Warning"]
     alert_pairs = [r for r in warnings if r["should_alert"]]
@@ -2806,6 +3065,21 @@ async def run_cycle(shared_state: dict, session: aiohttp.ClientSession, cycle_nu
         tg_issues = []
         detail_parts = []   # per-issue state, rendered as the dashboard caption
         for issue_id, severity, label in r.get("_actionable", []):
+            # ── Acknowledged (pair, issue): muted until it clears ──────────────
+            # Checked from the dashboard's check row. Narrower than a suspension
+            # in scope (one issue, not the whole pair) and open-ended in time
+            # (until the issue resolves, not a fixed 30m) — the two are
+            # independent and either one alone is enough to mute.
+            #
+            # Counter reset follows the suspension rule for the same reason: when
+            # the ack retires, a still-present issue should have to re-confirm
+            # over three fresh cycles instead of firing the instant it lapses.
+            # Cooldowns are left alone — they're time-based and resume naturally.
+            if is_acked(acks, shared_state, r["symbol"], issue_id):
+                reset_consecutive(shared_state, r["symbol"], issue_id)
+                detail_parts.append(f"{issue_id}:acked")
+                print(f"  [{r['symbol']}] [{issue_id}] acknowledged — muted until it clears")
+                continue
             if should_fire_telegram(shared_state, r["symbol"], issue_id, severity):
                 tg_issues.append((issue_id, severity, label))
                 detail_parts.append(f"{issue_id}:fired")

@@ -368,7 +368,7 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
 
 .alert-checks { display: flex; flex-direction: column; gap: 6px; }
 .check-row {
-  display: flex; align-items: center; gap: 10px;
+  display: flex; align-items: flex-start; gap: 10px;
   padding: 9px 12px; border-radius: var(--radius-sm); font-size: 12px;
   border: 1px solid transparent;
 }
@@ -377,11 +377,11 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
 .check-row.crit  { background: var(--red-bg); color: var(--red-text); border-color: #fca5a5; }
 .check-row.info  { background: var(--blue-bg); color: var(--blue-text); border-color: #93c5fd; }
 .check-row.na    { background: var(--bg-base); color: var(--text-muted); border-color: transparent; }
-.check-icon { font-size: 14px; flex-shrink: 0; }
-.check-body { flex: 1; }
-.check-name { font-weight: 600; }
+.check-icon { font-size: 14px; flex-shrink: 0; margin-top: 1px; }
+.check-body { flex: 1; min-width: 0; }
+.check-name { font-weight: 600; display: flex; align-items: center; gap: 6px; }
 .check-desc { font-size: 11px; opacity: .85; margin-top: 1px; }
-.check-sev { font-size: 10px; font-weight: 700; flex-shrink: 0; padding: 1px 6px; border-radius: 4px; background: rgba(0,0,0,.08); }
+.check-sev { font-size: 10px; font-weight: 700; flex-shrink: 0; padding: 1px 6px; border-radius: 4px; background: rgba(0,0,0,.08); margin-top: 1px; }
 
 /* ─── Chart Card ────────────────────────────────── */
 .chart-card {
@@ -604,6 +604,84 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
 .dl-issue-badge.CRITICAL { background: var(--red-bg);   color: var(--red-text); }
 .dl-issue-badge.HIGH     { background: var(--amber-bg); color: var(--amber-text); }
 .dl-issue-badge.MEDIUM   { background: var(--blue-bg);  color: var(--blue-text); }
+
+/* ── Alert acknowledgement checkbox (detail panel check rows) ──────────────── */
+/* Ticking one mutes that single issue on that single market until it next
+   reaches a good state, at which point the engine retires the ack and the box
+   comes back empty. Distinct from the config drawer's Suspend, which mutes a
+   whole pair on a fixed 30-minute clock. */
+.check-row { position: relative; }
+.check-ack {
+  display: flex; align-items: flex-start; flex-shrink: 0;
+  margin-left: 2px; margin-top: 1px;
+}
+.check-ack input[type=checkbox] {
+  appearance: none; -webkit-appearance: none;
+  width: 15px; height: 15px; margin: 0;
+  border: 1.5px solid currentColor; border-radius: 4px;
+  opacity: .5; cursor: pointer; position: relative;
+  background: transparent; transition: opacity .12s, background .12s;
+  flex-shrink: 0;
+}
+.check-ack input[type=checkbox]:hover:not(:disabled) { opacity: .9; }
+.check-ack input[type=checkbox]:checked {
+  opacity: 1; background: currentColor;
+}
+.check-ack input[type=checkbox]:checked::after {
+  content: ""; position: absolute; left: 4px; top: 1px;
+  width: 4px; height: 8px;
+  border: solid var(--bg-card, #fff); border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+.check-ack input[type=checkbox]:disabled { opacity: .18; cursor: not-allowed; }
+.check-ack input[type=checkbox]:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* An acked row stays fully visible — the alert is still real and still on the
+   dashboard; only its Telegram delivery is muted. Hence a badge, not a hide. */
+.check-row.acked { opacity: .62; }
+.check-ack-badge {
+  font-size: 9px; font-weight: 700; letter-spacing: .04em;
+  padding: 1px 5px; border-radius: 4px; margin-left: 6px;
+  background: rgba(0,0,0,.10); text-transform: uppercase;
+  white-space: nowrap;
+}
+/* The rule-explanation line. Collapsed by default: 16 rows x ~3 lines of prose
+   buries the evidence line, which is the part worth scanning. Click the row to
+   disclose one. Expansion is keyed by check id in _expandedChecks, so it
+   survives the re-render an ack toggle triggers and carries across markets. */
+.check-note {
+  font-size: 10.5px; opacity: .62; margin-top: 4px; line-height: 1.45;
+  display: none;
+}
+.check-row.expanded .check-note { display: block; }
+.check-row[role="button"] { cursor: pointer; }
+.check-row[role="button"]:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.check-chev {
+  margin-left: auto; font-size: 13px; opacity: .4; flex-shrink: 0;
+  transition: transform .12s ease;
+}
+.check-row.expanded .check-chev { transform: rotate(90deg); opacity: .7; }
+
+/* ── Alert log: type filter + per-row issue badges ─────────────────────────── */
+.log-controls {
+  display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
+}
+.log-controls select {
+  font-size: 12px; font-family: var(--font);
+  border: 1px solid var(--border-strong); border-radius: var(--radius-sm);
+  padding: 5px 9px; background: var(--bg-base); color: var(--text-primary);
+  cursor: pointer;
+}
+.log-controls select:focus { outline: none; border-color: var(--accent); }
+.log-ids { display: inline-flex; gap: 4px; flex-wrap: wrap; margin-right: 2px; }
+.log-id {
+  font-size: 10px; font-weight: 700; font-family: var(--mono);
+  padding: 1px 5px; border-radius: 4px; white-space: nowrap;
+  background: var(--blue-bg); color: var(--blue-text);
+}
+.log-id.crit { background: var(--red-bg);   color: var(--red-text); }
+.log-id.warn { background: var(--amber-bg); color: var(--amber-text); }
+
 </style>
 </head>
 <body>
@@ -772,6 +850,13 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
         <div class="section-title">
           <i class="ti ti-bell" style="font-size:16px;color:var(--accent)"></i>
           Alert log
+          <span class="count" id="al-count-label">—</span>
+        </div>
+        <div class="log-controls">
+          <select id="al-filter-type" onchange="setAlertLogFilter(this.value)"
+                  title="Show only entries that fired this alert type">
+            <option value="">All alert types</option>
+          </select>
         </div>
       </div>
       <div class="log-card" id="alert-log-container">
@@ -1187,22 +1272,27 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
         </div>
       </div>
 
-      <!-- K-line (B4 circuit breaker only) -->
+      <!-- K-line — feeds BOTH B4 (circuit breaker) and G2 (candle wicks).
+           check_candle_wicks() reads the same kline_raw as
+           check_circuit_breaker_proximity(), so these two fields set the
+           window for both checks. Labelled B4-only until 2026-08-20, which
+           sent operators to the D1 volume fields when they wanted to widen
+           G2's window. -->
       <div class="config-section">
         <div class="config-section-title">
           <i class="ti ti-chart-candle" style="font-size:14px"></i>
-          K-line (circuit breaker · B4)
+          K-line (circuit breaker · B4 &amp; candle wicks · G2)
         </div>
         <div class="config-grid">
           <div class="config-field">
             <label>Candle size (minutes)</label>
             <input type="number" id="cfg-kline-candle" min="1" step="1" />
-            <span class="hint">B4 — candle period requested from the API (usually 1). Independent of D1's own candle size below — changing this no longer affects volume-spike detection.</span>
+            <span class="hint">B4 <b>and G2</b> — candle period requested from the API (usually 1). Both checks read this same feed. Larger candles keep anomalies in view longer but blur a brief wick into a whole candle's range, which is what G2 exists to catch. Independent of D1's own candle size below — changing this no longer affects volume-spike detection.</span>
           </div>
           <div class="config-field">
             <label>Lookback window (minutes)</label>
             <input type="number" id="cfg-kline-lookback" min="1" step="1" />
-            <span class="hint">B4 — window used for circuit-breaker move detection (price now vs. open of the oldest candle in this window).</span>
+            <span class="hint">B4 <b>and G2</b> — how far back both checks look. B4 measures price now vs. the open of the oldest candle in this window; G2 rescans every candle in it each cycle, so this is also how long an anomalous print stays visible before it ages out.</span>
           </div>
         </div>
       </div>
@@ -1420,6 +1510,25 @@ let lastData = null;
 let showAll = false;
 let selectedSym = null;
 
+// ── Per-(pair, issue) alert acknowledgements ─────────────────────────────────
+// _alertAcks: { symbol: { issueId: ISO acked_at } } from /api/alert-acks, already
+// pruned server-side of anything whose issue has since cleared — so whatever is
+// in here is live, and an entry disappearing IS the auto-clear the operator sees.
+// _ackableIds comes from the same response rather than being hardcoded, so the
+// set of tickable rows can't drift from what the engine will actually act on.
+let _alertAcks  = {};
+let _ackableIds = [];
+
+// Which check rows have their rule-explanation disclosed, keyed by check id
+// ("B1", "A2-Spread", …). Kept outside the render so it survives the re-render
+// an ack toggle triggers, and carries over when you click to another market —
+// if you wanted B1 explained on one pair you probably want it on the next.
+const _expandedChecks = new Set();
+
+// Alert-log type filter ("" = all). Held outside alertLog so re-renders and the
+// 60s poll don't reset the operator's chosen filter.
+let alertLogFilter = "";
+
 // ── Slippage tab state ────────────────────────────────────────────────────────
 let slippageChart, slippagePriceChart, uptimeChart, volumeChart;
 // Hourly volume series for the current window, kept for the CSV export so the
@@ -1515,6 +1624,37 @@ function fmtPrice(val) {
   if (val == null) return "—";
   return Number(val).toLocaleString(undefined, { maximumFractionDigits: 4 });
 }
+
+// ── Check-evidence formatters ────────────────────────────────────────────────
+// Every per-check metric arrives from the CSV, so a missing one can show up as
+// null, "", NaN or the literal "N/A" depending on how it got there. nOrNull
+// flattens all four to null so each formatter has exactly one absent case to
+// render as an em dash, instead of leaking "NaN%" into a row.
+function nOrNull(v) {
+  if (v === null || v === undefined || v === "" || v === "N/A") return null;
+  const x = Number(v);
+  return Number.isFinite(x) ? x : null;
+}
+function fmtPct(v, dp = 2, signed = false) {
+  const x = nOrNull(v);
+  if (x === null) return "—";
+  return (signed && x > 0 ? "+" : "") + x.toFixed(dp) + "%";
+}
+function fmtQty(v, dp = 0) {
+  const x = nOrNull(v);
+  if (x === null) return "—";
+  return x.toLocaleString(undefined, { maximumFractionDigits: dp });
+}
+function fmtCur(v, cur, dp = 0) {
+  const x = nOrNull(v);
+  if (x === null) return "—";
+  return (cur || "") + x.toLocaleString(undefined, { maximumFractionDigits: dp });
+}
+function fmtRatio(v, dp = 2) {
+  const x = nOrNull(v);
+  if (x === null) return "—";
+  return x.toFixed(dp) + "×";
+}
 function symParts(symbol) {
   if (!symbol) return { base: "—", quote: "" };
   const s = symbol.toUpperCase();
@@ -1539,6 +1679,9 @@ async function fetchAndRender() {
     banner.style.display = "none";
     pulse.classList.remove("stale");
     document.getElementById("sidebar-status-text").textContent = "Live";
+    // Awaited before the render so check rows draw with current ack state
+    // instead of flashing unticked for a frame.
+    await fetchAlertAcks();
     renderDashboard(data);
     fetchHistory(data);
   } catch (err) {
@@ -1547,6 +1690,60 @@ async function fetchAndRender() {
     document.getElementById("error-text").textContent =
       `Cannot reach ${API_BASE}/api/status — ${err.message}. Is uvicorn running?`;
     document.getElementById("sidebar-status-text").textContent = "Offline";
+  }
+}
+
+async function fetchAlertAcks() {
+  try {
+    const res = await fetch(`${API_BASE}/api/alert-acks`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    _alertAcks = data.acks || {};
+    if (Array.isArray(data.ackable) && data.ackable.length) _ackableIds = data.ackable;
+  } catch (_) {
+    // Keep the last known state. Blanking it here would render every checkbox
+    // unticked on a single failed poll, which reads as "the mute was lifted"
+    // when nothing of the sort happened.
+  }
+}
+
+function toggleCheckNote(el, checkId) {
+  const row = el.closest(".check-row");
+  if (!row) return;
+  const open = row.classList.toggle("expanded");
+  if (open) _expandedChecks.add(checkId);
+  else      _expandedChecks.delete(checkId);
+  row.setAttribute("aria-expanded", String(open));
+}
+
+function isAcked(sym, issueId) {
+  return Boolean((_alertAcks[String(sym || "").toLowerCase()] || {})[issueId]);
+}
+
+// Toggle one (pair, issue) ack. Optimistic: the box flips immediately and is
+// reconciled from the server's authoritative map in the response, so a rejected
+// write snaps back rather than leaving the UI lying about what the engine will do.
+async function toggleAlertAck(sym, issueId, wantAck) {
+  const key = String(sym || "").toLowerCase();
+  try {
+    const res = await fetch(`${API_BASE}/api/alert-acks`, {
+      method:  "POST",
+      headers: { "Content-Type": "application/json" },
+      body:    JSON.stringify({ symbol: key, issue_id: issueId, ack: wantAck }),
+    });
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || res.statusText);
+    const data = await res.json();
+    _alertAcks = data.acks || {};
+    showToast(wantAck
+      ? `${issueId} muted on ${key.toUpperCase()} until it clears`
+      : `${issueId} un-muted on ${key.toUpperCase()}`);
+  } catch (err) {
+    showToast(`Could not update ${issueId}: ${err.message}`, true);
+  }
+  // Re-render from whatever the server ended up with, success or failure.
+  if (lastData && selectedSym) {
+    const pair = lastData.pairs.find(p => p.symbol === selectedSym);
+    if (pair) renderDetailPanel(pair);
   }
 }
 
@@ -1603,7 +1800,9 @@ function renderDashboard(data) {
 
   pairs.forEach(p => {
     if (p.telegram_fired) {
-      const entry = { time: ngtTime(), sym: p.symbol.toUpperCase(), spread: p.current_spread, target: p.target_spread, diff: p.percent_diff, dws: p.dws };
+      const entry = { time: ngtTime(), sym: p.symbol.toUpperCase(), spread: p.current_spread,
+                      target: p.target_spread, diff: p.percent_diff, dws: p.dws,
+                      ids: firedAlertIds(p), sevs: alertSeverities(p) };
       const key = `${p.symbol}-${p.timestamp}`;
       if (!alertLog.find(a => a._key === key)) {
         entry._key = key;
@@ -1714,7 +1913,8 @@ function formatTelegramDetail(detail) {
     if (!state) return id;
     if (state === "flag-only") return `${id} dashboard-only`;
     if (state === "fired") return `${id} sent`;
-    if (state === "suspended") return `${id} muted`;
+    if (state === "suspended") return `${id} muted (pair suspended)`;
+    if (state === "acked")     return `${id} muted (acknowledged)`;
     if (state === "cooldown") return `${id} in cooldown`;
     if (state === "capped") return `${id} episode limit reached`;
     if (state.endsWith("cyc")) return `${id} ${state.replace("cyc", "")} cycles`;
@@ -1739,130 +1939,218 @@ function renderDetailPanel(p) {
     });
   }
 
-  // Build check rows
+  // ── Check rows ──────────────────────────────────────────────────────────────
+  // Each entry carries three separable things:
+  //   desc  — what the market ACTUALLY did this cycle, shown whether or not the
+  //           check fired. A passing row that can show its own numbers ("churn
+  //           41% vs 38% typical") is far more useful than one reading "pass",
+  //           and the engine records the metrics either way.
+  //   note  — the rule the numbers were judged against, including this pair's
+  //           own threshold where the threshold is per-pair (B1, A6, D1).
+  //   alertId — the issue id the engine mutes when this row's box is ticked.
+  //           null means the row is derived context, not an alert, so it gets no
+  //           checkbox: DWS and Depth Liquidity are inputs to other checks
+  //           rather than checks in their own right.
+  const cur = p.d1_currency || "";
   const checks = [
     {
-      id: "A1", name: "Crossed Book",
-      desc: "Best bid ≥ best ask",
+      id: "A1", name: "Crossed Book", alertId: "A1",
       severity: "CRITICAL",
       test: () => activeIssues["A1"] ? "crit" : "pass",
-      passDesc: "Bid < Ask — normal spread",
+      desc: `Best bid ${fmtPrice(p.best_bid)} vs best ask ${fmtPrice(p.best_ask)}`
+            + (nOrNull(p.best_ask) !== null && nOrNull(p.best_bid) !== null
+               ? ` — gap ${fmtPrice(Number(p.best_ask) - Number(p.best_bid))}` : ""),
+      note: "Fires when best bid ≥ best ask: someone is bidding at or above the offer.",
     },
     {
-      id: "A2-Spread", name: "Spread Widening",
-      desc: `Target: ${p.target_spread && p.target_spread !== "N/A" ? p.target_spread + "%" : "N/A"} | Current: ${fmt(p.current_spread, 4)} | Diff: ${fmt(p.percent_diff, 1)}`,
+      id: "A2-Spread", name: "Spread Widening", alertId: "A2",
       severity: "HIGH",
       test: () => p.monitor_only ? "na" : activeIssues["A2"] ? "warn" : "pass",
-      passDesc: "Spread within tolerance",
-      naDesc: "Monitor-only — no target",
+      desc: `Spread ${fmt(p.current_spread, 4)} vs target `
+            + `${p.target_spread && p.target_spread !== "N/A" ? p.target_spread + "%" : "N/A"}`
+            + ` — ${fmt(p.percent_diff, 1)} relative, ${fmtPct(p.spread_diff_pp, 3)} absolute`,
+      note: `Fires past +100% / −75% of target, but only if the absolute miss is `
+            + `≥ ${fmtPct(p.min_abs_spread_diff_pct, 2)} AND DWS is poor `
+            + `(${fmt(p.dws, 4, "")} vs ${fmtQty(p.dws_threshold, 2)}) — the depth-weighted `
+            + `spread is what tells a hollow book from one stray order at the touch.`,
+      naDesc: "Monitor-only pair — no target spread to deviate from",
     },
     {
-      id: "A2-Depth", name: "Shallow Book",
-      desc: `Ask layers: ${p.ask_layers ?? "—"} | Bid layers: ${p.bid_layers ?? "—"} (min 10)`,
+      id: "A2-Depth", name: "Shallow Book", alertId: "A2",
       severity: "HIGH",
-      test: () => activeIssues["A2-Depth"] || (p.ask_layers != null && p.ask_layers < 10) || (p.bid_layers != null && p.bid_layers < 10) ? "warn" : "pass",
-      passDesc: "Sufficient depth on both sides",
+      test: () => (nOrNull(p.ask_layers) !== null && Number(p.ask_layers) < Number(p.min_orderbook_layers || 10))
+                || (nOrNull(p.bid_layers) !== null && Number(p.bid_layers) < Number(p.min_orderbook_layers || 10))
+                ? "warn" : "pass",
+      desc: `${fmtQty(p.ask_layers)} ask layers, ${fmtQty(p.bid_layers)} bid layers`,
+      note: `Fires when either side has fewer than ${fmtQty(p.min_orderbook_layers ?? 10)} price levels. `
+            + `Shares the A2 id with spread widening, so one checkbox covers both.`,
     },
     {
-      id: "A3", name: "One-Sided Market",
-      desc: "Either ask or bid side is completely empty",
+      id: "A3", name: "One-Sided Market", alertId: "A3",
       severity: "CRITICAL",
       test: () => activeIssues["A3"] ? "crit" : "pass",
-      passDesc: "Both sides have orders",
+      desc: activeIssues["A3"]
+            ? `No ${Number(p.ask_layers) === 0 ? "ask" : "bid"} orders at all — no mid price exists`
+            : `Both sides quoting — ${fmtQty(p.ask_layers)} asks, ${fmtQty(p.bid_layers)} bids`,
+      note: "An empty side short-circuits the cycle: every other check is skipped, "
+            + "and the A6 churn snapshot is deliberately not written.",
     },
     {
-      id: "A4", name: "Thin Mid-Market",
-      desc: "Liquidity within spread band below threshold",
+      id: "A4", name: "Thin Mid-Market", alertId: "A4",
       severity: "MEDIUM",
       test: () => activeIssues["A4"] ? "info" : "pass",
-      passDesc: "Adequate mid-market liquidity",
+      desc: `${fmtCur(p.depth_band_value, cur)} resting within the ±${fmt(Number(p.current_spread) * 1.25, 3)} band around mid`,
+      // The engine compares the raw in-band figure against thin_depth_threshold
+      // directly, with no FX conversion — so on an NGN pair a naira amount is
+      // being measured against the same bare 5000 as a dollar one. Rendered
+      // without a currency symbol rather than mislabelled "$", since attaching
+      // one would imply a conversion that does not happen.
+      note: `Flags below ${fmtQty(p.thin_depth_threshold)} of in-band value (a raw threshold — `
+            + `not currency-converted, so it is compared against the ${cur || "quote"} figure as-is). `
+            + `Dashboard-only — never sends Telegram.`,
     },
     {
-      id: "A5", name: "Depth Imbalance",
-      desc: `Ratio: ${p.imbalance_ratio ?? "—"}${p.heavier_side ? " — " + p.heavier_side + " heavier" : ""}`,
+      id: "A5", name: "Depth Imbalance", alertId: "A5",
       severity: "MEDIUM",
       test: () => activeIssues["A5"] ? "warn" : "pass",
-      passDesc: "Depth roughly balanced both sides",
+      desc: `${fmtRatio(p.imbalance_ratio)}${p.heavier_side ? " — " + p.heavier_side + " heavier" : ""}`
+            + ` (bids ${fmtCur(p.band_bid_value, cur)} vs asks ${fmtCur(p.band_ask_value, cur)})`,
+      note: `Fires at ${fmtRatio(p.imbalance_threshold, 0)} or worse, HIGH when one side is empty. `
+            + `Same ±1.25× spread band A4 measures.`,
     },
     {
-      id: "A6", name: "Layer Churn Stall",
-      desc: `Churn: ${p.layer_churn_pct != null && p.layer_churn_pct !== "N/A" ? p.layer_churn_pct + "%" : "—"} | Typical for this pair: ${p.layer_churn_baseline_pct != null && p.layer_churn_baseline_pct !== "N/A" ? p.layer_churn_baseline_pct + "%" : "building history…"}`,
-      severity: "HIGH",
-      test: () => activeIssues["A6"] ? "warn" : ((p.layer_churn_baseline_pct == null || p.layer_churn_baseline_pct === "N/A") ? "na" : "pass"),
-      passDesc: "Near-touch layers refreshing normally for this pair",
-      naDesc: "Self-baseline still building — not enough cycle history yet",
+      id: "A6", name: "Layer Churn Stall", alertId: "A6",
+      severity: activeIssues["A6"] === "CRITICAL" ? "CRITICAL" : "HIGH",
+      test: () => activeIssues["A6"] === "CRITICAL" ? "crit"
+                : activeIssues["A6"] ? "warn"
+                : (nOrNull(p.layer_churn_baseline_pct) === null ? "na" : "pass"),
+      desc: `${fmt(p.layer_churn_pct, 1)} of near-touch slots changed this cycle vs `
+            + `${fmt(p.layer_churn_baseline_pct, 1)} typical for this pair`
+            + (nOrNull(p.layer_churn_ratio) !== null ? ` — ratio ${fmtQty(p.layer_churn_ratio, 2)}` : ""),
+      note: `Compared against this market's OWN history, not a fixed cutoff. Fires below `
+            + `${fmtQty(p.layer_churn_ratio_floor, 2)}× its baseline, CRITICAL below half that. `
+            + `Baseline: ${fmtQty(p.layer_churn_samples)} of `
+            + `${fmtQty(p.layer_churn_min_history ?? 5)} readings needed.`,
+      naDesc: "Self-baseline still building — not enough cycle history for this pair yet",
     },
     {
-      id: "B1", name: "Price Discrepancy",
-      desc: `Quidax: ${fmtPrice(p.mid_price)} | Reference: ${p.trusted_ref && p.trusted_ref !== "N/A" ? fmtPrice(p.trusted_ref) : "—"}`,
-      severity: "HIGH",
-      test: () => (p.trusted_ref == null || p.trusted_ref === "N/A") ? "na" : activeIssues["B1"] ? "warn" : "pass",
-      passDesc: "Tracking reference exchange price",
-      naDesc: "No external reference (NGN/GHS pair — see F1)",
+      id: "B1", name: "Price Discrepancy", alertId: "B1",
+      severity: activeIssues["B1"] === "CRITICAL" ? "CRITICAL" : "HIGH",
+      test: () => (nOrNull(p.trusted_ref) === null) ? "na"
+                : activeIssues["B1"] === "CRITICAL" ? "crit"
+                : activeIssues["B1"] ? "warn" : "pass",
+      desc: `Quidax ${fmtPrice(p.mid_price)} vs reference ${fmtPrice(p.trusted_ref)}`
+            + ` — ${fmtPct(p.b1_diff_pct, 2, true)}`,
+      note: `Fires past ±${fmtPct(p.b1_threshold_pct, 2)} for this pair: the maker quotes a `
+            + `markup, so a ~${fmtPct(p.b1_expected_offset_pct, 2)} offset is EXPECTED from its `
+            + `target spread, and the tolerance sits on top of that rather than replacing it.`,
+      naDesc: "No external reference — MEXC/KuCoin only quote against USDT (see F1 instead)",
     },
     {
-      id: "B2", name: "Source Divergence",
-      desc: "MEXC vs KuCoin agreement for this asset",
+      id: "B2", name: "Source Divergence", alertId: "B2",
       severity: "HIGH",
-      test: () => activeIssues["B2"] ? "warn" : ((p.trusted_ref == null || p.trusted_ref === "N/A") ? "na" : "pass"),
-      passDesc: "MEXC and KuCoin agree",
+      test: () => activeIssues["B2"] ? "warn"
+                : (nOrNull(p.trusted_ref) === null ? "na" : "pass"),
+      // With only one source priced there is no divergence to report — rendering
+      // "MEXC 0.0858 vs KuCoin — — — apart" implies a comparison that never ran.
+      desc: (nOrNull(p.ref_mexc) === null || nOrNull(p.ref_kucoin) === null)
+            ? `Only ${nOrNull(p.ref_mexc) !== null ? "MEXC " + fmtPrice(p.ref_mexc)
+                     : nOrNull(p.ref_kucoin) !== null ? "KuCoin " + fmtPrice(p.ref_kucoin)
+                     : "no source"} priced this cycle — nothing to compare against`
+            : `MEXC ${fmtPrice(p.ref_mexc)} vs KuCoin ${fmtPrice(p.ref_kucoin)}`
+              + ` — ${fmtPct(p.ref_divergence_pct, 3)} apart`
+              + (p.ref_outlier ? ` · ${p.ref_outlier} ruled the outlier and dropped from pricing` : ""),
+      note: `Fires past ${fmtPct(p.ref_divergence_threshold_pct, 2)} for this asset. The source `
+            + `further from its own 8-reading mean is the one dropped; the other becomes the `
+            + `trusted price.`,
       naDesc: "No external reference for this pair",
     },
     {
-      id: "B3", name: "Stale Reference Feed",
-      desc: "MEXC/KuCoin feed freshness for this asset",
-      severity: "HIGH",
-      test: () => activeIssues["B3"] ? "warn" : ((p.trusted_ref == null || p.trusted_ref === "N/A") ? "na" : "pass"),
-      passDesc: "Reference feed updating normally",
+      id: "B3", name: "Stale Reference Feed", alertId: "B3",
+      severity: activeIssues["B3"] === "CRITICAL" ? "CRITICAL" : "HIGH",
+      test: () => activeIssues["B3"] === "CRITICAL" ? "crit"
+                : activeIssues["B3"] ? "warn"
+                : (nOrNull(p.trusted_ref) === null ? "na" : "pass"),
+      desc: `MEXC: ${p.ref_mexc_usable ? "usable" : "not priced"}`
+            + ` (${fmtQty(p.ref_mexc_unavail)} unavailable / ${fmtQty(p.ref_mexc_unchanged)} unchanged in a row)`
+            + ` · KuCoin: ${p.ref_kucoin_usable ? "usable" : "not priced"}`
+            + ` (${fmtQty(p.ref_kucoin_unavail)} / ${fmtQty(p.ref_kucoin_unchanged)})`,
+      note: "Unavailable fires HIGH at 3 cycles, CRITICAL at 6. Unchanged only escalates "
+            + "if the PEER exchange is still moving and the frozen price has already drifted "
+            + "past the B2 threshold — a quiet market, or a frozen price that's still correct, "
+            + "stays dashboard-only.",
       naDesc: "No external reference for this pair",
     },
     {
-      id: "B4", name: "Circuit Breaker Proximity",
-      desc: "Price move within k-line window vs configured breaker %",
-      severity: "HIGH",
-      test: () => activeIssues["B4"] ? "warn" : "pass",
-      passDesc: "Within normal trading range",
+      id: "B4", name: "Circuit Breaker Proximity", alertId: "B4",
+      severity: activeIssues["B4"] === "CRITICAL" ? "CRITICAL" : "HIGH",
+      test: () => activeIssues["B4"] === "CRITICAL" ? "crit"
+                : activeIssues["B4"] ? "warn" : "pass",
+      desc: nOrNull(p.b4_move_pct) === null
+            ? `No k-line returned for the ${fmtQty(p.kline_lookback_minutes ?? 60)}min window this cycle — nothing to measure against`
+            : `${fmtPct(p.b4_move_pct, 2, true)} from ${fmtPrice(p.b4_window_open)}`
+              + ` (open of the oldest candle in the ${fmtQty(p.kline_lookback_minutes ?? 60)}min window)`,
+      note: `HIGH at ±${fmtPct(p.b4_warn_pct, 1)}, CRITICAL at ±${fmtPct(p.b4_breaker_pct, 1)} — `
+            + `the level an exchange would typically halt trading at. Uses no external reference.`,
     },
     {
-      id: "G2", name: "Candle Wick / Anomalous Print",
-      desc: "Candle low ≤ 0, or high-low swing ≥ configured threshold, within the same k-line window as B4",
+      id: "G2", name: "Candle Wick / Anomalous Print", alertId: "G2",
       // Severity varies per firing — a zero/negative low is always CRITICAL
-      // regardless of swing size, while a swing-only anomaly is HIGH. Read
-      // the actual severity that fired (parsed into activeIssues from
-      // p.issues) rather than a fixed label, since this check — unlike the
-      // others above — can legitimately fire at either level.
+      // regardless of swing size, while a swing-only anomaly is HIGH. Read the
+      // actual severity that fired rather than a fixed label.
       severity: activeIssues["G2"] === "CRITICAL" ? "CRITICAL" : "HIGH",
       test: () => activeIssues["G2"] === "CRITICAL" ? "crit" : activeIssues["G2"] ? "warn" : "pass",
-      passDesc: "No zero prints or anomalous wicks in window",
+      desc: !nOrNull(p.g2_candles_scanned)
+            ? "No candles in the window this cycle — nothing scanned"
+            : `Widest swing ${fmtPct(p.g2_worst_swing_pct, 2)}`
+              + (p.g2_worst_candle ? ` at ${p.g2_worst_candle}` : "")
+              + ` across ${fmtQty(p.g2_candles_scanned)} candles`
+              + (nOrNull(p.g2_zero_prints) ? ` · ${fmtQty(p.g2_zero_prints)} zero print(s)` : ""),
+      note: `Every candle in the window is rescanned each cycle, not just the newest — `
+            + `a bad print can appear and fully revert between two 60s polls. `
+            + `HIGH past ${fmtPct(p.g2_swing_threshold_pct, 1)} swing; a low ≤ 0 is always CRITICAL.`,
     },
     {
-      id: "DWS", name: "Dynamic Weighted Spread",
-      desc: `DWS: ${fmt(p.dws, 4, "")} ${p.dws_poor ? "⚠ above threshold" : "— within range"}`,
+      id: "D1", name: "Volume Spike", alertId: "D1",
+      severity: "HIGH",
+      test: () => (nOrNull(p.d1_threshold) === null) ? "na" : (p.d1_spike ? "warn" : "pass"),
+      desc: `${fmtCur(p.d1_window_volume, cur)} traded in the window vs `
+            + `${fmtCur(p.d1_threshold, cur)} floor`
+            + (p.d1_context ? ` — ${p.d1_context}` : ""),
+      note: "Needs BOTH: ≥3× this pair's own rolling baseline AND above its absolute floor. "
+            + "The floor stops a normally-tiny pair firing on a ratio with no economic meaning.",
+      naDesc: "Monitor-only pair — no volume floor defined",
+    },
+    {
+      id: "F1", name: "Cross-Pair Arbitrage Gap", alertId: "F1",
+      severity: activeIssues["F1"] === "HIGH" ? "HIGH" : "MEDIUM",
+      test: () => activeIssues["F1"] ? "warn" : "pass",
+      desc: nOrNull(p.f1_gap_pct) !== null
+            ? `Quoted ${fmtPrice(p.f1_actual)} vs implied ${fmtPrice(p.f1_implied)}`
+              + ` — ${fmtPct(p.f1_gap_pct, 2, true)} via ${p.f1_legs || "linked legs"}`
+              + (p.f1_suspect ? ` · suspect leg: ${String(p.f1_suspect).toUpperCase()}` : "")
+            : "No gap beyond threshold against the implied cross-rate this cycle",
+      note: `Builds a reference for NGN pairs out of Quidax's own prices, since no external `
+            + `one exists. Fires past ±${fmtPct(p.f1_threshold_pct ?? 0.5, 2)}. Dashboard-only. `
+            + `If a leg already fired B1, that leg is named as the likely cause instead of this pair.`,
+    },
+    {
+      id: "DWS", name: "Dynamic Weighted Spread", alertId: null,
       severity: "HIGH",
       test: () => p.dws_poor ? "warn" : "pass",
-      passDesc: "DWS within acceptable range",
+      desc: `${fmt(p.dws, 4, "")} vs ${fmtQty(p.dws_threshold, 2)} threshold`
+            + ` — ${p.dws_poor ? "book is genuinely hollow" : "real size sits behind the touch"}`,
+      note: "Not an alert on its own — it's the gate that decides whether a wide raw spread "
+            + "counts as A2. Size-weighted distance from mid across the top 10 levels each side.",
     },
     {
-      id: "F1", name: "Cross-Pair Arbitrage Gap",
-      desc: "Quoted price vs implied cross-rate from linked pairs",
-      severity: "MEDIUM",
-      test: () => activeIssues["F1"] ? "warn" : "pass",
-      passDesc: "No exploitable gap vs implied cross-rate",
-    },
-    {
-      id: "D1", name: "Volume Spike",
-      desc: `Window: ${p.d1_window_volume != null ? (p.d1_currency || "") + Number(p.d1_window_volume).toLocaleString(undefined, {maximumFractionDigits: 0}) : "—"} | Threshold: ${p.d1_threshold != null ? (p.d1_currency || "") + Number(p.d1_threshold).toLocaleString(undefined, {maximumFractionDigits: 0}) : "—"}${p.d1_context ? " — " + p.d1_context : ""}`,
-      severity: "HIGH",
-      test: () => (p.d1_threshold == null) ? "na" : (p.d1_spike ? "warn" : "pass"),
-      passDesc: "Window volume below spike threshold for this pair",
-      naDesc: "Monitor-only — no volume threshold",
-    },
-    {
-      id: "DEPTH", name: "Depth Liquidity",
-      desc: `1.25×: ${p.depth_1_25x || p["depth_1.25x"] || "—"} | 1.5×: ${p.depth_1_5x || p["depth_1.5x"] || "—"}`,
+      id: "DEPTH", name: "Depth Liquidity", alertId: null,
       severity: "INFO",
       test: () => "info",
-      passDesc: "",
+      desc: `1.25× band: ${p.depth_1_25x || p["depth_1.25x"] || "—"}`
+            + ` · 1.5× band: ${p.depth_1_5x || p["depth_1.5x"] || "—"}`,
+      note: "Value of all resting orders within a multiple of the spread around mid. "
+            + "Context for A4 and A5 rather than a check.",
     },
   ];
 
@@ -1871,17 +2159,56 @@ function renderDetailPanel(p) {
   const checksHtml = checks.map(c => {
     const state = c.test();
     const icon  = checkIcons[state] || "ti-circle";
-    let desc = c.desc;
-    if (state === "pass" && c.passDesc) desc = c.passDesc;
-    if (state === "na"   && c.naDesc)  desc = c.naDesc;
-    const sevLabel = state !== "pass" && state !== "na" ? `<span class="check-sev">${c.severity}</span>` : "";
-    return `<div class="check-row ${state}">
+    // naDesc replaces the evidence line, because on an N/A row there IS no
+    // evidence — the check never ran. Every other state keeps its numbers.
+    const desc = (state === "na" && c.naDesc) ? c.naDesc : c.desc;
+    const sevLabel = state !== "pass" && state !== "na" && state !== "info"
+      ? `<span class="check-sev">${c.severity}</span>` : "";
+
+    // ── Acknowledgement checkbox ──────────────────────────────────────────────
+    // Only on rows the engine can actually mute, and only enabled while the
+    // check is in a bad state. Ticking a passing check would be pointless AND
+    // visibly confusing: the ack expires the moment the engine next sees the
+    // issue absent, so the box would tick and then clear itself a cycle later.
+    let ackHtml = "", ackedCls = "", ackBadge = "";
+    if (c.alertId && _ackableIds.includes(c.alertId)) {
+      const acked   = isAcked(p.symbol, c.alertId);
+      const firing  = state === "warn" || state === "crit";
+      const enabled = firing || acked;   // always allow UN-ticking
+      const title = !enabled
+        ? `Nothing to mute — [${c.alertId}] is not firing on this market right now`
+        : acked
+          ? `[${c.alertId}] is muted on ${p.symbol.toUpperCase()}. It un-mutes itself once the check passes again.`
+          : `Mute [${c.alertId}] on ${p.symbol.toUpperCase()} until it clears`;
+      ackHtml = `<label class="check-ack" title="${title}" onclick="event.stopPropagation()">
+        <input type="checkbox" ${acked ? "checked" : ""} ${enabled ? "" : "disabled"}
+               aria-label="${title}"
+               onchange="toggleAlertAck('${p.symbol}', '${c.alertId}', this.checked)">
+      </label>`;
+      if (acked) { ackedCls = " acked"; ackBadge = `<span class="check-ack-badge">muted</span>`; }
+    }
+
+    // The row is the disclosure control for its own rule text. The ack label
+    // stops propagation, so ticking the checkbox never also expands the row.
+    const expanded = _expandedChecks.has(c.id);
+    const discloses = Boolean(c.note);
+    const rowAttrs = discloses
+      ? ` role="button" tabindex="0" aria-expanded="${expanded}"`
+        + ` onclick="toggleCheckNote(this, '${c.id}')"`
+        + ` onkeydown="if(event.key===&quot;Enter&quot;||event.key===&quot; &quot;){event.preventDefault();toggleCheckNote(this,&quot;${c.id}&quot;);}"`
+      : "";
+    const chev = discloses
+      ? `<i class="ti ti-chevron-right check-chev" aria-hidden="true"></i>` : "";
+
+    return `<div class="check-row ${state}${ackedCls}${expanded ? " expanded" : ""}"${rowAttrs}>
       <i class="ti ${icon} check-icon"></i>
       <div class="check-body">
-        <div class="check-name">[${c.id}] ${c.name}</div>
+        <div class="check-name">[${c.id}] ${c.name}${ackBadge}${chev}</div>
         <div class="check-desc">${desc}</div>
+        ${c.note ? `<div class="check-note">${c.note}</div>` : ""}
       </div>
       ${sevLabel}
+      ${ackHtml}
     </div>`;
   }).join("");
 
@@ -1910,23 +2237,105 @@ function renderDetailPanel(p) {
 }
 
 // ── Alert Log ─────────────────────────────────────────────────────────────────
+// Session-scoped: entries accumulate in memory while the tab is open and are not
+// reloaded from the server, so a refresh starts it empty. The type filter is
+// applied at render time rather than at capture, so switching it back to "All"
+// reveals entries recorded while a narrower filter was active.
+
+// Which alert ids actually reached Telegram for this pair this cycle. The engine
+// writes a per-issue verdict into telegram_detail ("B1:fired|A4:flag-only"), and
+// only the ":fired" ones belong in a log of alerts that were SENT — the rest were
+// suppressed by tier, cooldown, ack or episode cap and are visible on the market
+// row instead. Falls back to the issue list if the detail string is missing, so a
+// row can never land in the log with no ids at all.
+function firedAlertIds(p) {
+  const detail = p.telegram_detail || "";
+  const fired = detail.split("|").filter(Boolean)
+    .map(part => part.split(":"))
+    .filter(([, state]) => state === "fired")
+    .map(([id]) => id.trim());
+  if (fired.length) return fired;
+  return (p.issues || "").split("|").filter(Boolean).map(part => part.split(":")[0].trim());
+}
+
+// Severity per id, parsed from the issues string, for badge colouring.
+function alertSeverities(p) {
+  const out = {};
+  (p.issues || "").split("|").filter(Boolean).forEach(part => {
+    const [id, sev] = part.split(":");
+    if (id) out[id.trim()] = (sev || "").trim();
+  });
+  return out;
+}
+
+function setAlertLogFilter(value) {
+  alertLogFilter = value || "";
+  renderAlertLog();
+}
+
+// Options are rebuilt from whatever ids the log currently holds, so the dropdown
+// only ever offers types that would actually match something. The current
+// selection is preserved across rebuilds — and kept even if it has aged out of
+// the log, so a deliberately narrow filter doesn't silently widen to "All" when
+// its last matching entry falls off the 30-entry tail.
+function rebuildAlertLogFilter() {
+  const sel = document.getElementById("al-filter-type");
+  if (!sel) return;
+  const ids = new Set();
+  alertLog.forEach(a => (a.ids || []).forEach(id => ids.add(id)));
+  if (alertLogFilter) ids.add(alertLogFilter);
+  const sorted = [...ids].sort();
+
+  const desired = ["", ...sorted].join("|");
+  if (sel.dataset.built === desired) { sel.value = alertLogFilter; return; }
+  sel.dataset.built = desired;
+  sel.innerHTML = `<option value="">All alert types</option>`
+    + sorted.map(id => `<option value="${id}">${id}</option>`).join("");
+  sel.value = alertLogFilter;
+}
+
 function renderAlertLog() {
   const el = document.getElementById("alert-log-container");
+  rebuildAlertLogFilter();
+
+  const rows = alertLogFilter
+    ? alertLog.filter(a => (a.ids || []).includes(alertLogFilter))
+    : alertLog;
+
+  const countEl = document.getElementById("al-count-label");
+  if (countEl) {
+    countEl.textContent = alertLogFilter
+      ? `${rows.length} of ${alertLog.length}`
+      : `${alertLog.length}`;
+  }
+
   if (!alertLog.length) {
     el.innerHTML = `<p class="empty-state">No alerts this session.</p>`;
     return;
   }
-  el.innerHTML = alertLog.map(a => `
-    <div class="log-row">
+  if (!rows.length) {
+    el.innerHTML = `<p class="empty-state">No ${alertLogFilter} alerts this session.</p>`;
+    return;
+  }
+
+  el.innerHTML = rows.map(a => {
+    const badges = (a.ids || []).map(id => {
+      const sev = (a.sevs || {})[id] || "";
+      const cls = sev === "CRITICAL" ? " crit" : sev === "HIGH" ? " warn" : "";
+      return `<span class="log-id${cls}" title="${sev || "fired"}">${id}</span>`;
+    }).join("");
+    return `<div class="log-row">
       <div class="log-dot"></div>
       <div class="log-time">${a.time}</div>
       <div class="log-msg">
+        <span class="log-ids">${badges}</span>
         <b>${a.sym}</b> — spread ${a.spread != null ? parseFloat(a.spread).toFixed(4) + "%" : "—"}
         (target ${a.target !== "N/A" ? a.target + "%" : "N/A"},
         diff ${a.diff != null ? (parseFloat(a.diff) > 0 ? "+" : "") + parseFloat(a.diff).toFixed(1) + "%" : "—"})
         &nbsp;·&nbsp; DWS ${a.dws != null ? parseFloat(a.dws).toFixed(4) : "—"}
       </div>
-    </div>`).join("");
+    </div>`;
+  }).join("");
 }
 
 // ── Chart ─────────────────────────────────────────────────────────────────────
