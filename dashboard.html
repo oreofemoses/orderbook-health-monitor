@@ -563,6 +563,21 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
 .daily-log-controls select:focus, .daily-log-controls input:focus {
   outline: none; border-color: var(--accent);
 }
+.dl-alert-summary {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
+  margin-bottom: 12px; padding: 9px 11px;
+  background: var(--bg-base); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); font-size: 12px;
+}
+.dl-alert-summary .lead { color: var(--text-muted); margin-right: 2px; }
+.dl-market-chip {
+  font-family: var(--mono); font-size: 11px; font-weight: 600;
+  padding: 2px 7px; border-radius: 4px; cursor: pointer;
+  background: var(--blue-bg); color: var(--blue-text);
+  border: 1px solid transparent;
+}
+.dl-market-chip:hover { border-color: currentColor; }
+.dl-market-chip.active { background: var(--accent); color: #fff; }
 .dl-table-wrap { overflow-x: auto; }
 .dl-table {
   width: 100%; border-collapse: collapse; font-size: 12px;
@@ -900,6 +915,9 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
             <option value="CHECKED">Healthy only</option>
             <option value="SKIPPED">Skipped only</option>
           </select>
+          <select id="dl-filter-alert" title="Show only rows in which this alert was raised">
+            <option value="">All alert types</option>
+          </select>
           <select id="dl-page-size">
             <option value="50">50 rows</option>
             <option value="100">100 rows</option>
@@ -908,6 +926,11 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
           </select>
           <span style="font-size:12px;color:var(--text-muted);margin-left:auto" id="dl-date-label">—</span>
         </div>
+        <!-- Distinct markets for the selected alert. The table lists one row per
+             market per cycle, so a pair that carried B1 all afternoon appears
+             hundreds of times — scanning it does not answer "which markets".
+             This collapses that to the set, which is the actual question. -->
+        <div id="dl-alert-summary" class="dl-alert-summary" style="display:none"></div>
         <div class="dl-table-wrap">
           <table class="dl-table">
             <thead>
@@ -4009,6 +4032,7 @@ async function fetchDailyLog() {
     _dlAllRows = (data.rows || []).reverse();  // newest first
     _dlPage    = 0;
     populateDlMarketFilter(_dlAllRows);
+    populateDlAlertFilter(_dlAllRows);
     applyDlFilters();
   } catch (err) {
     document.getElementById("dl-tbody").innerHTML =
@@ -4059,19 +4083,55 @@ function populateDlMarketFilter(rows) {
     markets.map(m => `<option value="${m}"${m === prev ? " selected" : ""}>${m.toUpperCase()}</option>`).join("");
 }
 
+// Alert ids present in the loaded day, parsed out of the Issues column
+// ("B1:HIGH|A4:MEDIUM"). Built from the day's own rows rather than the static
+// ACKABLE_ISSUE_IDS list, so the dropdown only ever offers types that actually
+// occurred that day — picking one can't land you on an empty table.
+//
+// Ids only, not id:severity. "Which markets raised B1 today" is the question;
+// splitting B1:HIGH from B1:CRITICAL into separate options would fragment the
+// answer across two selections.
+function dlAlertIds(row) {
+  return String(row.Issues || row.issues || "")
+    .split("|").filter(Boolean)
+    .map(part => part.split(":")[0].trim())
+    .filter(Boolean);
+}
+
+function populateDlAlertFilter(rows) {
+  const ids = [...new Set(rows.flatMap(dlAlertIds))].sort();
+  const sel = document.getElementById("dl-filter-alert");
+  const prev = sel.value;
+  // Keep the current selection even if this day has no such rows, so switching
+  // dates with a filter set doesn't silently widen back to "All".
+  if (prev && !ids.includes(prev)) ids.push(prev);
+  sel.innerHTML = `<option value="">All alert types</option>` +
+    ids.sort().map(id => `<option value="${id}"${id === prev ? " selected" : ""}>${id}</option>`).join("");
+}
+
 function applyDlFilters() {
   const market  = document.getElementById("dl-filter-market").value;
   const status  = document.getElementById("dl-filter-status").value;
+  const alertId = document.getElementById("dl-filter-alert").value;
   _dlPageSize   = parseInt(document.getElementById("dl-page-size").value) || 50;
   _dlFiltered   = _dlAllRows.filter(r => {
     const mVal = (r.Market || r.market || "").toLowerCase();
     const sVal = (r.Status || r.status || "").toUpperCase();
     if (market && mVal !== market.toLowerCase()) return false;
     if (status && sVal !== status) return false;
+    if (alertId && !dlAlertIds(r).includes(alertId)) return false;
     return true;
   });
   _dlPage = 0;
   renderDlPage();
+}
+
+// Chip click drills the market filter into that pair, or clears it if it's
+// already the active one — so the strip toggles rather than being a dead end.
+function dlToggleMarket(market) {
+  const sel = document.getElementById("dl-filter-market");
+  sel.value = (sel.value.toLowerCase() === market) ? "" : market;
+  applyDlFilters();
 }
 
 function dlChangePage(dir) {
@@ -4087,7 +4147,35 @@ function renderDlPage() {
   const page    = _dlFiltered.slice(start, end);
   const maxPage = Math.max(0, Math.ceil(total / _dlPageSize) - 1);
 
-  document.getElementById("dl-count-label").textContent = total.toLocaleString() + " rows";
+  const marketsInView = [...new Set(_dlFiltered.map(r => (r.Market || r.market || "").toLowerCase()))]
+    .filter(Boolean).sort();
+  document.getElementById("dl-count-label").textContent =
+    `${total.toLocaleString()} rows · ${marketsInView.length} market${marketsInView.length === 1 ? "" : "s"}`;
+
+  // Summary strip: only meaningful once an alert type is chosen.
+  const alertId    = document.getElementById("dl-filter-alert").value;
+  const marketSel  = document.getElementById("dl-filter-market").value.toLowerCase();
+  const summaryEl  = document.getElementById("dl-alert-summary");
+  if (alertId) {
+    // Distinct markets that raised this alert on this day, ignoring any market
+    // filter — otherwise drilling into one market would hide the other options.
+    const raisedBy = [...new Set(
+      _dlAllRows.filter(r => dlAlertIds(r).includes(alertId))
+                .map(r => (r.Market || r.market || "").toLowerCase())
+    )].filter(Boolean).sort();
+    summaryEl.style.display = "";
+    summaryEl.innerHTML = raisedBy.length
+      ? `<span class="lead"><b>${alertId}</b> raised by ${raisedBy.length} market${raisedBy.length === 1 ? "" : "s"} on this day:</span>`
+        + raisedBy.map(m =>
+            `<span class="dl-market-chip${m === marketSel ? " active" : ""}"
+                   onclick="dlToggleMarket('${m}')"
+                   title="${m === marketSel ? "Clear the market filter" : "Show only " + m.toUpperCase()}"
+             >${m.toUpperCase()}</span>`).join("")
+      : `<span class="lead">No market raised <b>${alertId}</b> on this day.</span>`;
+  } else {
+    summaryEl.style.display = "none";
+    summaryEl.innerHTML = "";
+  }
   document.getElementById("dl-page-info").textContent =
     total === 0 ? "No rows" : `${start + 1}–${end} of ${total.toLocaleString()}`;
   document.getElementById("dl-prev").disabled = _dlPage === 0;
@@ -4132,6 +4220,7 @@ function renderDlPage() {
 // Wire up filter controls
 document.getElementById("dl-filter-market").addEventListener("change", applyDlFilters);
 document.getElementById("dl-filter-status").addEventListener("change", applyDlFilters);
+document.getElementById("dl-filter-alert").addEventListener("change", applyDlFilters);
 document.getElementById("dl-page-size").addEventListener("change", applyDlFilters);
 
 // ── Theme toggle ───────────────────────────────────────────────────────────────

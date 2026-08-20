@@ -563,6 +563,24 @@ with no FX conversion, so a naira amount is measured against the same bare
 currency symbol rather than mislabelling it `$`, since attaching one would imply
 a conversion that doesn't happen.
 
+### Filtering the daily log
+
+The daily log's controls filter by market, status and **alert type**. The alert
+dropdown is built from the ids actually present in the loaded day, so choosing
+one can never land you on an empty table, and it matches on the id alone (`B1`,
+not `B1:HIGH`) — "which markets raised B1 today" is the question, and splitting
+by severity would fragment the answer across two selections.
+
+Because the table holds one row per market per cycle, a pair that carried an
+issue all afternoon appears hundreds of times, and scanning it doesn't actually
+tell you which markets were involved. So selecting an alert type also shows a
+summary strip listing the distinct markets that raised it that day. Those are
+clickable: one drills the market filter into that pair, clicking it again
+clears it. The strip always lists every market that raised the alert, ignoring
+the market filter — otherwise drilling in would hide the other options.
+
+"Filtered" CSV export follows all three filters; "Full day" ignores them.
+
 ### The alert log
 
 Session-scoped: entries accumulate while the tab is open and are not reloaded
