@@ -1,0 +1,39 @@
+# Build context sent to the Fly builder on every deploy. Without this it was
+# 155 MB across 7,241 files — almost entirely venv/ — uploaded every time.
+#
+# Note this never affected the IMAGE: the Dockerfile COPYs a named list of
+# files, so nothing extra was ever baked in. It was purely upload cost per
+# deploy.
+
+# Named explicitly, ahead of the catch-all below, so the context walker can skip
+# these subtrees wholesale instead of stat-ing every file inside them.
+venv/
+.git/
+.github/
+__pycache__/
+*.pyc
+
+# Runtime state. On Fly this lives on the mounted volume at /app/data; a local
+# copy must never be baked into the image, where it would shadow the mount if
+# the volume ever failed to attach.
+data/
+
+# Secrets. Telegram credentials come from `fly secrets`, never from the image.
+.env
+
+# Everything else is excluded too, and the list below re-includes exactly what
+# the Dockerfile COPYs. An allowlist rather than a denylist because the
+# Dockerfile is already one: the two stay in step, and a file added to the repo
+# can't quietly start riding along in the context.
+#
+# If you add a COPY to the Dockerfile, add it here as well — otherwise the build
+# fails with "file not found", which is the right way round to get that wrong.
+*
+!requirements.txt
+!api.py
+!debug.py
+!defaults.py
+!kline_volume.py
+!dashboard.html
+!favicon.ico
+!start.sh
