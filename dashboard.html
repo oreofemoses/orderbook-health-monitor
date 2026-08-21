@@ -563,21 +563,6 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
 .daily-log-controls select:focus, .daily-log-controls input:focus {
   outline: none; border-color: var(--accent);
 }
-.dl-alert-summary {
-  display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
-  margin-bottom: 12px; padding: 9px 11px;
-  background: var(--bg-base); border: 1px solid var(--border);
-  border-radius: var(--radius-sm); font-size: 12px;
-}
-.dl-alert-summary .lead { color: var(--text-muted); margin-right: 2px; }
-.dl-market-chip {
-  font-family: var(--mono); font-size: 11px; font-weight: 600;
-  padding: 2px 7px; border-radius: 4px; cursor: pointer;
-  background: var(--blue-bg); color: var(--blue-text);
-  border: 1px solid transparent;
-}
-.dl-market-chip:hover { border-color: currentColor; }
-.dl-market-chip.active { background: var(--accent); color: #fff; }
 .dl-table-wrap { overflow-x: auto; }
 .dl-table {
   width: 100%; border-collapse: collapse; font-size: 12px;
@@ -597,14 +582,6 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
 .dl-table tr:hover td { background: var(--bg-base); }
 .dl-ts { font-family: var(--mono); color: var(--text-muted); white-space: nowrap; }
 .dl-market { font-family: var(--mono); font-weight: 600; }
-.dl-status {
-  display: inline-flex; align-items: center; gap: 4px;
-  font-size: 10px; font-weight: 700; padding: 2px 8px;
-  border-radius: 20px; white-space: nowrap;
-}
-.dl-status.ok     { background: var(--green-bg); color: var(--green-text); }
-.dl-status.warn   { background: var(--amber-bg); color: var(--amber-text); }
-.dl-status.skip   { background: var(--bg-base);  color: var(--text-muted); }
 .dl-issues { font-family: var(--mono); font-size: 11px; color: var(--text-secondary); }
 .dl-depth  { font-family: var(--mono); font-size: 11px; color: var(--text-muted); }
 .dl-pagination {
@@ -697,6 +674,89 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
 .log-id.crit { background: var(--red-bg);   color: var(--red-text); }
 .log-id.warn { background: var(--amber-bg); color: var(--amber-text); }
 
+/* ─── Depth-walk feed staleness banner ──────────── */
+.feed-stale {
+  display: none; align-items: flex-start; gap: 8px;
+  font-size: 12px; color: var(--amber-text);
+  background: var(--amber-bg); border-left: 3px solid var(--amber);
+  border-radius: var(--radius-sm); padding: 10px 13px; margin-bottom: 16px;
+}
+.feed-stale.show { display: flex; }
+.feed-stale i { font-size: 15px; margin-top: 1px; flex-shrink: 0; }
+.feed-stale b { color: var(--amber-text); }
+
+/* ─── Alert analysis tab ────────────────────────── */
+.aa-note {
+  display: flex; align-items: flex-start; gap: 8px;
+  font-size: 12px; color: var(--text-secondary);
+  background: var(--bg-card); border-left: 3px solid var(--accent);
+  border-radius: var(--radius-sm); padding: 10px 13px; margin-bottom: 20px;
+  box-shadow: var(--shadow);
+}
+.aa-note i { color: var(--accent); font-size: 14px; margin-top: 1px; flex-shrink: 0; }
+.aa-note b { color: var(--text-primary); }
+
+.aa-grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; align-items: start; }
+@media (max-width: 1180px) { .aa-grid-2 { grid-template-columns: 1fr; } }
+
+/* Tables reuse the daily-log table look so the two read as one system. */
+.aa-table-wrap { overflow-x: auto; max-height: 420px; overflow-y: auto; }
+.aa-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.aa-table th {
+  text-align: left; padding: 7px 10px; position: sticky; top: 0; z-index: 1;
+  font-size: 11px; font-weight: 600; color: var(--text-muted);
+  text-transform: uppercase; letter-spacing: .04em;
+  border-bottom: 2px solid var(--border); white-space: nowrap;
+  background: var(--bg-card);
+}
+.aa-table td { padding: 7px 10px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+.aa-table tr:last-child td { border-bottom: none; }
+.aa-table tr:hover td { background: var(--bg-base); }
+.aa-table .num { font-family: var(--mono); text-align: right; }
+.aa-table .mkt { font-family: var(--mono); font-weight: 600; }
+.aa-table .ts  { font-family: var(--mono); color: var(--text-muted); font-size: 11px; }
+
+.aa-pill-badge {
+  display: inline-block; font-size: 10px; padding: 1px 6px;
+  border-radius: 4px; font-weight: 700; font-family: var(--mono);
+}
+.aa-pill-badge.CRITICAL { background: var(--red-bg);   color: var(--red-text); }
+.aa-pill-badge.HIGH     { background: var(--amber-bg); color: var(--amber-text); }
+.aa-pill-badge.MEDIUM   { background: var(--blue-bg);  color: var(--blue-text); }
+.aa-pill-badge.UNKNOWN  { background: var(--bg-base);  color: var(--text-muted); }
+
+.aa-tag {
+  display: inline-block; font-size: 10px; font-weight: 700;
+  padding: 1px 6px; border-radius: 4px; margin-left: 5px;
+}
+.aa-tag.open    { background: var(--red-bg);   color: var(--red-text); }
+.aa-tag.esc     { background: var(--amber-bg); color: var(--amber-text); }
+
+/* The hour-of-day heatmap is a hand-rolled grid rather than a Chart.js plugin:
+   the only matrix renderer for Chart.js is a separate CDN dependency, and a
+   table of tinted cells is both lighter and directly readable. */
+.aa-heat { overflow-x: auto; }
+.aa-heat table { border-collapse: separate; border-spacing: 2px; font-size: 10px; }
+.aa-heat th {
+  font-size: 10px; font-weight: 600; color: var(--text-muted);
+  padding: 2px 4px; text-align: center; white-space: nowrap;
+}
+.aa-heat th.row-label {
+  text-align: right; font-family: var(--mono); font-weight: 700;
+  color: var(--text-secondary); padding-right: 8px;
+}
+.aa-heat td {
+  width: 30px; height: 22px; text-align: center; border-radius: 3px;
+  font-family: var(--mono); font-size: 10px; color: var(--text-primary);
+}
+.aa-heat td.zero { color: var(--text-muted); opacity: .45; }
+
+.aa-empty {
+  font-size: 13px; color: var(--text-muted);
+  padding: 28px 0; text-align: center;
+}
+.aa-coverage { font-size: 11px; color: var(--text-muted); }
+.aa-sub { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
 </style>
 </head>
 <body>
@@ -730,15 +790,21 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
       <i class="ti ti-bell"></i>
       <span>Alert log</span>
     </div>
-    <div class="nav-item" data-tab="overview" onclick="showTab('overview', 'daily-log-section')">
-      <i class="ti ti-table"></i>
-      <span>Daily log</span>
-    </div>
 
     <div class="nav-section-label" style="margin-top:8px">USDT/NGN</div>
     <div class="nav-item" data-tab="slippage" onclick="showTab('slippage')">
       <i class="ti ti-arrows-diff"></i>
       <span>Depth-walk slippage</span>
+    </div>
+
+    <div class="nav-section-label" style="margin-top:8px">Analysis</div>
+    <div class="nav-item" data-tab="alerts" onclick="showTab('alerts')">
+      <i class="ti ti-chart-histogram"></i>
+      <span>Alert analysis</span>
+    </div>
+    <div class="nav-item" data-tab="alerts" onclick="showTab('alerts', 'aa-log-section')">
+      <i class="ti ti-table"></i>
+      <span>Daily log</span>
     </div>
 
     <div class="nav-section-label" style="margin-top:8px">Settings</div>
@@ -880,91 +946,22 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
     </div>
 
     <!-- Daily log -->
-    <div id="daily-log-section" style="margin-top:24px">
-      <div class="section-header">
-        <div class="section-title">
-          <i class="ti ti-table" style="font-size:16px;color:var(--accent)"></i>
-          Daily log
-          <span class="count" id="dl-count-label">—</span>
-        </div>
-        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-          <input type="date" id="dl-date-picker"
-            style="font-size:12px;font-family:var(--font);border:1px solid var(--border-strong);
-                   border-radius:var(--radius-sm);padding:5px 9px;background:var(--bg-base);
-                   color:var(--text-primary);cursor:pointer;"
-            onchange="fetchDailyLog()" />
-          <button class="btn" onclick="fetchDailyLog()">
-            <i class="ti ti-refresh"></i> Reload
-          </button>
-          <button class="btn" onclick="downloadDailyLog(false)" title="Download filtered rows as CSV">
-            <i class="ti ti-download"></i> Filtered
-          </button>
-          <button class="btn" onclick="downloadDailyLog(true)" title="Download full day as CSV">
-            <i class="ti ti-file-download"></i> Full day
-          </button>
-        </div>
-      </div>
-      <div class="daily-log-card">
-        <div class="daily-log-controls">
-          <select id="dl-filter-market">
-            <option value="">All markets</option>
-          </select>
-          <select id="dl-filter-status">
-            <option value="">All statuses</option>
-            <option value="WARNING">Warning only</option>
-            <option value="CHECKED">Healthy only</option>
-            <option value="SKIPPED">Skipped only</option>
-          </select>
-          <select id="dl-filter-alert" title="Show only rows in which this alert was raised">
-            <option value="">All alert types</option>
-          </select>
-          <select id="dl-page-size">
-            <option value="50">50 rows</option>
-            <option value="100">100 rows</option>
-            <option value="200">200 rows</option>
-            <option value="500">500 rows</option>
-          </select>
-          <span style="font-size:12px;color:var(--text-muted);margin-left:auto" id="dl-date-label">—</span>
-        </div>
-        <!-- Distinct markets for the selected alert. The table lists one row per
-             market per cycle, so a pair that carried B1 all afternoon appears
-             hundreds of times — scanning it does not answer "which markets".
-             This collapses that to the set, which is the actual question. -->
-        <div id="dl-alert-summary" class="dl-alert-summary" style="display:none"></div>
-        <div class="dl-table-wrap">
-          <table class="dl-table">
-            <thead>
-              <tr>
-                <th>Time</th>
-                <th>Market</th>
-                <th>Status</th>
-                <th>Issues</th>
-                <th>Depth</th>
-              </tr>
-            </thead>
-            <tbody id="dl-tbody">
-              <tr><td colspan="5" style="color:var(--text-muted);padding:20px 10px">Loading…</td></tr>
-            </tbody>
-          </table>
-        </div>
-        <div class="dl-pagination">
-          <span id="dl-page-info">—</span>
-          <div class="dl-pagination-btns">
-            <button class="btn" id="dl-prev" onclick="dlChangePage(-1)" disabled>
-              <i class="ti ti-chevron-left"></i> Prev
-            </button>
-            <button class="btn" id="dl-next" onclick="dlChangePage(1)">
-              Next <i class="ti ti-chevron-right"></i>
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
-
     </div> <!-- /tab-overview -->
 
     <!-- ═══ USDT/NGN Depth-walk Slippage tab ═════════════════════════════════ -->
     <div class="tab-panel" id="tab-slippage">
+
+      <!-- Shown when the monitor's 5s depth-walk task has stopped appending.
+           Without this a dead feed is nearly invisible: the uptime and
+           spread-gap cards read the raw samples WITHOUT a window filter, so they
+           keep reporting a healthy-looking "this hour" from whatever the file
+           last held, while only the slippage cards (which are window-filtered)
+           go blank. That asymmetry is what made a stopped feed look like a
+           broken slippage chart. -->
+      <div class="feed-stale" id="slippage-stale">
+        <i class="ti ti-alert-triangle"></i>
+        <span id="slippage-stale-text"></span>
+      </div>
 
       <!-- Controls: range, date picker, weight, refresh -->
       <div class="slippage-controls">
@@ -1057,7 +1054,6 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
             <div style="font-size:11px;color:var(--text-muted);margin-top:2px" id="vol-rolling-sub">USDT traded</div>
           </div>
         </div>
-      </div>
       </div>
 
       <!-- Slippage over time chart -->
@@ -1171,6 +1167,284 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
       </div>
 
     </div> <!-- /tab-slippage -->
+
+    <!-- ═══ Alert analysis tab ════════════════════════════════════════════════ -->
+    <div class="tab-panel" id="tab-alerts">
+
+      <!-- Controls: range presets + explicit dates -->
+      <div class="slippage-controls">
+        <div class="range-group" id="aa-range-group">
+          <button class="range-btn"        data-range="1d"  onclick="setAaRange('1d')">Today</button>
+          <button class="range-btn active" data-range="7d"  onclick="setAaRange('7d')">7d</button>
+          <button class="range-btn"        data-range="14d" onclick="setAaRange('14d')">14d</button>
+          <button class="range-btn"        data-range="30d" onclick="setAaRange('30d')">30d</button>
+        </div>
+        <div class="divider"></div>
+        <label for="aa-date-start">Range:</label>
+        <input type="date" id="aa-date-start" onchange="setAaDateRange()" />
+        <span style="font-size:11px;color:var(--text-muted)">to</span>
+        <input type="date" id="aa-date-end" onchange="setAaDateRange()" />
+        <div class="divider"></div>
+        <button class="btn" onclick="reloadAlertTab()">
+          <i class="ti ti-refresh"></i> Reload
+        </button>
+        <span class="aa-coverage" id="aa-coverage" style="margin-left:auto">—</span>
+      </div>
+
+      <!-- What the numbers mean. This caption is not decoration: the daily log
+           records detections, and reading these charts as "alerts we sent" would
+           overstate Telegram volume by whatever the tier/cooldown gate absorbed. -->
+      <div class="aa-note">
+        <i class="ti ti-info-circle"></i>
+        <span>
+          Counts <b>detections</b>, not Telegram deliveries — the daily log records every
+          issue the monitor saw, with no record of what the tier, cooldown, acknowledgement
+          and episode-cap gates then suppressed. An <b>episode</b> is one unbroken run of a
+          single issue on a single market, stitched across up to <b id="aa-gap">2</b> missing
+          cycles. <b>E1/E2 are absent</b> — both are global alerts and the log only holds
+          per-market rows.
+        </span>
+      </div>
+
+      <!-- Headline counters -->
+      <div class="stats-row">
+        <div class="stat-card">
+          <div class="stat-icon purple"><i class="ti ti-alert-hexagon"></i></div>
+          <div class="stat-body">
+            <div class="stat-label">Alert episodes</div>
+            <div class="stat-value purple" id="aa-episodes">—</div>
+            <div class="aa-sub" id="aa-episodes-sub">distinct runs</div>
+          </div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-icon blue"><i class="ti ti-stack-2"></i></div>
+          <div class="stat-body">
+            <div class="stat-label">Detections</div>
+            <div class="stat-value blue" id="aa-detections">—</div>
+            <div class="aa-sub" id="aa-detections-sub">issue × market × cycle</div>
+          </div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-icon amber"><i class="ti ti-currency-bitcoin"></i></div>
+          <div class="stat-body">
+            <div class="stat-label">Markets affected</div>
+            <div class="stat-value amber" id="aa-markets">—</div>
+            <div class="aa-sub" id="aa-markets-sub">—</div>
+          </div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-icon red"><i class="ti ti-alert-triangle"></i></div>
+          <div class="stat-body">
+            <div class="stat-label">Critical episodes</div>
+            <div class="stat-value red" id="aa-critical">—</div>
+            <div class="aa-sub" id="aa-critical-sub">—</div>
+          </div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-icon green"><i class="ti ti-clock-check"></i></div>
+          <div class="stat-body">
+            <div class="stat-label">Median duration</div>
+            <div class="stat-value green" id="aa-median">—</div>
+            <div class="aa-sub" id="aa-median-sub">mean —</div>
+          </div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-icon amber"><i class="ti ti-hourglass-high"></i></div>
+          <div class="stat-body">
+            <div class="stat-label">Longest episode</div>
+            <div class="stat-value amber" id="aa-longest">—</div>
+            <div class="aa-sub" id="aa-longest-sub">—</div>
+          </div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-icon purple"><i class="ti ti-arrow-up-right-circle"></i></div>
+          <div class="stat-body">
+            <div class="stat-label">Escalations</div>
+            <div class="stat-value purple" id="aa-escalations">—</div>
+            <div class="aa-sub">severity rose mid-episode</div>
+          </div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-icon red"><i class="ti ti-player-record"></i></div>
+          <div class="stat-body">
+            <div class="stat-label">Open at range end</div>
+            <div class="stat-value red" id="aa-open">—</div>
+            <div class="aa-sub">unresolved when the log ends</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Worst markets -->
+      <div class="chart-card">
+        <div class="chart-header">
+          <div>
+            <div class="chart-title">Worst markets</div>
+            <div class="aa-sub" id="aa-market-caption">top 15 by episode count</div>
+          </div>
+          <div class="chart-selector" id="aa-market-metric">
+            <div class="chart-pill active" data-metric="episodes" onclick="setAaMarketMetric('episodes')">Episodes</div>
+            <div class="chart-pill"        data-metric="time"     onclick="setAaMarketMetric('time')">Time in alert</div>
+          </div>
+        </div>
+        <div style="height:330px"><canvas id="aa-market-chart"></canvas></div>
+      </div>
+
+      <!-- Trend -->
+      <div class="chart-card">
+        <div class="chart-header">
+          <div>
+            <div class="chart-title">Daily trend</div>
+            <div class="aa-sub">episodes per day, by peak severity — attributed to the day the episode started</div>
+          </div>
+        </div>
+        <div style="height:240px"><canvas id="aa-daily-chart"></canvas></div>
+      </div>
+
+      <!-- Hour-of-day -->
+      <div class="chart-card">
+        <div class="chart-header">
+          <div>
+            <div class="chart-title">Hour of day (NGT)</div>
+            <div class="aa-sub">detections per hour, per alert type — shaded within each row, so a quiet
+              alert's own peak is still visible next to a noisy one</div>
+          </div>
+        </div>
+        <div class="aa-heat" id="aa-hour-heat"></div>
+      </div>
+
+      <div class="chart-card">
+        <div class="section-header">
+          <div class="section-title">
+            <i class="ti ti-hourglass" style="font-size:16px;color:var(--amber)"></i>
+            Longest episodes
+            <span class="count" id="aa-longest-count">—</span>
+          </div>
+        </div>
+        <div class="aa-sub" style="margin-bottom:10px">
+          Cycles is how many times the issue was actually observed; where it is short of the
+          duration, the run was stitched over cycles the issue was briefly absent.
+        </div>
+        <div class="aa-table-wrap"><table class="aa-table" id="aa-longest-table"></table></div>
+      </div>
+
+      <div class="aa-grid-2" style="margin-bottom:24px">
+        <div class="chart-card" style="margin-bottom:0">
+          <div class="section-header">
+            <div class="section-title">
+              <i class="ti ti-wave-saw-tool" style="font-size:16px;color:var(--accent)"></i>
+              Noisiest (market, alert) pairs
+              <span class="count" id="aa-flap-count">—</span>
+            </div>
+          </div>
+          <div class="aa-sub" style="margin-bottom:10px">
+            Fires often, clears immediately — episodes ÷ median duration. A high score is a
+            threshold worth revisiting, not an incident. Needs 3+ episodes to rank.
+          </div>
+          <div class="aa-table-wrap"><table class="aa-table" id="aa-flap-table"></table></div>
+        </div>
+
+        <div class="chart-card" style="margin-bottom:0">
+          <div class="section-header">
+            <div class="section-title">
+              <i class="ti ti-player-record" style="font-size:16px;color:var(--red)"></i>
+              Still open at range end
+              <span class="count" id="aa-open-count">—</span>
+            </div>
+          </div>
+          <div class="aa-sub" style="margin-bottom:10px">
+            Episodes whose last detection is the final cycle in the log — still unresolved as
+            far as this range can tell.
+          </div>
+          <div class="aa-table-wrap"><table class="aa-table" id="aa-open-table"></table></div>
+        </div>
+      </div>
+
+
+      <!-- ── Daily log ──────────────────────────────────────────────────────
+           Moved here from the Overview tab so it shares this tab's date range
+           instead of carrying its own single-day picker.
+
+           One row per DETECTION, not per (cycle, market) as the CSV stores it.
+           That regrain is what makes the tier filter meaningful: a cycle whose
+           Issues column reads "A1:CRITICAL|B1:HIGH|A4:MEDIUM" is simultaneously
+           Tier 1, 2 and 3, so as a single row it can be neither shown nor hidden
+           correctly. Split, each row has exactly one tier. -->
+      <div id="aa-log-section" class="chart-card">
+        <div class="section-header">
+          <div class="section-title">
+            <i class="ti ti-table" style="font-size:16px;color:var(--accent)"></i>
+            Daily log
+            <span class="count" id="log-count">—</span>
+          </div>
+          <button class="btn" onclick="downloadAlertLog()" title="Download every row matching the current filters">
+            <i class="ti ti-download"></i> Export CSV
+          </button>
+        </div>
+        <div class="aa-sub" style="margin-bottom:12px">
+          Every issue the monitor logged in the selected range, one row per detection.
+          Defaults to <b>Tier 1</b> — the alerts that page someone on first sight. Market and
+          alert-type options are rebuilt from what the tier above them actually contains, so
+          no combination lands you on an empty table.
+        </div>
+
+        <div class="daily-log-controls">
+          <select id="log-filter-tier" title="Delivery tier — how hard this alert pushes to Telegram">
+            <option value="1" selected>Tier 1 · fires immediately</option>
+            <option value="2">Tier 2 · needs 3 cycles</option>
+            <option value="3">Tier 3 · dashboard only</option>
+            <option value="0">All tiers</option>
+          </select>
+          <select id="log-filter-market">
+            <option value="">All markets</option>
+          </select>
+          <select id="log-filter-alert" title="Show only this alert id">
+            <option value="">All alert types</option>
+          </select>
+          <select id="log-page-size">
+            <option value="50">50 rows</option>
+            <option value="100">100 rows</option>
+            <option value="200">200 rows</option>
+            <option value="500">500 rows</option>
+          </select>
+          <span style="font-size:12px;color:var(--text-muted);margin-left:auto" id="log-tier-counts">—</span>
+        </div>
+
+        <div class="dl-table-wrap">
+          <table class="dl-table">
+            <thead>
+              <tr>
+                <th>Time (NGT)</th>
+                <th>Market</th>
+                <th>Alert</th>
+                <th>Severity</th>
+                <th>Tier</th>
+                <th>Depth</th>
+              </tr>
+            </thead>
+            <tbody id="log-tbody">
+              <tr><td colspan="6" style="color:var(--text-muted);padding:20px 10px">Loading…</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="dl-pagination">
+          <span id="log-page-info">—</span>
+          <div class="dl-pagination-btns">
+            <button class="btn" id="log-prev" onclick="logChangePage(-1)" disabled>
+              <i class="ti ti-chevron-left"></i> Prev
+            </button>
+            <button class="btn" id="log-next" onclick="logChangePage(1)">
+              Next <i class="ti ti-chevron-right"></i>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div class="aa-empty" id="aa-empty" style="display:none">
+        No alerts were logged in this range.
+      </div>
+
+    </div> <!-- /tab-alerts -->
 
   </div>
 </div>
@@ -1567,6 +1841,7 @@ const SLIPPAGE_POLL_MS = 5000;
 // match defaults.py so labels look reasonable on first render before the API
 // returns.
 let slippageWeightUsdt    = 100_000;
+let slippagePollSeconds   = 5;    // depth-walk poll rate, refreshed from /raw
 let slippageMidWeightUsdt = 1_000;
 let uptimeReferencePrice  = 1400;
 let uptimeBandPct         = 1 / 1400 * 100;   // p = n/s*100 (n = fixed 1₦)
@@ -1617,9 +1892,10 @@ function showTab(tab, anchor) {
   // Topbar title tracks the tab
   const titleEl = document.querySelector(".topbar-title");
   if (titleEl) {
-    titleEl.textContent = tab === "slippage"
-      ? "USDT/NGN — Depth-walk slippage"
-      : "Market Overview";
+    titleEl.textContent = {
+      slippage: "USDT/NGN — Depth-walk slippage",
+      alerts:   "Alert analysis",
+    }[tab] || "Market Overview";
   }
 
   // Per-tab side effects: only poll the slippage endpoints while that tab is
@@ -1631,6 +1907,12 @@ function showTab(tab, anchor) {
   } else {
     stopSlippagePolling();
   }
+
+  // Alert analysis is a historical view over closed daily logs, so it loads once
+  // on first open and then only when the operator changes the range — no polling
+  // and no refetch on every tab switch. setAaRange seeds the date inputs and
+  // fetches; after that aaData is already populated.
+  if (tab === "alerts" && !aaData) setAaRange(aaRange || "7d");
 
   if (anchor) {
     // Wait one frame so the newly-visible panel has laid out before scrolling
@@ -1700,8 +1982,24 @@ async function fetchAndRender() {
     const data = await res.json();
     lastData = data;
     banner.style.display = "none";
-    pulse.classList.remove("stale");
-    document.getElementById("sidebar-status-text").textContent = "Live";
+
+    // "Live" has to mean the MONITOR is cycling, not merely that this fetch
+    // returned 200. The API serves whatever latest.csv last contained, so a
+    // monitor dead for hours still answered every request and the light stayed
+    // green — which is exactly how a stopped depth-walk feed went unnoticed.
+    const sm    = data.summary || {};
+    const stale = !!sm.monitor_stale;
+    pulse.classList.toggle("stale", stale);
+    document.getElementById("sidebar-status-text").textContent =
+      stale ? "Monitor stale" : "Live";
+    if (stale) {
+      const age = sm.last_updated_age_seconds;
+      banner.style.display = "flex";
+      document.getElementById("error-text").textContent = age == null
+        ? "No cycle results on disk — the monitor process has not written latest.csv."
+        : `Monitor last completed a cycle ${fmtFeedAge(age)} (${sm.last_updated}). `
+          + `The API is up; the monitor process is not writing. Check that it is running.`;
+    }
     // Awaited before the render so check rows draw with current ack state
     // instead of flashing unticked for a frame.
     await fetchAlertAcks();
@@ -2566,6 +2864,9 @@ async function fetchSlippageData(opts) {
     if (raw.config) {
       if (raw.config.weight_usdt     != null) slippageWeightUsdt    = raw.config.weight_usdt;
       if (raw.config.mid_weight_usdt != null) slippageMidWeightUsdt = raw.config.mid_weight_usdt;
+      if (raw.config.poll_interval_seconds != null) {
+        slippagePollSeconds = raw.config.poll_interval_seconds;
+      }
       const up = raw.config.uptime || {};
       if (up.reference_price != null) uptimeReferencePrice = up.reference_price;
       if (up.band_pct        != null) uptimeBandPct        = up.band_pct;
@@ -2689,10 +2990,20 @@ async function fetchSlippageData(opts) {
     // over completed trading-hours buckets, and the 1h view shows the running
     // in-progress hour. computeUptimeWindowAverage pools all three series from
     // the same points, so no separate window pass is needed.
+    // Feed health first: it decides whether the live cards below are allowed to
+    // claim they describe "this hour".
+    const feedStale = renderSlippageFeedHealth(raw.samples || []);
+
     const isLiveHourView = mode !== "archive" && slippageRange === "1h";
     if (isLiveHourView) {
-      renderUptime1nStats(live);
-      renderSpreadGapStats(liveGap);
+      // A stale feed makes these cards the only ones still showing numbers, and
+      // those numbers are however old the file is. Blank them rather than let
+      // them contradict the (correctly) empty slippage cards next to them.
+      const staleNote = `last poll ${fmtFeedAge(slippageFeedAgeSeconds(raw.samples || []))}`;
+      renderUptime1nStats(feedStale ? { ask: null, bid: null, askN: 0, bidN: 0, count: 0 } : live,
+                          feedStale ? staleNote : null);
+      renderSpreadGapStats(feedStale ? { pct: null, n: 0 } : liveGap,
+                           feedStale ? staleNote : null);
     } else {
       const windowAvg = computeUptimeWindowAverage(uptimeForChart.filter(p => !p.live));
       renderUptimeWindowAverage(windowAvg, mode, slippageRange);
@@ -2864,25 +3175,27 @@ function computeLiveSpreadGap(samples) {
 // view only. Like renderUptime1nStats, this is NOT trading-hours gated: the gate
 // applies to the persisted/graphed series (and the window averages drawn from
 // it), never to a live running figure for the hour you're currently in.
-function renderSpreadGapStats(live) {
+function renderSpreadGapStats(live, staleNote) {
   const pct = v => v == null ? "—" : (v * 100).toFixed(1) + "%";
   const set2 = (id, t) => { const el = document.getElementById(id); if (el) el.textContent = t; };
   set2("spread-gap-1n", pct(live.pct));
-  set2("spread-gap-1n-sub", live.n
+  set2("spread-gap-1n-sub", staleNote ? `feed stopped · ${staleNote}` : (live.n
     ? `${Math.round((live.pct || 0) * live.n)}/${live.n} polls · this hour`
-    : "this hour · graphed");
+    : "this hour · graphed"));
 }
 
 // The 1₦ (fixed / graphed) cards show this hour's running fraction so far —
 // the same value that becomes the next hourly graph point, so it's visible
 // immediately without waiting for the hour to close.
-function renderUptime1nStats(live) {
+function renderUptime1nStats(live, staleNote) {
   const pct = v => v == null ? "—" : (v * 100).toFixed(1) + "%";
   const set2 = (id, t) => { const el = document.getElementById(id); if (el) el.textContent = t; };
+  const sub = (n, v) => staleNote ? `feed stopped · ${staleNote}`
+    : (n ? `${Math.round((v || 0) * n)}/${n} polls · this hour` : "this hour · graphed");
   set2("uptime-ask-1n", pct(live.ask));
   set2("uptime-bid-1n", pct(live.bid));
-  set2("uptime-ask-1n-sub", live.askN ? `${Math.round((live.ask || 0) * live.askN)}/${live.askN} polls · this hour` : "this hour · graphed");
-  set2("uptime-bid-1n-sub", live.bidN ? `${Math.round((live.bid || 0) * live.bidN)}/${live.bidN} polls · this hour` : "this hour · graphed");
+  set2("uptime-ask-1n-sub", sub(live.askN, live.ask));
+  set2("uptime-bid-1n-sub", sub(live.bidN, live.bid));
 }
 
 // Non-1h views: pools total passes ÷ total polls across every qualifying
@@ -3015,6 +3328,53 @@ function applySlippageWeightLabels() {
     uptimeChart.data.datasets[1].label = `Bid uptime % (≥ ${uw}, ±${pctS}%)`;
     uptimeChart.update("none");
   }
+}
+
+// Seconds since the monitor last appended a depth-walk sample, or null when
+// there are no samples at all.
+function slippageFeedAgeSeconds(samples) {
+  if (!samples || !samples.length) return null;
+  const last = new Date(samples[samples.length - 1].ts);
+  if (isNaN(last)) return null;
+  return (Date.now() - last.getTime()) / 1000;
+}
+
+// How quiet the feed has to go before we stop believing it. Scaled off the
+// monitor's own poll interval so retuning that can't strand this at a wrong
+// value, with a floor so a handful of failed polls at the default 5s rate isn't
+// enough to trip it.
+function slippageStaleThreshold() {
+  return Math.max(120, (slippagePollSeconds || 5) * 24);
+}
+
+function fmtFeedAge(sec) {
+  if (sec == null) return "never";
+  if (sec < 90)    return `${Math.round(sec)}s ago`;
+  if (sec < 5400)  return `${Math.round(sec / 60)} min ago`;
+  return `${(sec / 3600).toFixed(1)} h ago`;
+}
+
+// The live cards ("this hour") are the ones that read raw samples with no window
+// filter, so they are exactly the ones that lie when the feed dies. When it has,
+// blank them and say when the last poll landed instead of rendering a stale
+// percentage as current.
+function renderSlippageFeedHealth(samples) {
+  const age    = slippageFeedAgeSeconds(samples);
+  const stale  = age == null || age > slippageStaleThreshold();
+  const banner = document.getElementById("slippage-stale");
+  const text   = document.getElementById("slippage-stale-text");
+
+  if (banner) banner.classList.toggle("show", stale);
+  if (stale && text) {
+    text.innerHTML = samples && samples.length
+      ? `<b>Depth-walk feed has stopped.</b> The monitor's ${slippagePollSeconds}s poller last wrote a
+         sample <b>${fmtFeedAge(age)}</b>, so nothing on this tab is live. The buy/sell slippage cards
+         are blank because there is genuinely nothing in the selected window — check that the monitor
+         process is running and look for <code>Depth-walk</code> errors in its log.`
+      : `<b>No depth-walk samples yet.</b> The monitor hasn't written any USDT/NGN depth polls —
+         check that it is running.`;
+  }
+  return stale;
 }
 
 function fmtNairaSigned(v) {
@@ -4005,224 +4365,6 @@ function showToast(msg, isError = false) {
   setTimeout(() => el.classList.remove("show"), 3500);
 }
 
-// ── Daily Log ─────────────────────────────────────────────────────────────────
-let _dlAllRows   = [];   // full dataset from /api/history
-let _dlFiltered  = [];   // after market + status filter applied
-let _dlPage      = 0;
-let _dlPageSize  = 50;
-
-async function fetchDailyLog() {
-  // Read selected date from picker; default to today in NGT
-  const picker = document.getElementById("dl-date-picker");
-  const todayNgt = new Date().toLocaleDateString("en-CA", { timeZone: "Africa/Lagos" });
-  if (!picker.value) picker.value = todayNgt;
-
-  // Clamp: never request future dates or dates >30 days back
-  const minDate = new Date(new Date(todayNgt) - 29 * 864e5).toISOString().slice(0, 10);
-  picker.min = minDate;
-  picker.max = todayNgt;
-  const selectedDate = picker.value;
-
-  try {
-    const url = `${API_BASE}/api/history${selectedDate !== todayNgt ? `?date=${selectedDate}` : ""}`;
-    const res = await fetch(url);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const data = await res.json();
-    document.getElementById("dl-date-label").textContent = `Date — ${data.date || "—"}`;
-    _dlAllRows = (data.rows || []).reverse();  // newest first
-    _dlPage    = 0;
-    populateDlMarketFilter(_dlAllRows);
-    populateDlAlertFilter(_dlAllRows);
-    applyDlFilters();
-  } catch (err) {
-    document.getElementById("dl-tbody").innerHTML =
-      `<tr><td colspan="5" style="color:var(--red);padding:20px 10px">Failed to load: ${err.message}</td></tr>`;
-  }
-}
-
-function downloadDailyLog(fullDay = false) {
-  const rows = fullDay ? _dlAllRows : _dlFiltered;
-  if (!rows || !rows.length) {
-    showToast("No rows to download", true);
-    return;
-  }
-
-  // Build CSV from the row objects — use the same columns the daily_log files have
-  const cols = ["Timestamp", "Market", "Status", "Issues", "Depth"];
-  const escape = v => {
-    const s = String(v ?? "");
-    return s.includes(",") || s.includes('"') || s.includes("\n")
-      ? `"${s.replace(/"/g, '""')}"` : s;
-  };
-  const lines = [
-    cols.join(","),
-    ...rows.map(r =>
-      cols.map(c => escape(r[c] ?? r[c.toLowerCase()] ?? "")).join(",")
-    ),
-  ];
-  const csv  = lines.join("\r\n");
-  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
-  const url  = URL.createObjectURL(blob);
-  const a    = document.createElement("a");
-  const picker = document.getElementById("dl-date-picker");
-  const date   = picker?.value || new Date().toLocaleDateString("en-CA", { timeZone: "Africa/Lagos" });
-  a.href     = url;
-  a.download = `daily_log_${date}${fullDay ? "" : "_filtered"}.csv`;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  URL.revokeObjectURL(url);
-}
-
-
-function populateDlMarketFilter(rows) {
-  const markets = [...new Set(rows.map(r => r.Market || r.market || ""))].filter(Boolean).sort();
-  const sel = document.getElementById("dl-filter-market");
-  const prev = sel.value;
-  sel.innerHTML = `<option value="">All markets</option>` +
-    markets.map(m => `<option value="${m}"${m === prev ? " selected" : ""}>${m.toUpperCase()}</option>`).join("");
-}
-
-// Alert ids present in the loaded day, parsed out of the Issues column
-// ("B1:HIGH|A4:MEDIUM"). Built from the day's own rows rather than the static
-// ACKABLE_ISSUE_IDS list, so the dropdown only ever offers types that actually
-// occurred that day — picking one can't land you on an empty table.
-//
-// Ids only, not id:severity. "Which markets raised B1 today" is the question;
-// splitting B1:HIGH from B1:CRITICAL into separate options would fragment the
-// answer across two selections.
-function dlAlertIds(row) {
-  return String(row.Issues || row.issues || "")
-    .split("|").filter(Boolean)
-    .map(part => part.split(":")[0].trim())
-    .filter(Boolean);
-}
-
-function populateDlAlertFilter(rows) {
-  const ids = [...new Set(rows.flatMap(dlAlertIds))].sort();
-  const sel = document.getElementById("dl-filter-alert");
-  const prev = sel.value;
-  // Keep the current selection even if this day has no such rows, so switching
-  // dates with a filter set doesn't silently widen back to "All".
-  if (prev && !ids.includes(prev)) ids.push(prev);
-  sel.innerHTML = `<option value="">All alert types</option>` +
-    ids.sort().map(id => `<option value="${id}"${id === prev ? " selected" : ""}>${id}</option>`).join("");
-}
-
-function applyDlFilters() {
-  const market  = document.getElementById("dl-filter-market").value;
-  const status  = document.getElementById("dl-filter-status").value;
-  const alertId = document.getElementById("dl-filter-alert").value;
-  _dlPageSize   = parseInt(document.getElementById("dl-page-size").value) || 50;
-  _dlFiltered   = _dlAllRows.filter(r => {
-    const mVal = (r.Market || r.market || "").toLowerCase();
-    const sVal = (r.Status || r.status || "").toUpperCase();
-    if (market && mVal !== market.toLowerCase()) return false;
-    if (status && sVal !== status) return false;
-    if (alertId && !dlAlertIds(r).includes(alertId)) return false;
-    return true;
-  });
-  _dlPage = 0;
-  renderDlPage();
-}
-
-// Chip click drills the market filter into that pair, or clears it if it's
-// already the active one — so the strip toggles rather than being a dead end.
-function dlToggleMarket(market) {
-  const sel = document.getElementById("dl-filter-market");
-  sel.value = (sel.value.toLowerCase() === market) ? "" : market;
-  applyDlFilters();
-}
-
-function dlChangePage(dir) {
-  const maxPage = Math.max(0, Math.ceil(_dlFiltered.length / _dlPageSize) - 1);
-  _dlPage = Math.max(0, Math.min(_dlPage + dir, maxPage));
-  renderDlPage();
-}
-
-function renderDlPage() {
-  const total   = _dlFiltered.length;
-  const start   = _dlPage * _dlPageSize;
-  const end     = Math.min(start + _dlPageSize, total);
-  const page    = _dlFiltered.slice(start, end);
-  const maxPage = Math.max(0, Math.ceil(total / _dlPageSize) - 1);
-
-  const marketsInView = [...new Set(_dlFiltered.map(r => (r.Market || r.market || "").toLowerCase()))]
-    .filter(Boolean).sort();
-  document.getElementById("dl-count-label").textContent =
-    `${total.toLocaleString()} rows · ${marketsInView.length} market${marketsInView.length === 1 ? "" : "s"}`;
-
-  // Summary strip: only meaningful once an alert type is chosen.
-  const alertId    = document.getElementById("dl-filter-alert").value;
-  const marketSel  = document.getElementById("dl-filter-market").value.toLowerCase();
-  const summaryEl  = document.getElementById("dl-alert-summary");
-  if (alertId) {
-    // Distinct markets that raised this alert on this day, ignoring any market
-    // filter — otherwise drilling into one market would hide the other options.
-    const raisedBy = [...new Set(
-      _dlAllRows.filter(r => dlAlertIds(r).includes(alertId))
-                .map(r => (r.Market || r.market || "").toLowerCase())
-    )].filter(Boolean).sort();
-    summaryEl.style.display = "";
-    summaryEl.innerHTML = raisedBy.length
-      ? `<span class="lead"><b>${alertId}</b> raised by ${raisedBy.length} market${raisedBy.length === 1 ? "" : "s"} on this day:</span>`
-        + raisedBy.map(m =>
-            `<span class="dl-market-chip${m === marketSel ? " active" : ""}"
-                   onclick="dlToggleMarket('${m}')"
-                   title="${m === marketSel ? "Clear the market filter" : "Show only " + m.toUpperCase()}"
-             >${m.toUpperCase()}</span>`).join("")
-      : `<span class="lead">No market raised <b>${alertId}</b> on this day.</span>`;
-  } else {
-    summaryEl.style.display = "none";
-    summaryEl.innerHTML = "";
-  }
-  document.getElementById("dl-page-info").textContent =
-    total === 0 ? "No rows" : `${start + 1}–${end} of ${total.toLocaleString()}`;
-  document.getElementById("dl-prev").disabled = _dlPage === 0;
-  document.getElementById("dl-next").disabled = _dlPage >= maxPage;
-
-  if (!page.length) {
-    document.getElementById("dl-tbody").innerHTML =
-      `<tr><td colspan="5" style="color:var(--text-muted);padding:20px 10px">No rows match the current filters.</td></tr>`;
-    return;
-  }
-
-  document.getElementById("dl-tbody").innerHTML = page.map(r => {
-    const ts     = r.Timestamp || r.timestamp || "—";
-    const market = (r.Market   || r.market   || "—").toUpperCase();
-    const status = (r.Status   || r.status   || "—").toUpperCase();
-    const issues = r.Issues    || r.issues   || "";
-    const depth  = r.Depth     || r.depth    || "";
-
-    const statusCls = status === "WARNING" ? "warn" : status === "SKIPPED" ? "skip" : "ok";
-    const statusIcon = status === "WARNING" ? "⚠️" : status === "SKIPPED" ? "—" : "✓";
-
-    // Render issue codes as colour-coded badges
-    let issueHtml = "—";
-    if (issues) {
-      issueHtml = issues.split("|").filter(Boolean).map(part => {
-        const [id, sev] = part.split(":");
-        const sevCls = sev === "CRITICAL" ? "CRITICAL" : sev === "HIGH" ? "HIGH" : "MEDIUM";
-        return `<span class="dl-issue-badge ${sevCls}">${id}</span>`;
-      }).join("");
-    }
-
-    return `<tr>
-      <td class="dl-ts">${ts}</td>
-      <td class="dl-market">${market}</td>
-      <td><span class="dl-status ${statusCls}">${statusIcon} ${status}</span></td>
-      <td class="dl-issues">${issueHtml}</td>
-      <td class="dl-depth">${depth || "—"}</td>
-    </tr>`;
-  }).join("");
-}
-
-// Wire up filter controls
-document.getElementById("dl-filter-market").addEventListener("change", applyDlFilters);
-document.getElementById("dl-filter-status").addEventListener("change", applyDlFilters);
-document.getElementById("dl-filter-alert").addEventListener("change", applyDlFilters);
-document.getElementById("dl-page-size").addEventListener("change", applyDlFilters);
-
 // ── Theme toggle ───────────────────────────────────────────────────────────────
 function syncThemeIcon() {
   const dark = document.documentElement.getAttribute("data-theme") === "dark";
@@ -4238,15 +4380,585 @@ function toggleTheme() {
   try { localStorage.setItem("ohm-theme", dark ? "light" : "dark"); } catch (e) {}
   syncThemeIcon();
   themeChart();
+  if (aaData) renderAlertAnalysis();
 }
 
 // ── Boot ──────────────────────────────────────────────────────────────────────
 syncThemeIcon();
 initChart();
 fetchAndRender();
-fetchDailyLog();
 setInterval(fetchAndRender, 60_000);
-setInterval(fetchDailyLog, 60_000);
+
+// ═══ Alert analysis tab ═══════════════════════════════════════════════════════
+// One request to /api/alert-analysis per range change; everything on the tab is
+// rendered from that single payload. There is no polling: this is a historical
+// view over closed daily logs, and the newest thing it can show is the current
+// cycle, which the Overview tab already surfaces live.
+//
+// Vocabulary used throughout, and the reason the tab keeps insisting on it:
+//   detection — one issue on one market in one cycle (a row in the daily log).
+//   episode   — an unbroken run of the same detection, stitched over gaps.
+// A four-hour B1 is 240 detections and 1 episode. Ranking alert types by
+// detections therefore ranks by how long they linger, which is a real question
+// but not the same one as "which alert fires most often" — so the charts that
+// could mean either let you switch, and the stat cards show both.
+
+let aaData         = null;
+let aaMarketChart  = null;
+let aaDailyChart   = null;
+let aaMarketMetric = "episodes";
+let aaRange        = "7d";
+let aaLoading      = false;
+
+const AA_SEV_ORDER = ["CRITICAL", "HIGH", "MEDIUM", "UNKNOWN"];
+
+function aaCssVar(name) {
+  return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+}
+
+function aaSevColors() {
+  return {
+    CRITICAL: aaCssVar("--red"),
+    HIGH:     aaCssVar("--amber"),
+    MEDIUM:   aaCssVar("--blue"),
+    UNKNOWN:  aaCssVar("--text-muted"),
+  };
+}
+
+// Durations are read at a glance far more often than they're compared precisely,
+// so they render in whatever unit keeps the number small. Minutes below an hour,
+// hours below a day, days above.
+function aaDur(min) {
+  if (min == null || !isFinite(min)) return "—";
+  if (min < 60)   return `${min.toFixed(min < 10 ? 1 : 0)}m`;
+  if (min < 1440) return `${(min / 60).toFixed(1)}h`;
+  return `${(min / 1440).toFixed(1)}d`;
+}
+
+function aaNum(n) {
+  return n == null ? "—" : Number(n).toLocaleString();
+}
+
+function aaLocalDate(d) {
+  // toISOString() would shift a date near midnight into the previous day for any
+  // negative-offset viewer. The API expects a plain NGT calendar date, so build
+  // it from the local field values instead of round-tripping through UTC.
+  const p = n => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
+function setAaRange(range) {
+  aaRange = range;
+  document.querySelectorAll("#aa-range-group .range-btn").forEach(b => {
+    b.classList.toggle("active", b.dataset.range === range);
+  });
+  const days = { "1d": 1, "7d": 7, "14d": 14, "30d": 30 }[range] || 7;
+  const end   = new Date();
+  const start = new Date();
+  start.setDate(start.getDate() - (days - 1));
+  document.getElementById("aa-date-start").value = aaLocalDate(start);
+  document.getElementById("aa-date-end").value   = aaLocalDate(end);
+  reloadAlertTab();
+}
+
+// Typing dates directly drops the preset highlight — no preset describes an
+// arbitrary range, and leaving one lit would misreport what's on screen.
+function setAaDateRange() {
+  const s = document.getElementById("aa-date-start").value;
+  const e = document.getElementById("aa-date-end").value;
+  if (!s || !e) return;
+  if (s > e) {
+    document.getElementById("aa-coverage").textContent = "Start date is after end date";
+    return;
+  }
+  aaRange = null;
+  document.querySelectorAll("#aa-range-group .range-btn").forEach(b => b.classList.remove("active"));
+  reloadAlertTab();
+}
+
+// Both halves of the tab hang off the same range, so range changes go through
+// here. They are two requests rather than one because the log is paged and
+// re-fetches on every filter and page change, while the aggregates only change
+// when the range does.
+function reloadAlertTab() {
+  fetchAlertAnalysis();
+  logPage = 0;
+  fetchAlertLog();
+}
+
+async function fetchAlertAnalysis() {
+  if (aaLoading) return;
+  const start = document.getElementById("aa-date-start").value;
+  const end   = document.getElementById("aa-date-end").value;
+  if (!start || !end) { setAaRange("7d"); return; }
+
+  aaLoading = true;
+  const cov = document.getElementById("aa-coverage");
+  cov.textContent = "Loading…";
+  try {
+    const r = await fetch(`/api/alert-analysis?start=${start}&end=${end}`);
+    if (!r.ok) {
+      let detail = `HTTP ${r.status}`;
+      try { detail = (await r.json()).detail || detail; } catch (_) {}
+      cov.textContent = detail;
+      return;
+    }
+    aaData = await r.json();
+    renderAlertAnalysis();
+  } catch (err) {
+    cov.textContent = "Could not reach the API";
+  } finally {
+    aaLoading = false;
+  }
+}
+
+function renderAlertAnalysis() {
+  if (!aaData) return;
+  const s   = aaData.summary  || {};
+  const cov = aaData.coverage || {};
+
+  const missing = (cov.dates_without_data || []).length;
+  document.getElementById("aa-coverage").textContent =
+    `${cov.start} → ${cov.end} · ${cov.days_with_data}/${cov.days_in_range} day(s) with alerts` +
+    (missing ? ` · ${missing} quiet` : "");
+  document.getElementById("aa-gap").textContent = cov.gap_cycles ?? 2;
+
+  const hasData = (s.total_episodes || 0) > 0;
+  document.getElementById("aa-empty").style.display = hasData ? "none" : "block";
+
+  // ── Stat cards ─────────────────────────────────────────────────────────────
+  document.getElementById("aa-episodes").textContent   = aaNum(s.total_episodes);
+  document.getElementById("aa-detections").textContent = aaNum(s.total_detections);
+  document.getElementById("aa-markets").textContent    = aaNum(s.markets_affected);
+  document.getElementById("aa-critical").textContent   = aaNum(s.critical_episodes);
+  document.getElementById("aa-escalations").textContent = aaNum(s.escalations);
+  document.getElementById("aa-open").textContent       = aaNum(s.open_at_end);
+  document.getElementById("aa-median").textContent     = aaDur(s.median_duration_min);
+  document.getElementById("aa-longest").textContent    = aaDur(s.longest_min);
+
+  document.getElementById("aa-episodes-sub").textContent =
+    s.issue_types ? `${s.issue_types} alert type(s)` : "distinct runs";
+  document.getElementById("aa-detections-sub").textContent =
+    `${aaNum(s.warning_rows)} warning row(s)`;
+  document.getElementById("aa-markets-sub").textContent =
+    s.top_market ? `worst: ${String(s.top_market).toUpperCase()}` : "—";
+  document.getElementById("aa-critical-sub").textContent =
+    `${aaNum(s.high_episodes)} high · ${aaNum(s.medium_episodes)} medium`;
+  document.getElementById("aa-median-sub").textContent =
+    `mean ${aaDur(s.mttr_min)} · p95 ${aaDur(s.p95_duration_min)}`;
+  const le = s.longest_episode;
+  document.getElementById("aa-longest-sub").textContent =
+    le ? `${String(le.market).toUpperCase()} · ${le.issue}` : "—";
+
+  renderAaMarketChart();
+  renderAaDailyChart();
+  renderAaHourHeat();
+  renderAaLongest();
+  renderAaStillOpen();
+  renderAaFlapping();
+}
+
+// ── Worst markets ─────────────────────────────────────────────────────────────
+function setAaMarketMetric(metric) {
+  aaMarketMetric = metric;
+  document.querySelectorAll("#aa-market-metric .chart-pill").forEach(p => {
+    p.classList.toggle("active", p.dataset.metric === metric);
+  });
+  renderAaMarketChart();
+}
+
+function renderAaMarketChart() {
+  const all = (aaData && aaData.by_market) || [];
+  const ctx = document.getElementById("aa-market-chart");
+  if (!ctx) return;
+
+  const byTime = aaMarketMetric === "time";
+  document.getElementById("aa-market-caption").textContent = byTime
+    ? "top 15 by wall-clock minutes unhealthy — simultaneous alerts counted once"
+    : "top 15 by episode count";
+
+  const sorted = [...all].sort((a, b) =>
+    byTime ? b.time_in_alert_min - a.time_in_alert_min : b.episodes - a.episodes
+  ).slice(0, 15);
+  const labels = sorted.map(r => r.market.toUpperCase());
+  const colors = aaSevColors();
+
+  const datasets = byTime
+    ? [{ label: "Minutes in alert", data: sorted.map(r => r.time_in_alert_min),
+         backgroundColor: aaCssVar("--accent"), borderRadius: 3 }]
+    : AA_SEV_ORDER.filter(sev => sorted.some(r => r[sev.toLowerCase()]))
+        .map(sev => ({
+          label: sev,
+          data: sorted.map(r => r[sev.toLowerCase()] || 0),
+          backgroundColor: colors[sev],
+          borderRadius: 3,
+        }));
+
+  const extra = sorted.reduce((m, r) => (m[r.market.toUpperCase()] = r, m), {});
+  aaMarketChart = aaDrawBar(aaMarketChart, ctx, labels, datasets, {
+    horizontal: true,
+    stacked: !byTime,
+    valueFmt: byTime ? (v => aaDur(v)) : null,
+    afterBody: items => {
+      const r = extra[items[0].label];
+      if (!r) return "";
+      const ids = Object.entries(r.by_issue || {})
+        .sort((a, b) => b[1] - a[1]).slice(0, 6)
+        .map(([k, v]) => `${k}×${v}`).join("  ");
+      return [`${aaNum(r.episodes)} episode(s) · ${aaDur(r.time_in_alert_min)} unhealthy`,
+              ids];
+    },
+  });
+}
+
+// ── Daily trend ───────────────────────────────────────────────────────────────
+function renderAaDailyChart() {
+  const rows = (aaData && aaData.daily) || [];
+  const ctx  = document.getElementById("aa-daily-chart");
+  if (!ctx) return;
+  const colors = aaSevColors();
+  aaDailyChart = aaDrawBar(aaDailyChart, ctx,
+    rows.map(r => r.date.slice(5)),
+    ["CRITICAL", "HIGH", "MEDIUM"]
+      .filter(sev => rows.some(r => r[sev.toLowerCase()]))
+      .map(sev => ({
+        label: sev,
+        data: rows.map(r => r[sev.toLowerCase()] || 0),
+        backgroundColor: colors[sev],
+        borderRadius: 3,
+      })),
+    {
+      stacked: true,
+      afterBody: items => {
+        const r = rows[items[0].dataIndex];
+        return r ? [`${aaNum(r.detections)} detection(s) · ${r.markets} market(s)`] : "";
+      },
+    });
+}
+
+// ── Shared bar renderer ───────────────────────────────────────────────────────
+// Both charts on this tab are bar charts of the same shape, so they share one
+// constructor. Charts are destroyed and rebuilt rather than mutated: the market
+// metric toggle switches the stacking mode, and Chart.js does not reliably
+// reconfigure that in place.
+function aaDrawBar(existing, canvas, labels, datasets, opt = {}) {
+  if (existing) existing.destroy();
+  const grid = aaCssVar("--chart-grid");
+  const tick = aaCssVar("--chart-tick");
+  const fmt  = opt.valueFmt || (v => aaNum(v));
+  const valueAxis = {
+    stacked: !!opt.stacked,
+    beginAtZero: true,
+    ticks: { color: tick, font: { size: 10 }, callback: v => fmt(v) },
+    grid:  { color: grid },
+  };
+  const catAxis = {
+    stacked: !!opt.stacked,
+    ticks: {
+      color: tick,
+      font: { size: 10, family: "'JetBrains Mono', monospace" },
+      // Never thin the labels. autoSkip drops every other one once rows get
+      // tight, which leaves bars on screen that you can see but cannot name.
+      autoSkip: false,
+    },
+    grid: { display: false },
+  };
+  return new Chart(canvas.getContext("2d"), {
+    type: "bar",
+    data: { labels, datasets },
+    options: {
+      indexAxis: opt.horizontal ? "y" : "x",
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { mode: "index", intersect: false },
+      plugins: {
+        legend: {
+          display: datasets.length > 1,
+          position: "bottom",
+          labels: { color: tick, font: { size: 10 }, boxWidth: 10, boxHeight: 10, padding: 12 },
+        },
+        tooltip: {
+          callbacks: {
+            label: c => `${c.dataset.label}: ${fmt(c.parsed[opt.horizontal ? "x" : "y"])}`,
+            afterBody: opt.afterBody || undefined,
+          },
+        },
+      },
+      scales: opt.horizontal ? { x: valueAxis, y: catAxis } : { x: catAxis, y: valueAxis },
+    },
+  });
+}
+
+// ── Hour-of-day heatmap ───────────────────────────────────────────────────────
+// Shaded PER ROW, not against a global maximum. A2 might out-detect A1 by three
+// orders of magnitude; on a shared scale every quiet alert's row is uniformly
+// blank and the question the chart exists to answer — "when does THIS alert
+// cluster" — becomes unanswerable.
+function renderAaHourHeat() {
+  const h = (aaData && aaData.hourly) || {};
+  const el = document.getElementById("aa-hour-heat");
+  if (!el) return;
+  const issues = h.issues || [];
+  if (!issues.length) { el.innerHTML = `<div class="aa-empty">No detections in range.</div>`; return; }
+
+  const accent = aaCssVar("--accent");
+  const head = `<tr><th class="row-label"></th>${
+    (h.hours || []).map(x => `<th>${String(x).padStart(2, "0")}</th>`).join("")
+  }<th class="row-label" style="padding-left:8px">total</th></tr>`;
+
+  const body = issues.map((issue, i) => {
+    const row = (h.matrix || [])[i] || [];
+    const max = Math.max(1, ...row);
+    const tot = row.reduce((a, b) => a + b, 0);
+    const cells = row.map((v, hr) => {
+      // Tint strength is the value's share of THIS row's max. Past ~55% the
+      // purple is dark enough that --text-primary fails on it in light mode, so
+      // the label flips to white — the same threshold works in both themes
+      // because the tint colour is the same accent either way.
+      const pctTint = v ? Math.round(12 + (v / max) * 78) : 0;
+      const bg = v ? `background:color-mix(in srgb, ${accent} ${pctTint}%, transparent);` +
+                     (pctTint > 55 ? "color:#fff;" : "") : "";
+      return `<td class="${v ? "" : "zero"}" style="${bg}" title="${issue} · ${String(hr).padStart(2, "0")}:00 · ${aaNum(v)} detection(s)">${v || "·"}</td>`;
+    }).join("");
+    return `<tr><th class="row-label">${issue}</th>${cells}<th class="row-label" style="padding-left:8px">${aaNum(tot)}</th></tr>`;
+  }).join("");
+
+  el.innerHTML = `<table>${head}${body}</table>`;
+}
+
+// ── Tables ────────────────────────────────────────────────────────────────────
+function aaTable(el, headers, rows, emptyMsg) {
+  if (!el) return;
+  if (!rows.length) {
+    el.innerHTML = `<tr><td class="aa-empty" colspan="${headers.length}">${emptyMsg}</td></tr>`;
+    return;
+  }
+  el.innerHTML =
+    `<thead><tr>${headers.map(h => `<th${h.num ? ' style="text-align:right"' : ""}>${h.label}</th>`).join("")}</tr></thead>` +
+    `<tbody>${rows.join("")}</tbody>`;
+}
+
+function aaSev(sev) {
+  return `<span class="aa-pill-badge ${sev}">${sev}</span>`;
+}
+
+function renderAaLongest() {
+  const rows = (aaData && aaData.longest_episodes) || [];
+  document.getElementById("aa-longest-count").textContent = `${rows.length}`;
+  aaTable(document.getElementById("aa-longest-table"),
+    [{ label: "Market" }, { label: "Alert" }, { label: "Severity" },
+     { label: "Started" }, { label: "Duration", num: true }, { label: "Cycles", num: true }],
+    rows.map(r => `<tr>
+      <td class="mkt">${r.market.toUpperCase()}</td>
+      <td class="mkt">${r.issue}${r.escalated ? '<span class="aa-tag esc">esc</span>' : ""}${r.open_at_end ? '<span class="aa-tag open">open</span>' : ""}</td>
+      <td>${aaSev(r.severity)}</td>
+      <td class="ts">${r.start}</td>
+      <td class="num">${aaDur(r.duration_min)}</td>
+      <td class="num">${aaNum(r.detections)}</td>
+    </tr>`),
+    "No episodes in range.");
+}
+
+function renderAaStillOpen() {
+  const rows = (aaData && aaData.still_open) || [];
+  document.getElementById("aa-open-count").textContent = `${rows.length}`;
+  aaTable(document.getElementById("aa-open-table"),
+    [{ label: "Market" }, { label: "Alert" }, { label: "Severity" },
+     { label: "Started" }, { label: "Open for", num: true }],
+    rows.map(r => `<tr>
+      <td class="mkt">${r.market.toUpperCase()}</td>
+      <td class="mkt">${r.issue}</td>
+      <td>${aaSev(r.severity)}</td>
+      <td class="ts">${r.start}</td>
+      <td class="num">${aaDur(r.duration_min)}</td>
+    </tr>`),
+    "Everything had cleared by the end of the range.");
+}
+
+function renderAaFlapping() {
+  const rows = (aaData && aaData.flapping) || [];
+  document.getElementById("aa-flap-count").textContent = `${rows.length}`;
+  aaTable(document.getElementById("aa-flap-table"),
+    [{ label: "Market" }, { label: "Alert" }, { label: "Episodes", num: true },
+     { label: "Median", num: true }, { label: "Total", num: true }, { label: "Score", num: true }],
+    rows.map(r => `<tr>
+      <td class="mkt">${r.market.toUpperCase()}</td>
+      <td class="mkt">${r.issue}</td>
+      <td class="num">${aaNum(r.episodes)}</td>
+      <td class="num">${aaDur(r.median_min)}</td>
+      <td class="num">${aaDur(r.total_min)}</td>
+      <td class="num"><b>${r.score}</b></td>
+    </tr>`),
+    "Nothing flapped — no (market, alert) pair reached 3 episodes.");
+}
+
+
+// ── Daily log (analysis tab) ──────────────────────────────────────────────────
+// Server-paged and server-filtered against /api/alert-log. The old Overview
+// version pulled a whole day and filtered in JS, which worked because a day is
+// one file; this one spans up to 30 days and ~10^6 detections, so the browser
+// asks for one page at a time and never holds the range.
+//
+// The three filters are ordered tier → market → alert, and each dropdown is
+// rebuilt from the facets the server computed with the filters ABOVE it applied.
+// That is what stops a selection landing on an empty table: the markets offered
+// are the ones that have rows at the chosen tier, and the alert ids offered are
+// the ones that have rows at that tier for the chosen market.
+
+let logPage     = 0;
+let logPageSize = 50;
+let logLoading  = false;
+let logData     = null;
+
+function logFilters() {
+  return {
+    tier:   document.getElementById("log-filter-tier").value,
+    market: document.getElementById("log-filter-market").value,
+    issue:  document.getElementById("log-filter-alert").value,
+  };
+}
+
+function logQuery(extra = {}) {
+  const f = logFilters();
+  const p = new URLSearchParams({
+    start: document.getElementById("aa-date-start").value,
+    end:   document.getElementById("aa-date-end").value,
+    tier:  f.tier,
+    page:  logPage,
+    page_size: logPageSize,
+    ...extra,
+  });
+  if (f.market) p.set("market", f.market);
+  if (f.issue)  p.set("issue", f.issue);
+  return p.toString();
+}
+
+async function fetchAlertLog() {
+  const start = document.getElementById("aa-date-start").value;
+  const end   = document.getElementById("aa-date-end").value;
+  if (!start || !end || logLoading) return;
+
+  logLoading  = true;
+  logPageSize = parseInt(document.getElementById("log-page-size").value) || 50;
+  let stale = false;
+  try {
+    const r = await fetch(`${API_BASE}/api/alert-log?${logQuery()}`);
+    if (!r.ok) {
+      let detail = `HTTP ${r.status}`;
+      try { detail = (await r.json()).detail || detail; } catch (_) {}
+      document.getElementById("log-tbody").innerHTML =
+        `<tr><td colspan="6" style="color:var(--red);padding:20px 10px">${detail}</td></tr>`;
+      return;
+    }
+    logData = await r.json();
+    logPage = logData.page;
+    stale   = renderAlertLog() === false;
+  } catch (err) {
+    document.getElementById("log-tbody").innerHTML =
+      `<tr><td colspan="6" style="color:var(--red);padding:20px 10px">Could not reach the API</td></tr>`;
+  } finally {
+    logLoading = false;
+  }
+
+  // renderAlertLog reports false when the response made one of the downstream
+  // filters impossible (flip tier to 1 while filtered to a Tier-3 alert) and it
+  // cleared them. The table on screen is then filtered by something the
+  // dropdowns no longer say, so re-ask. This MUST happen after the finally
+  // above: calling it from inside renderAlertLog ran while logLoading was still
+  // true and got swallowed by the guard at the top, leaving stale counts.
+  // It can only recur once — with the filters now empty nothing can go stale.
+  if (stale) {
+    logPage = 0;
+    await fetchAlertLog();
+  }
+}
+
+// Rebuild one <select> from its facet list, keeping the current choice when the
+// new facets still contain it. A selection that has become impossible is dropped
+// rather than left showing a value the table isn't actually filtered by.
+function logSyncSelect(id, options, allLabel, fmt = v => v) {
+  const sel  = document.getElementById(id);
+  const prev = sel.value;
+  const keep = prev && options.includes(prev);
+  sel.innerHTML = `<option value="">${allLabel}</option>` +
+    options.map(o => `<option value="${o}"${o === prev ? " selected" : ""}>${fmt(o)}</option>`).join("");
+  if (!keep) sel.value = "";
+  return keep || !prev;   // false == we just cleared a stale selection
+}
+
+function renderAlertLog() {
+  if (!logData) return;
+  const f = logData.facets || {};
+
+  const marketOk = logSyncSelect("log-filter-market", f.markets || [],
+                                 "All markets", m => m.toUpperCase());
+  const issueOk  = logSyncSelect("log-filter-alert", f.issues || [], "All alert types");
+  // Signal to the caller that a stale filter was cleared, so it can re-ask once
+  // it has released the in-flight guard. Returning rather than re-fetching here
+  // is deliberate — see fetchAlertLog.
+  if (!marketOk || !issueOk) return false;
+
+  const t = f.tiers || {};
+  document.getElementById("log-tier-counts").textContent =
+    `T1 ${Number(t["1"] || 0).toLocaleString()} · ` +
+    `T2 ${Number(t["2"] || 0).toLocaleString()} · ` +
+    `T3 ${Number(t["3"] || 0).toLocaleString()} in range`;
+
+  const total = logData.total || 0;
+  document.getElementById("log-count").textContent = `${total.toLocaleString()} detections`;
+
+  const start = total ? logPage * logData.page_size + 1 : 0;
+  const end   = Math.min(start + (logData.rows || []).length - 1, total);
+  document.getElementById("log-page-info").textContent =
+    total ? `${start.toLocaleString()}–${end.toLocaleString()} of ${total.toLocaleString()}`
+          : "No rows";
+  document.getElementById("log-prev").disabled = logPage === 0;
+  document.getElementById("log-next").disabled = logPage >= (logData.pages || 1) - 1;
+
+  const rows = logData.rows || [];
+  if (!rows.length) {
+    document.getElementById("log-tbody").innerHTML =
+      `<tr><td colspan="6" style="color:var(--text-muted);padding:20px 10px">No detections match these filters in this range.</td></tr>`;
+    return;
+  }
+
+  document.getElementById("log-tbody").innerHTML = rows.map(r => `<tr>
+    <td class="dl-ts">${r.ts}</td>
+    <td class="dl-market">${r.market.toUpperCase()}</td>
+    <td class="dl-issues"><span class="dl-issue-badge ${r.severity}">${r.issue}</span></td>
+    <td><span class="aa-pill-badge ${r.severity}">${r.severity}</span></td>
+    <td class="dl-depth">T${r.tier}</td>
+    <td class="dl-depth">${r.depth || "—"}</td>
+  </tr>`).join("");
+}
+
+function logChangePage(dir) {
+  if (!logData) return;
+  const maxPage = Math.max(0, (logData.pages || 1) - 1);
+  const next = Math.max(0, Math.min(logPage + dir, maxPage));
+  if (next === logPage) return;
+  logPage = next;
+  fetchAlertLog();
+}
+
+// Any filter change resets to page 1 — staying on page 7 of a different result
+// set shows rows from nowhere in particular.
+function logFilterChanged() {
+  logPage = 0;
+  fetchAlertLog();
+}
+
+// The export goes through the server so it covers the whole filtered set, not
+// just the page in the browser. Navigating rather than fetch+blob keeps the
+// Content-Disposition filename the API already sets.
+function downloadAlertLog() {
+  if (!logData || !logData.total) { showToast("No rows to download", true); return; }
+  window.location = `${API_BASE}/api/alert-log?${logQuery({ format: "csv" })}`;
+}
+
+["log-filter-tier", "log-filter-market", "log-filter-alert", "log-page-size"]
+  .forEach(id => document.getElementById(id).addEventListener("change", logFilterChanged));
+
 </script>
 </body>
 </html>

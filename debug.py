@@ -129,6 +129,7 @@ import asyncio
 import json
 import math
 import os
+import time
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -137,7 +138,8 @@ import pandas as pd
 
 from defaults import (merge_config, default_config, UPTIME_FIXED_STEP_NGN,
                       SPREAD_GAP_FIXED_NGN, VOLUME_ARCHIVE_RETENTION_DAYS,
-                      ACKABLE_ISSUE_IDS)  # single source of truth for config
+                      ACKABLE_ISSUE_IDS, TIER1_IDS, TIER2_IDS, TIER3_IDS,
+                      classify_tier)  # single source of truth for config
 # Pure candle-parsing/aggregation helpers, shared with api.py so the OCHLV field
 # convention and NGT hour bucketing can't drift between the two processes. Only
 # the pure functions are used here — the module's urllib fetch is for api.py's
@@ -169,7 +171,11 @@ KUCOIN_TICKER_URL    = "https://api.kucoin.com/api/v1/market/allTickers"
 
 # ── Persistence ───────────────────────────────────────────────────────────────
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-DATA_DIR    = "/app/data"
+# Production writes to the Fly volume at /app/data. OHM_DATA_DIR overrides it so
+# the monitor can be run locally against ./data (which .gitignore already expects)
+# without editing the source — the two processes MUST agree, so api.py reads the
+# same variable with the same default.
+DATA_DIR    = os.environ.get("OHM_DATA_DIR", "/app/data")
 STATE_FILE  = os.path.join(DATA_DIR, "health_state.json")
 CONFIG_FILE = os.path.join(DATA_DIR, "monitor_config.json")
 
@@ -515,6 +521,14 @@ def format_depth(val) -> str:
 
 FETCH_MAX_RETRIES   = 2     # additional attempts after the first failure
 FETCH_RETRY_BACKOFF = 1.5   # seconds, doubles each retry
+
+# Requests process_pair issues concurrently for a single pair: depth, kline (B4
+# and G2 share it) and kline-volume (D1's own). Named because the connection
+# pool has to be sized against it — see the TCPConnector in main().
+FETCHES_PER_PAIR = 3
+# Spare connections held back for the depth-walk poller and the volume archive,
+# so a background loop is never queued behind a full cycle.
+BACKGROUND_CONNECTIONS = 5
 
 
 async def _request_json(session: aiohttp.ClientSession, url: str, timeout: int = 10) -> dict | list:
@@ -1845,6 +1859,75 @@ def prune_condensed(condensed: list, retention_days: float) -> list:
     return out
 
 
+def _bucket_start_dt(raw: dict) -> datetime:
+    """
+    Parse the in-progress bucket's start time, repairing raw["bucket_start"] in
+    place when it is missing or unparseable.
+
+    That value is read back from a file this process wrote, so an unclean
+    shutdown can leave it truncated. It used to be parsed inline in
+    depth_walk_loop and OUTSIDE that loop's try/except, so a corrupt header
+    raised straight out of the task and killed the 5s poller permanently while
+    the rest of the monitor carried on. The raw file then froze with its last
+    samples, and because the dashboard's uptime cards read those samples without
+    a freshness check, a dead feed kept rendering as a healthy "this hour".
+
+    Recovery prefers the oldest sample's own timestamp so a corrupt header
+    doesn't discard an hour of real polls; only if that is unusable too does it
+    open a fresh bucket at now.
+    """
+    oldest_sample_ts = next((s.get("ts") for s in raw.get("samples") or [] if s.get("ts")), None)
+    for candidate in (raw.get("bucket_start"), oldest_sample_ts):
+        try:
+            dt = datetime.fromisoformat(candidate)
+        except (TypeError, ValueError):
+            continue
+        raw["bucket_start"] = candidate
+        return dt
+
+    now = ngt_now()
+    raw["bucket_start"] = now.isoformat()
+    print(f"⚠️  Depth-walk: unreadable bucket_start — opened a fresh bucket at {raw['bucket_start']}")
+    return now
+
+
+def supervise(factory, name: str) -> asyncio.Task:
+    """
+    Launch a fire-and-forget loop and relaunch it if it ever exits.
+
+    asyncio.create_task with nobody awaiting the result means an exception that
+    escapes the coroutine is parked on the task object and never surfaces: the
+    loop simply stops, silently, while everything else keeps running. That is
+    precisely how the depth-walk poller could die and leave the dashboard
+    serving hours-old samples as live data.
+
+    Each loop guards its own body; this is the backstop for whatever still gets
+    through, and — just as importantly — it makes the exit LOUD instead of
+    invisible.
+    """
+    # factory() returns a COROUTINE; it has to be scheduled before there is a
+    # task to attach a callback to. Calling add_done_callback on the bare
+    # coroutine raises AttributeError at startup — which would take the whole
+    # monitor down on line one rather than protecting anything.
+    task = asyncio.ensure_future(factory())
+
+    def _on_done(t: asyncio.Task):
+        if t.cancelled():
+            return                      # deliberate shutdown, not a failure
+        exc = t.exception()
+        reason = repr(exc) if exc else "returned without raising"
+        print(f"⚠️  {name} exited unexpectedly ({reason}) — relaunching in 5s")
+
+        async def _relaunch():
+            await asyncio.sleep(5)
+            supervise(factory, name)
+
+        asyncio.create_task(_relaunch())
+
+    task.add_done_callback(_on_done)
+    return task
+
+
 async def depth_walk_loop(session: aiohttp.ClientSession):
     """
     Standalone 5s task — independent of the main 60s A/B/D cycle. Fetches
@@ -1853,49 +1936,99 @@ async def depth_walk_loop(session: aiohttp.ClientSession):
     has been open for DEPTH_WALK_RAW_RETENTION_SECONDS. Any single-cycle
     failure (fetch error, empty book) is logged and skipped — it does not
     kill the loop or the main monitor.
+
+    EVERY step is inside the guard, not just the fetch. The bucket roll and the
+    two file writes below used to sit after the except block, so any exception
+    they raised — a corrupt bucket_start, a full disk, a value json.dump refuses
+    — escaped the coroutine and ended the task for good. Nothing supervised it,
+    so the only visible symptom was the raw file quietly ceasing to update while
+    the monitor logged happily on. The outer try plus supervise() at the call
+    site close both halves of that: the loop survives its own errors, and if one
+    somehow still escapes, the task is relaunched rather than lost.
     """
     raw = load_depth_walk_raw()
     if raw.get("bucket_start") is None:
         raw["bucket_start"] = ngt_now().isoformat()
 
+    # Fixed-rate schedule on the monotonic clock. Sleeping the interval AFTER the
+    # work made the real period "interval + however long the poll took" — the
+    # fetch, the JSON write, and any time the event loop spent blocked in the
+    # main cycle's synchronous pandas work all added on top. Measured against a
+    # simulated 55-pair cycle that came out at ~6.4s per poll instead of 5s,
+    # which is ~560 samples an hour rather than 720. Anchoring each tick to the
+    # schedule instead of to the end of the previous one holds the average at
+    # the configured rate.
+    next_tick = time.monotonic()
+
     while True:
         try:
-            payload = await fetch_depth(session, DEPTH_WALK_SYMBOL)
-            asks_df, bids_df = build_orderbook_dfs(payload)
-            # Uptime is now a boolean walk-price check (100k walk vs mid ± 1₦)
-            # inside the metric fn — uptime_band_pct/uptime_weight_usdt below
-            # are passed through but no longer used by that calculation.
-            metrics = compute_depth_walk_metrics(
-                asks_df, bids_df, DEPTH_WALK_WEIGHT_USDT,
-                mid_weight_usdt=DEPTH_WALK_MID_WEIGHT_USDT,
-                uptime_band_pct=UPTIME_BAND_PCT,
-                uptime_weight_usdt=UPTIME_WEIGHT_USDT,
-            )
-            if metrics is not None:
-                metrics["ts"] = ngt_now().isoformat()
-                raw["samples"].append(metrics)
-                if metrics["g1"]:
-                    print(f"  [G1] {DEPTH_WALK_SYMBOL} depth-walk partial fill "
-                          f"(buy={metrics['partial_fill_buy']}, sell={metrics['partial_fill_sell']})")
-            else:
-                print(f"⚠️  Depth-walk: {DEPTH_WALK_SYMBOL} book empty on one side — skipping sample")
+            # ── Poll ────────────────────────────────────────────────────────
+            # Inner guard so a bad fetch skips only the sample: the bucket must
+            # still roll and still be persisted on a cycle that fetched nothing.
+            try:
+                payload = await fetch_depth(session, DEPTH_WALK_SYMBOL)
+                asks_df, bids_df = build_orderbook_dfs(payload)
+                # Uptime is now a boolean walk-price check (100k walk vs mid ± 1₦)
+                # inside the metric fn — uptime_band_pct/uptime_weight_usdt below
+                # are passed through but no longer used by that calculation.
+                metrics = compute_depth_walk_metrics(
+                    asks_df, bids_df, DEPTH_WALK_WEIGHT_USDT,
+                    mid_weight_usdt=DEPTH_WALK_MID_WEIGHT_USDT,
+                    uptime_band_pct=UPTIME_BAND_PCT,
+                    uptime_weight_usdt=UPTIME_WEIGHT_USDT,
+                )
+                if metrics is not None:
+                    metrics["ts"] = ngt_now().isoformat()
+                    raw["samples"].append(metrics)
+                    if metrics["g1"]:
+                        print(f"  [G1] {DEPTH_WALK_SYMBOL} depth-walk partial fill "
+                              f"(buy={metrics['partial_fill_buy']}, sell={metrics['partial_fill_sell']})")
+                else:
+                    print(f"⚠️  Depth-walk: {DEPTH_WALK_SYMBOL} book empty on one side — skipping sample")
+            except Exception as e:
+                print(f"⚠️  Depth-walk fetch/compute error: {e}")
+
+            # ── Condense + reset once the bucket has been open long enough ──
+            bucket_start_dt = _bucket_start_dt(raw)
+            age_seconds = (ngt_now() - bucket_start_dt).total_seconds()
+            if age_seconds >= DEPTH_WALK_RAW_RETENTION_SECONDS:
+                condensed_point = condense_bucket(raw["bucket_start"], raw["samples"])
+                if condensed_point is not None:
+                    condensed = load_depth_walk_condensed()
+                    condensed.append(condensed_point)
+                    condensed = prune_condensed(condensed, DEPTH_WALK_CONDENSED_RETENTION_DAYS)
+                    save_depth_walk_condensed(condensed)
+                raw = {"bucket_start": ngt_now().isoformat(), "samples": []}
+
+            save_depth_walk_raw(raw)
+
+        except asyncio.CancelledError:
+            raise                       # shutdown, not an error to swallow
         except Exception as e:
-            print(f"⚠️  Depth-walk fetch/compute error: {e}")
+            # Bucket roll or persistence failed. Log and keep polling: the next
+            # pass re-attempts the same work, which beats ending the task and
+            # freezing the feed until someone notices.
+            print(f"⚠️  Depth-walk loop error (continuing): {e}")
 
-        # Condense + reset once the current bucket has been open long enough
-        bucket_start_dt = datetime.fromisoformat(raw["bucket_start"])
-        age_seconds = (ngt_now() - bucket_start_dt).total_seconds()
-        if age_seconds >= DEPTH_WALK_RAW_RETENTION_SECONDS:
-            condensed_point = condense_bucket(raw["bucket_start"], raw["samples"])
-            if condensed_point is not None:
-                condensed = load_depth_walk_condensed()
-                condensed.append(condensed_point)
-                condensed = prune_condensed(condensed, DEPTH_WALK_CONDENSED_RETENTION_DAYS)
-                save_depth_walk_condensed(condensed)
-            raw = {"bucket_start": ngt_now().isoformat(), "samples": []}
-
-        save_depth_walk_raw(raw)
-        await asyncio.sleep(DEPTH_WALK_POLL_INTERVAL_SECONDS)
+        # Re-read the interval every tick so a config-drawer edit takes effect
+        # without a restart, same as everywhere else apply_config feeds. The
+        # floor only guards against a zero/negative config spinning the loop hot
+        # — it is deliberately far below any sane poll rate so it can never
+        # silently override a value someone actually chose.
+        interval  = DEPTH_WALK_POLL_INTERVAL_SECONDS
+        if not interval or interval < 0.1:
+            interval = 0.1
+        next_tick += interval
+        delay = next_tick - time.monotonic()
+        if delay < 0:
+            # Fell behind — the loop was blocked for longer than one interval.
+            # Resync to the next whole tick rather than firing a burst of
+            # back-to-back catch-up polls, which would hammer the exchange and
+            # bunch several samples onto the same instant.
+            skipped = int(-delay // interval) + 1
+            next_tick += skipped * interval
+            delay = next_tick - time.monotonic()
+        await asyncio.sleep(max(0.0, delay))
 
 
 # ── USDTNGN hourly volume archive ─────────────────────────────────────────────
@@ -2494,9 +2627,12 @@ FAILED_PAIR_RATIO_FOR_OUTAGE_ALERT = 0.5   # ≥50% of pairs failing looks like 
 # ── Alert tier classification ─────────────────────────────────────────────────
 # Maps issue_id → tier.  B4 has two tiers depending on severity (handled in
 # classify_tier() below).  E1/E2 are handled separately in run_cycle.
-_TIER1_IDS = {"A1", "A3", "A6", "D1"}    # fire immediately on first occurrence
-_TIER2_IDS = {"A2", "B1", "B2", "B3"}    # require consecutive cycles
-_TIER3_IDS = {"A4", "A5", "F1"}          # dashboard flag only — never Telegram
+# Tier tables and classify_tier now live in defaults.py so api.py can classify
+# log rows with the identical rule — see the note there. These aliases keep the
+# existing call sites in this module unchanged.
+_TIER1_IDS = TIER1_IDS    # fire immediately on first occurrence
+_TIER2_IDS = TIER2_IDS    # require consecutive cycles
+_TIER3_IDS = TIER3_IDS    # dashboard flag only — never Telegram
 
 # ── Acknowledgeable issue ids ─────────────────────────────────────────────────
 # The per-(pair, issue) checkbox operates on these. It is exactly the set of ids a
@@ -2563,28 +2699,6 @@ def dedupe_actionable(issues: list) -> list:
             if label not in cur[1]:
                 cur[1].append(label)
     return [(iid, merged[iid][0], " | ".join(merged[iid][1])) for iid in order]
-
-
-def classify_tier(issue_id: str, severity: str) -> int:
-    """Return 1, 2, or 3 for a given (issue_id, severity) pair."""
-    if issue_id in _TIER3_IDS:
-        return 3
-    if issue_id == "B4":
-        return 1 if severity == "CRITICAL" else 2
-    if issue_id == "G2":
-        return 1 if severity == "CRITICAL" else 2
-    if severity == "MEDIUM" and issue_id in ("A6", "B3"):
-        # A6: monitor-only zero-baseline case (see check_layer_churn_stall).
-        # B3: an UNCHANGED source whose peer is flat or absent (quiet market or
-        # single-source asset) — see resolve_trusted_price. Both emit MEDIUM
-        # precisely to land here: dashboard visibility, no Telegram noise.
-        return 3
-    if issue_id in _TIER1_IDS:
-        return 1
-    if issue_id in _TIER2_IDS:
-        return 2
-    # Unknown ids default to Tier 2 (conservative)
-    return 2
 
 
 def worst_tier(issues: list) -> int:
@@ -3168,28 +3282,45 @@ async def main(run_once: bool = False):
     shared_state = load_state()
     cycle_num    = 0
 
-    connector = aiohttp.TCPConnector(limit=MAX_CONCURRENT_PAIRS + 5)
+    # Pool sizing. process_pair gathers THREE requests per pair (depth, kline,
+    # kline-volume) inside the MAX_CONCURRENT_PAIRS semaphore, so the cycle puts
+    # up to MAX_CONCURRENT_PAIRS * 3 requests in flight at once — not one per
+    # pair. The old `MAX_CONCURRENT_PAIRS + 5` predates that gather and left the
+    # pool a third of the size it needed: at the default 10 that is 30 requests
+    # queueing through 15 slots, which throttled the main cycle AND pushed the
+    # 5-second depth-walk poll behind a queue every time a cycle ran.
+    # BACKGROUND_CONNECTIONS is reserved headroom so the two background loops
+    # never have to wait on the cycle at all.
+    pool_size = MAX_CONCURRENT_PAIRS * FETCHES_PER_PAIR + BACKGROUND_CONNECTIONS
+    connector = aiohttp.TCPConnector(limit=pool_size)
     async with aiohttp.ClientSession(connector=connector) as session:
         if run_once:
             await run_cycle(shared_state, session, cycle_num=1)
             return
 
+        print(f"🔌 HTTP pool: {pool_size} connections "
+              f"({MAX_CONCURRENT_PAIRS} pairs x {FETCHES_PER_PAIR} fetches "
+              f"+ {BACKGROUND_CONNECTIONS} reserved for background loops)")
         print(f"🚀 Starting continuous monitor — {len(PAIRS)} pairs, {CYCLE_SLEEP_SECONDS}s cycle | "
               f"Tier 1: immediate fire, Tier 2: {TIER2_CONFIRM_CYCLES} cycles to confirm, "
               f"cooldown {ALERT_COOLDOWN_MINUTES}min")
 
         # G1 depth-walk tracker — independent 5s task, own loop, own persistence.
-        # Fire-and-forget: it manages its own error handling per-cycle (see
-        # depth_walk_loop) and never raises out to here, so it doesn't need
-        # supervision beyond being kept alive alongside the main loop.
-        depth_walk_task = asyncio.create_task(depth_walk_loop(session))
+        # Supervised, not bare fire-and-forget: it guards every step of its own
+        # cycle, but a task nobody awaits parks any escaped exception on the task
+        # object where it is never seen, and the loop just stops. supervise()
+        # makes that outcome loud and self-healing instead of silent.
+        depth_walk_task = supervise(lambda: depth_walk_loop(session),
+                                    "USDTNGN depth-walk tracker")
         print(f"🚀 Starting USDTNGN depth-walk tracker — {DEPTH_WALK_POLL_INTERVAL_SECONDS}s poll, "
               f"{DEPTH_WALK_WEIGHT_USDT:,.0f} USDT weight")
 
-        # USDTNGN hourly volume archive — wakes once an hour, same fire-and-forget
-        # treatment as the depth-walk task above (it swallows its own errors per
-        # pass and never raises out to here).
-        volume_task = asyncio.create_task(kline_volume_loop(session))
+        # USDTNGN hourly volume archive — wakes once an hour, supervised the same
+        # way as the depth-walk task above. Its own body is already better
+        # guarded, but it is load-bearing (hours past the 300-candle wall exist
+        # nowhere else), so a silent exit is even less acceptable here.
+        volume_task = supervise(lambda: kline_volume_loop(session),
+                                "USDTNGN volume archive")
 
         while True:
             cycle_num += 1

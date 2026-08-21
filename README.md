@@ -37,8 +37,11 @@ To watch it live, just keep your monitor running alongside uvicorn.
 |---|---|
 | `GET /` | dashboard.html |
 | `GET /api/status` | latest.csv as JSON + summary counts |
-| `GET /api/history` | today's daily_log CSV as JSON |
+| `GET /api/history` | one day's daily_log CSV as JSON (`?date=`); the dashboard now reads the log through `/api/alert-log` |
 | `GET /api/state` | health_state.json with anomaly age in minutes |
+| `GET /api/diagnostics` | which writer last wrote what, and how long ago — start here when the dashboard looks wrong |
+| `GET /api/alert-analysis` | range analytics over the daily logs; `?start=&end=` (YYYY-MM-DD, NGT), `?gap_cycles=` |
+| `GET /api/alert-log` | daily-log detections for a range; `?start=&end=&tier=&market=&issue=&page=&page_size=&format=csv` |
 | `GET /api/pairs` | list of known pair symbols |
 | `GET /api/alert-acks` | live per-(pair, issue) acknowledgements + the ackable id list |
 | `POST /api/alert-acks` | set/clear one ack: `{symbol, issue_id, ack}` |
@@ -373,6 +376,40 @@ censored at exactly the boundary you're trying to tune.
 
 ### G-series — execution quality
 
+*If the poll rate looks wrong.* Two things used to make the 5s poller run slow,
+both fixed, and one thing that is simply configuration:
+
+- **It slept the interval AFTER the work**, so the real period was 5s plus the
+  fetch, the JSON write, and any time the event loop spent blocked in the main
+  cycle's synchronous pandas. Measured against a simulated 55-pair cycle that
+  was ~6.4s per poll — about 560 samples an hour instead of 720. The loop now
+  ticks on a fixed monotonic schedule, and after a long block it skips to the
+  next whole tick rather than firing catch-up polls back to back.
+- **The HTTP connection pool was a third of the size the cycle needs.**
+  `process_pair` gathers three requests per pair inside the
+  `MAX_CONCURRENT_PAIRS` semaphore, so a cycle puts `MAX_CONCURRENT_PAIRS * 3`
+  requests in flight; the pool was sized `MAX_CONCURRENT_PAIRS + 5`, from before
+  that gather existed. At the defaults that was 30 requests through 15 slots,
+  which throttled the cycle itself and put the depth-walk poll behind a queue
+  every time one ran. It is now `MAX_CONCURRENT_PAIRS * FETCHES_PER_PAIR +
+  BACKGROUND_CONNECTIONS`, the last being headroom reserved so the background
+  loops never queue behind a cycle at all. The monitor prints the pool size at
+  startup.
+- **`depth_walk.poll_interval_seconds` is editable from the config drawer**, so
+  check it before assuming a bug — the slippage tab reports the value the
+  monitor is actually using in its stale-feed banner.
+
+*If the tab looks dead.* The 5-second poller writes `data/usdtngn_slippage_raw.json`;
+everything on the slippage tab derives from it. The two card groups read it
+differently — buy/sell slippage is filtered to the selected window, while the
+uptime and spread-gap cards read the raw samples unfiltered — so a stopped
+poller used to show as blank slippage cards beside healthy-looking uptime
+percentages computed from hours-old data. A banner now calls that out and blanks
+the live cards once the newest sample is older than 24 poll intervals (min 2
+minutes). The first thing to check is the newest `ts` in that file, not its
+mtime: the loop rewrites the file every pass even when the fetch failed, so the
+mtime stays fresh while the samples go stale.
+
 **G1 — Depth-walk partial fill (MEDIUM, dashboard only).** USDTNGN only, on its
 own 5-second task, because meaningful movement on a thin NGN book happens well
 inside a 60-second window.
@@ -563,24 +600,6 @@ with no FX conversion, so a naira amount is measured against the same bare
 currency symbol rather than mislabelling it `$`, since attaching one would imply
 a conversion that doesn't happen.
 
-### Filtering the daily log
-
-The daily log's controls filter by market, status and **alert type**. The alert
-dropdown is built from the ids actually present in the loaded day, so choosing
-one can never land you on an empty table, and it matches on the id alone (`B1`,
-not `B1:HIGH`) — "which markets raised B1 today" is the question, and splitting
-by severity would fragment the answer across two selections.
-
-Because the table holds one row per market per cycle, a pair that carried an
-issue all afternoon appears hundreds of times, and scanning it doesn't actually
-tell you which markets were involved. So selecting an alert type also shows a
-summary strip listing the distinct markets that raised it that day. Those are
-clickable: one drills the market filter into that pair, clicking it again
-clears it. The strip always lists every market that raised the alert, ignoring
-the market filter — otherwise drilling in would hide the other options.
-
-"Filtered" CSV export follows all three filters; "Full day" ignores them.
-
 ### The alert log
 
 Session-scoped: entries accumulate while the tab is open and are not reloaded
@@ -595,6 +614,141 @@ The filter's dropdown is rebuilt from whatever ids the log currently holds, so i
 only ever offers types that would match something. A selection is kept even once
 its last matching entry ages off the 30-entry tail — a deliberately narrow filter
 shouldn't silently widen back to "All" on its own.
+
+### Is it actually running?
+
+The monitor and the API are **separate processes**. A page that renders proves
+only that the API is up — it serves whatever `latest.csv` last contained, however
+old. The status light used to be driven by "did `/api/status` return 200", so a
+monitor dead for hours still showed green.
+
+It now reports the monitor: the sidebar reads **Monitor stale** and a banner
+names the age whenever the newest cycle in `latest.csv` is older than three
+cycles. `GET /api/diagnostics` is the one-shot version, and the fastest way to
+tell the two failure modes apart:
+
+| Symptom | Means |
+|---|---|
+| `monitor.running: false` | The monitor process is down. Check its startup log — an `ImportError` there means it never got past import. |
+| `monitor.running: true`, `depth_walk.newest_sample_age_seconds` large | Monitor alive, the 5s depth-walk task is not. |
+| Both fresh, slippage still blank | A window/filter problem, not a feed problem. |
+
+Note `mtime_age_seconds` vs the content ages: `depth_walk_loop` rewrites its raw
+file every pass even when the fetch failed, so a fresh mtime with stale contents
+means the loop is running but getting nothing — a different fault from the loop
+being dead. Never diagnose this one from `ls -l`.
+
+### Alert analysis
+
+A range view over the daily logs, on its own tab. Pick a preset (Today / 7d /
+14d / 30d) or type two dates; one request to `/api/alert-analysis` returns every
+figure on the page.
+
+Two words carry the whole tab, and mixing them up makes the charts lie:
+
+- A **detection** is one issue on one market in one cycle — literally one id in
+  one row's `Issues` column.
+- An **episode** is an unbroken run of the same detection, stitched across up to
+  **2 missing cycles** so a single dropped fetch doesn't split one incident in
+  half. A four-hour B1 is 240 detections and **one** episode.
+
+The distinction matters wherever a count could mean either: the market ranking
+switches between episode count and wall-clock time for exactly that reason, and
+the stat strip reports both totals rather than picking one.
+
+**Three things the daily log cannot tell you, which the tab says on its face:**
+
+- **Detections, not deliveries.** `update_daily_log` doesn't persist
+  `telegram_detail`, so nothing here distinguishes an alert that reached Telegram
+  from one the tier, cooldown, ack or episode-cap gate suppressed. Every number
+  is "the monitor saw this".
+- **E1/E2 are absent.** Both are keyed `_global` and the log only holds per-pair
+  rows, so API-outage and reference-feed analysis isn't derivable from this file.
+- **No healthy denominator.** Only Warning rows are ever appended, so there's no
+  per-pair "healthy vs not" ratio to compute. The only defensible denominator is
+  elapsed span ÷ cycle period, which is what `expected_cycles` reports.
+
+**What's on it**
+
+| Panel | Answers |
+|---|---|
+| Stat strip | Episodes, detections, markets, critical count, median/mean/p95 duration, longest, escalations, still-open |
+| Worst markets | Top 15 by episode count, or by **wall-clock time unhealthy** — a different ranking, see below |
+| Daily trend | Episodes per day by severity, attributed to the day the episode started |
+| Hour of day | Detections per hour per id, shaded **within each row** so a quiet alert's own peak stays visible next to a noisy one |
+| Longest episodes | Top 50, with `esc` where severity rose mid-run and `open` where it never cleared |
+| Noisiest pairs | episodes ÷ median duration — fires constantly, clears instantly. The threshold-tuning list, not an incident list |
+| Still open at range end | Episodes whose last detection is the final cycle in the log |
+| Daily log | Every detection in the range, filtered by tier → market → alert type |
+
+**Two subtleties worth knowing.**
+
+*Time in alert isn't the sum of episode durations.* A pair carrying A2, A5 and B1
+simultaneously for an hour has three hours of episode time but was unhealthy for
+one. The market ranking uses the **union** of its episode intervals; the naive
+sum is reported alongside as `alert_minutes_sum`. Ranking by the sum would put
+whichever pair trips the most checks at once on top regardless of how long it
+was actually broken.
+
+*The cycle period is measured, not read from config.*
+`timing.cycle_sleep_seconds` is the sleep at the *end* of a cycle, not the
+period — a real cycle is that sleep plus however long the pass took, so a
+configured 60 lands as 65-80s on the wire. Episode stitching uses the median gap
+between distinct log timestamps instead, which measures the real thing and can't
+be thrown off by the large gaps quiet periods leave behind. The config value is
+only a fallback for ranges too small to take a median from.
+
+The response also carries `by_issue` (episodes, detections, markets and duration
+percentiles per alert id). Nothing charts it directly any more — it survives
+because the hour-of-day heatmap orders its rows by it.
+
+**`GET /api/alert-analysis`** — `?start=&end=` (YYYY-MM-DD, NGT, inclusive;
+defaults to the trailing 7 days) and `?gap_cycles=` (0-10, default 2). Max span
+and max age are both 30 days, the same wall `parse_daily_log` enforces, applied
+to both edges. Aggregation is server-side because a busy 30-day range is ~10^6
+rows across 30 files: a couple of seconds of pandas and ~40 KB of JSON here,
+versus 30 sequential fetches and tens of megabytes in the browser. There's no
+polling — it's a historical view over closed logs, so it loads on first open and
+then only when you change the range.
+
+### The daily log
+
+Lives on the Alert analysis tab and shares that tab's date range — it moved off
+the Overview tab and lost its own single-day picker in the process. The old
+per-day endpoint (`/api/history`) still exists and is unchanged; nothing in the
+dashboard calls it any more.
+
+**One row per detection, not per cycle.** The CSV stores one row per (cycle,
+market) with a packed `A1:CRITICAL|B1:HIGH|A4:MEDIUM` column. The table explodes
+that so each row carries exactly one id, one severity and one tier. This is not
+cosmetic: that example row is simultaneously Tier 1, Tier 2 and Tier 3, so as a
+single row a tier filter can neither show nor hide it correctly. Depth is
+per-cycle and so repeats across the rows of one cycle.
+
+**Three filters, applied in order, defaulting to Tier 1.**
+
+1. **Tier** — 1, 2, 3 or all. Defaults to **Tier 1**, the set that actually pages
+   someone. Tier is a function of id *and* severity, not id alone: B4 and G2 are
+   Tier 1 at CRITICAL and Tier 2 otherwise, and A6/B3 have MEDIUM variants that
+   are Tier 3. So the same id legitimately appears under two tiers.
+2. **Market**
+3. **Alert type**
+
+Each dropdown is rebuilt from what the filters *above* it actually contain, so
+no combination can land you on an empty table — pick Tier 1 and the markets on
+offer are only those with Tier-1 rows; pick a market and the alert ids on offer
+are only those it raised at that tier. Choosing a tier that makes a downstream
+selection impossible clears it rather than leaving the table filtered by
+something the dropdowns no longer say.
+
+`classify_tier` and the tier tables live in **`defaults.py`**, imported by both
+`debug.py` (to gate delivery) and `api.py` (to label and filter log rows). A
+second copy in the API would drift the moment a check is retuned, and it would
+drift silently — the dashboard would just quietly mislabel rows.
+
+Filtering and paging are server-side; a 30-day range is ~10^6 detections and the
+browser only ever holds one page. **Export CSV** downloads the whole filtered
+set (capped at 250,000 rows), not just the page on screen.
 
 ### Out of scope
 

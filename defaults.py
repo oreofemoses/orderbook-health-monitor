@@ -60,6 +60,55 @@ ACKABLE_ISSUE_IDS = frozenset({
 })
 
 
+# ── Telegram delivery tiers ───────────────────────────────────────────────────
+# Which issues page immediately, which have to repeat, and which never leave the
+# dashboard. Here rather than in debug.py for the same reason as
+# ACKABLE_ISSUE_IDS: both processes need the same answer. The monitor uses it to
+# gate delivery; api.py uses it to let the dashboard filter the log by tier. A
+# second copy in api.py would drift the moment a check's tier is retuned, and it
+# would drift silently — the dashboard would just quietly mislabel rows.
+#
+#   Tier 1 — fires on first detection.
+#   Tier 2 — must repeat TIER2_CONFIRM_CYCLES consecutive cycles first.
+#   Tier 3 — dashboard flag only, never Telegram.
+#
+# E1/E2 are Tier 1 but absent from these sets: both are keyed "_global" rather
+# than to a market and never reach classify_tier, which is per-pair.
+TIER1_IDS = frozenset({"A1", "A3", "A6", "D1"})
+TIER2_IDS = frozenset({"A2", "B1", "B2", "B3"})
+TIER3_IDS = frozenset({"A4", "A5", "F1"})
+
+
+def classify_tier(issue_id: str, severity: str) -> int:
+    """
+    Return 1, 2, or 3 for a given (issue_id, severity) pair.
+
+    Four ids are severity-dependent and cannot be classified from the id alone:
+    B4 and G2 are Tier 1 at CRITICAL and Tier 2 otherwise, while A6 and B3 have
+    MEDIUM variants that exist *specifically* to land in Tier 3 (a monitor-only
+    pair with a frozen book; a quiet market with no moving peer). Anything
+    reading tiers off the id alone gets those four wrong.
+    """
+    if issue_id in TIER3_IDS:
+        return 3
+    if issue_id == "B4":
+        return 1 if severity == "CRITICAL" else 2
+    if issue_id == "G2":
+        return 1 if severity == "CRITICAL" else 2
+    if severity == "MEDIUM" and issue_id in ("A6", "B3"):
+        # A6: monitor-only zero-baseline case (see check_layer_churn_stall).
+        # B3: an UNCHANGED source whose peer is flat or absent (quiet market or
+        # single-source asset) — see resolve_trusted_price. Both emit MEDIUM
+        # precisely to land here: dashboard visibility, no Telegram noise.
+        return 3
+    if issue_id in TIER1_IDS:
+        return 1
+    if issue_id in TIER2_IDS:
+        return 2
+    # Unknown ids default to Tier 2 (conservative)
+    return 2
+
+
 # Canonical defaults. Every tunable the dashboard can edit has an entry here;
 # a stored monitor_config.json overrides these per-key via merge_config().
 DEFAULT_CONFIG: dict = {
