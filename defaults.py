@@ -53,6 +53,11 @@ VOLUME_ARCHIVE_RETENTION_DAYS = 730
 # debug.py asserts at import that this covers every id in its tier tables, so
 # adding a check there without adding it here fails loudly instead of shipping a
 # silently un-acknowledgeable alert.
+# A3 and B3 no longer fire (merged into A2 and B1 respectively) but stay in this
+# set deliberately. An ack recorded against either before the merge is still
+# sitting in alert_acks.json, and run_cycle's auto-clear sweep only retires acks
+# whose id it iterates — drop them here and those acks become permanent, muting
+# nothing but never going away either.
 ACKABLE_ISSUE_IDS = frozenset({
     "A1", "A2", "A3", "A4", "A5", "A6",
     "B1", "B2", "B3", "B4",
@@ -74,20 +79,56 @@ ACKABLE_ISSUE_IDS = frozenset({
 #
 # E1/E2 are Tier 1 but absent from these sets: both are keyed "_global" rather
 # than to a market and never reach classify_tier, which is per-pair.
-TIER1_IDS = frozenset({"A1", "A3", "A6", "D1"})
-TIER2_IDS = frozenset({"A2", "B1", "B2", "B3"})
-TIER3_IDS = frozenset({"A4", "A5", "F1"})
+#
+# Three ids were retiered in the 2026-08 alert review, and the reasons matter
+# more than the memberships:
+#   A1 -> Tier 3. A crossed book is unambiguous and still shows CRITICAL on the
+#         dashboard, but it is the LM bot's own quoting to correct, not something
+#         an operator acts on at 3am. Note that TIER3_IDS is tested FIRST in
+#         classify_tier, so this silences A1 at every severity.
+#   B2 -> Tier 1. Two independent reference exchanges disagreeing means the
+#         trusted price feeding B1 is suspect, so waiting three cycles to say so
+#         just delays the operator's only clue that pricing is unreliable.
+#   D1 -> Tier 2. A volume spike is context, not an incident; requiring it to
+#         persist three cycles filters the single-candle blips that made it the
+#         noisiest Tier 1 id.
+#
+# A3 and B3 are absent because they no longer exist as live ids — the 2026-08
+# review merged A3 into A2 (an empty side is the extreme of a shallow book) and
+# B3 into B1 (an unusable reference is a fact about the price comparison, not a
+# separate incident). Both survive in RETIRED_TIERS below so historical log rows
+# still classify the way they did when they were written.
+TIER1_IDS = frozenset({"A6", "B2"})
+TIER2_IDS = frozenset({"A2", "B1", "D1"})
+TIER3_IDS = frozenset({"A1", "A4", "A5", "F1"})
+
+
+# Ids that no longer fire, mapped to how they used to classify. Existing daily
+# logs hold 30 days of A3 and B3 rows, and the dashboard's tier filter classifies
+# every row it renders through this function — without these, a historical
+# A3:CRITICAL would fall through to the unknown-id default and quietly reclassify
+# from Tier 1 to Tier 2, changing what an operator sees when reading back an
+# incident. The live checks that replaced them are named in the comment above
+# TIER1_IDS. B3's MEDIUM variant is handled by the shared MEDIUM rule below, so
+# only its non-MEDIUM tier is recorded here.
+RETIRED_TIERS = {"A3": 1, "B3": 2}
 
 
 def classify_tier(issue_id: str, severity: str) -> int:
     """
     Return 1, 2, or 3 for a given (issue_id, severity) pair.
 
-    Four ids are severity-dependent and cannot be classified from the id alone:
-    B4 and G2 are Tier 1 at CRITICAL and Tier 2 otherwise, while A6 and B3 have
-    MEDIUM variants that exist *specifically* to land in Tier 3 (a monitor-only
-    pair with a frozen book; a quiet market with no moving peer). Anything
-    reading tiers off the id alone gets those four wrong.
+    Five ids are severity-dependent and cannot be classified from the id alone:
+    B4 and G2 are Tier 1 at CRITICAL and Tier 2 otherwise; A2 is Tier 1 at
+    CRITICAL (the empty-book case it absorbed from A3, which has to page as fast
+    as A3 did) and Tier 2 otherwise; A6 and B1 have MEDIUM variants that exist
+    *specifically* to land in Tier 3 (a monitor-only pair with a frozen book; a
+    reference source that is merely quiet rather than dead). Anything reading
+    tiers off the id alone gets those five wrong.
+
+    Also classifies the retired ids A3 and B3 as they classified when they were
+    still live, so historical log rows keep their original tier — see
+    RETIRED_TIERS.
     """
     if issue_id in TIER3_IDS:
         return 3
@@ -95,16 +136,24 @@ def classify_tier(issue_id: str, severity: str) -> int:
         return 1 if severity == "CRITICAL" else 2
     if issue_id == "G2":
         return 1 if severity == "CRITICAL" else 2
-    if severity == "MEDIUM" and issue_id in ("A6", "B3"):
+    if issue_id == "A2":
+        # CRITICAL is the one-sided book absorbed from A3: an entire side of the
+        # market is missing, which is unambiguous and pages on sight. Everything
+        # else A2 emits (wide spread, thin layer count) still confirms first.
+        return 1 if severity == "CRITICAL" else 2
+    if severity == "MEDIUM" and issue_id in ("A6", "B1", "B3"):
         # A6: monitor-only zero-baseline case (see check_layer_churn_stall).
-        # B3: an UNCHANGED source whose peer is flat or absent (quiet market or
-        # single-source asset) — see resolve_trusted_price. Both emit MEDIUM
-        # precisely to land here: dashboard visibility, no Telegram noise.
+        # B1: an UNCHANGED reference source whose peer is flat or absent (quiet
+        # market or single-source asset) — see resolve_trusted_price. Both emit
+        # MEDIUM precisely to land here: dashboard visibility, no Telegram noise.
+        # B3 is the retired id B1 absorbed that case from.
         return 3
     if issue_id in TIER1_IDS:
         return 1
     if issue_id in TIER2_IDS:
         return 2
+    if issue_id in RETIRED_TIERS:
+        return RETIRED_TIERS[issue_id]
     # Unknown ids default to Tier 2 (conservative)
     return 2
 
@@ -118,7 +167,23 @@ DEFAULT_CONFIG: dict = {
     "orderbook": {
         "depth_limit":             200,
         "min_orderbook_layers":    10,
-        "thin_depth_threshold":    5_000,
+        # A4 — how far this cycle's whole-book depth has to fall below the
+        # market's own rolling average before it fires, in percent. 50 means
+        # "half the depth this market normally carries". Replaces the old
+        # thin_depth_threshold, a flat 5,000 compared against an in-band figure
+        # with no currency conversion — so a naira pair was judged against the
+        # same bare number as a dollar one, and a market that is simply small
+        # fired forever while a large one could halve unnoticed. A self-baseline
+        # has neither problem: every market is judged against itself.
+        # Clamped to 1..99 at load; 0 would fire on any dip below average and
+        # 100+ could only ever fire on a completely empty book.
+        "depth_deviation_pct":     50.0,
+        # How many prior cycles' depth readings the A4 baseline averages. Matches
+        # layer_churn.baseline_buckets (20) deliberately: both are per-cycle
+        # self-baselines over the same book, and giving them different memories
+        # would make two checks disagree about what "typical" means for the same
+        # market at the same moment.
+        "depth_baseline_buckets":  20,
         "depth_imbalance_ratio":   5.0,
         "dws_poor_threshold":      0.5,
         "min_abs_spread_diff_pct": 0.05,

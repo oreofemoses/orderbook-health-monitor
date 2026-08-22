@@ -125,7 +125,7 @@ Every 60 seconds (`timing.cycle_sleep_seconds`) the monitor runs a full pass:
    exchanges list against USDT. One call each, not one per pair. If either call
    throws, that's **E2**.
 2. **Resolve one "trusted price" per asset.** For each USDT-quoted asset, the two
-   reference prices are checked for staleness (**B3**) and disagreement (**B2**),
+   reference prices are checked for staleness (**B1**) and disagreement (**B2**),
    and whatever survives is averaged into a single trusted number. This happens
    once per asset, not once per pair.
 3. **Check every pair in parallel** (10 at a time). Each pair fetches its order
@@ -194,20 +194,39 @@ gated on DWS: fires when either side has fewer than 10 price levels. When both
 sub-checks fire in one cycle they're folded into a single A2 (see *Deduping*
 below).
 
-**A3 — One-sided market (CRITICAL).** One entire side of the book is empty. The
+**A2:CRITICAL — One-sided market.** One entire side of the book is empty. The
 pair short-circuits here — no mid price exists, so every other check is skipped
-and the cycle reports A3 alone. The A6 snapshot is deliberately *not* written on
-these cycles, because a half-empty book has no meaningful near-touch levels and
-saving them would poison the churn baseline.
+and the cycle reports this alone. Neither the A6 churn snapshot nor the A4 depth
+reading is written on these cycles: a half-empty book has no meaningful
+near-touch levels, and saving either would teach both self-baselines that the
+outage is normal.
 
-**A4 — Thin mid-market (MEDIUM, dashboard only).** The liquidity-in-band figure
-is above zero but under $5,000 — there's a book, but nothing of size near the
-touch. Informational: it flags on the dashboard and never sends Telegram.
+This was its own id (**A3**) until the 2026-08 review. An empty side and a
+too-thin side are one failure at two magnitudes — one book, too little of it —
+and splitting them meant an operator watching "shallow book" could miss the
+moment shallow became empty. Urgency is carried by severity instead of by id:
+A2:CRITICAL is Tier 1 and pages on sight, exactly where A3 sat, while A2's
+spread-widening and layer-count cases stay Tier 2.
+
+**A4 — Book depth deviation (MEDIUM, dashboard only).** The whole book — every
+level the depth endpoint returns, both sides — is worth 50% less than this
+market's own rolling average over the last 20 cycles. Drops only: a depth spike
+is the outcome the bot exists to produce, not an alert. Silent until it has 5
+prior readings, so a restart doesn't flag every pair at once.
+
+This replaced a flat $5,000 floor applied to an in-band figure. That floor was
+never currency-converted, so a naira book was judged against the same bare 5,000
+as a dollar one — small markets flagged permanently while a large one could halve
+without tripping it. A self-baseline has neither problem: every market is
+measured against itself, in its own quote currency.
 
 **A5 — Depth imbalance (MEDIUM/HIGH, dashboard only).** Fires when one side of
-the band holds at least 5× the value of the other, or HIGH when the lighter side
+the book holds at least 5× the value of the other, or HIGH when the lighter side
 is completely empty. Tells you the book is lopsided — usually one-way flow or
-half the quoting stack having dropped out.
+half the quoting stack having dropped out. Measures the same whole-book per-side
+totals A4 sums, so it now reads inventory skew rather than skew at the touch: a
+pair whose far-from-mid ask stack dwarfs its bids registers here even when the
+top of book looks even.
 
 **A6 — Layer churn stall (CRITICAL/HIGH).** This is the "is the book actually
 alive?" check, and it's the subtlest one. The API can happily return fresh
@@ -237,11 +256,11 @@ pairs where nobody is expected to be quoting.
 
 ### B-series — pricing vs. the outside world
 
-MEXC and KuCoin only quote assets against USDT, so **B1/B2/B3 run on USDT-quoted
+MEXC and KuCoin only quote assets against USDT, so **B1/B2 run on USDT-quoted
 pairs only**. NGN and GHS pairs have no independent external price to check
 against — they're covered by F1 instead.
 
-**B3 — Stale reference feed (MEDIUM→CRITICAL).** Runs per source, and splits
+**B1's stale-reference variant (MEDIUM→CRITICAL).** Runs per source, and splits
 "stale" into two genuinely different failures:
 
 - *Unavailable* — the source didn't resolve at all (API error, delisted, wrong
@@ -347,7 +366,7 @@ isolated errors, and one global alert fires. Individual pair failures are logged
 but don't alert — each fetch already retries twice with backoff.
 
 **E2 — Reference feed disconnect (CRITICAL).** MEXC's or KuCoin's batched call
-threw. Fires per source, and the message notes that B1/B2/B3 for the affected
+threw. Fires per source, and the message notes that B1/B2 for the affected
 source are suspended until it recovers.
 
 Both are global (keyed on `_global`, not a symbol) and both are Tier 1.
@@ -472,13 +491,19 @@ The dashboard shows every issue found. Telegram is gated much more tightly.
 
 | Tier | Behaviour | Issues |
 |---|---|---|
-| 1 | Fires immediately on first detection | A1, A3, A6, D1, B4-CRITICAL, G2-CRITICAL, E1, E2 |
-| 2 | Must repeat 3 consecutive cycles first | A2, B1, B2, B3, B4-HIGH, G2-HIGH |
-| 3 | Dashboard flag only, never Telegram | A4, A5, F1, A6-MEDIUM, B3-MEDIUM |
+| 1 | Fires immediately on first detection | A2-CRITICAL, A6, B2, B4-CRITICAL, G2-CRITICAL, E1, E2 |
+| 2 | Must repeat 3 consecutive cycles first | A2-HIGH, B1, D1, B4-HIGH, G2-HIGH |
+| 3 | Dashboard flag only, never Telegram | A1, A4, A5, F1, A6-MEDIUM, B1-MEDIUM |
 
-The MEDIUM variants of A6 and B3 exist *specifically* to land in Tier 3 — they're
+The MEDIUM variants of A6 and B1 exist *specifically* to land in Tier 3 — they're
 the "visible but probably benign" cases (a monitor-only pair with a frozen book;
-a quiet market with no moving peer).
+a reference source that is quiet rather than dead).
+
+**A3 and B3 are retired ids.** A3 merged into A2 and B3 into B1 in the 2026-08
+review. They still classify at their original tiers (`RETIRED_TIERS` in
+`defaults.py`) so that 30 days of existing log rows keep the tier they were
+written with, and they stay acknowledgeable so any ack recorded against them
+before the merge can still auto-clear.
 
 **Confirmation counters.** A Tier-2 issue increments a per-(pair, issue) counter
 each cycle it's present and fires on the third. The counter resets to zero the
@@ -505,7 +530,8 @@ re-arms. A HIGH→CRITICAL escalation on the same lingering candle does *not* br
 through the cap.
 
 **Deduping.** Two checks legitimately emit the same ID in one cycle: A2 (spread
-widening + shallow book) and B3 (MEXC stale + KuCoin stale). These are folded
+widening + shallow book) and B1 (MEXC stale + KuCoin stale, plus the price
+discrepancy itself). These are folded
 into one issue — highest severity wins, labels merged — before any tier logic
 runs. Without this the Tier-2 counter would double-increment and confirm in 2
 cycles instead of 3, and the cooldown set by the first copy would swallow the
@@ -587,18 +613,26 @@ Each row carries three things, and the distinction matters:
 
 The numbers come from a `metrics` dict each check writes into as it runs (see
 `process_pair`), flattened onto the pair's row and served through `/api/status`.
-Rows written on an A3 short-circuit, and rows predating this feature, simply
+Rows written on a one-sided-book short-circuit, and rows predating this feature, simply
 don't carry those columns; every one is optional and renders as an em dash.
 
 Two rows are context rather than checks and get no checkbox: **DWS**, which is
 the gate deciding whether a wide raw spread counts as A2, and **Depth
 Liquidity**, which feeds A4 and A5.
 
-One quirk worth knowing: A4 compares the in-band figure against its threshold
-with no FX conversion, so a naira amount is measured against the same bare
-`5000` as a dollar one. The row deliberately renders that threshold without a
-currency symbol rather than mislabelling it `$`, since attaching one would imply
-a conversion that doesn't happen.
+**Ordered by delivery tier, not by id.** Reading the panel top-down should answer
+"what would have woken me?" before "what does the book look like?", and id order
+buried a Tier-1 churn stall between two dashboard-only rows. Rows are grouped
+under Tier 1 / Tier 2 / Tier 3 headings with the two context rows last, and
+within a group the catalogue order survives, so A2's three rows still read
+spread → shallow → empty.
+
+The grouping is per *row*, not per id, which matters for the severity-split
+checks: A2's spread and shallow-book rows sit in Tier 2 while its one-sided row
+sits in Tier 1, even though all three carry the same `A2`. Rows that represent a
+specific severity declare it as `tierSeverity`; the rest take the most urgent
+tier their id can reach. Tiers come from the same derived `ISSUE_TIERS` map the
+dropdowns use, so nothing here is hardcoded either.
 
 ### The alert log
 
@@ -729,8 +763,18 @@ per-cycle and so repeats across the rows of one cycle.
 
 1. **Tier** — 1, 2, 3 or all. Defaults to **Tier 1**, the set that actually pages
    someone. Tier is a function of id *and* severity, not id alone: B4 and G2 are
-   Tier 1 at CRITICAL and Tier 2 otherwise, and A6/B3 have MEDIUM variants that
-   are Tier 3. So the same id legitimately appears under two tiers.
+   Tier 1 at CRITICAL and Tier 2 otherwise, A2 is Tier 1 at CRITICAL (the
+   one-sided book) and Tier 2 otherwise, and A6/B1 have MEDIUM variants that are
+   Tier 3. So the same id legitimately appears under two tiers.
+
+   The alert-type dropdown is segmented into `<optgroup>`s by tier to make this
+   readable. An id is filed under the most urgent tier it can reach and annotates
+   the rest ("A2 · also T2") rather than appearing in two groups — the dropdown
+   filters by id alone, so duplicate entries would filter identically and read as
+   a bug. The id→tier map is **derived** from `classify_tier` in `api.py`
+   (`ISSUE_TIERS`) and served on `/api/status` and the alert-log facets; the
+   browser never hardcodes tiers, so retiering a check updates the grouping with
+   no dashboard change.
 2. **Market**
 3. **Alert type**
 

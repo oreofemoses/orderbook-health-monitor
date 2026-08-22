@@ -24,21 +24,35 @@ Endpoints used:
 
 Alert scope (see OHM spec doc for full definitions):
   A1 Crossed Orderbook        — implemented
-  A2 Bid-Ask Spread Widening  — implemented
-  A3 One-Sided Market         — implemented (previously silently swallowed — see note below)
-  A4 Thin Mid-Market          — implemented
-  A5 Depth Imbalance          — implemented (was computed but never alerted in v1)
+  A2 Bid-Ask Spread Widening  — implemented, three sub-checks under one id: spread
+                                 widening (DWS-confirmed), shallow book (layer
+                                 count), and one-sided book at CRITICAL (merged in
+                                 from the retired A3 in 2026-08 — same failure,
+                                 different magnitude; Tier 1 via severity)
+  A3 One-Sided Market         — RETIRED, now A2:CRITICAL (see above)
+  A4 Book Depth Deviation     — implemented (whole-book depth vs THIS market's own
+                                 rolling average — was "thin mid-market", a flat
+                                 5,000 floor against an in-band figure that was
+                                 never currency-converted, so small markets fired
+                                 forever and large ones could halve unnoticed)
+  A5 Depth Imbalance          — implemented (was computed but never alerted in v1;
+                                 measures the whole book per side since the
+                                 2026-08 rework, not a ±1.25× spread band)
   A6 Layer Churn Stall        — implemented (near-touch layers not refreshing relative
                                  to THIS pair's own typical churn rate — a self-baseline,
                                  not a global threshold, so busy markets with lots of
                                  long-resting customer orders don't false-positive.
-                                 Distinct from B3: B3 detects a dead upstream reference
-                                 feed connection; A6 detects a live Quidax feed whose
+                                 Distinct from B1's stale-reference variant, which
+                                 detects a dead upstream reference feed connection;
+                                 A6 detects a live Quidax feed whose
                                  *content* has stopped moving, which can happen even
                                  while the API itself returns fresh data every cycle)
   B1 Price Discrepancy        — implemented, USDT-quoted pairs only (see note below)
   B2 Source Exchange Divergence — implemented, MEXC vs KuCoin
-  B3 Stale Reference Feed     — implemented, per source (MEXC / KuCoin)
+  B3 Stale Reference Feed     — RETIRED, now emitted as B1 (see resolve_trusted_price).
+                                 Detection and source-exclusion are unchanged; only
+                                 the id moved, so one row answers "can I trust this
+                                 price comparison" from both ends
   B4 Circuit Breaker Proximity — implemented, reference-free (uses Quidax's own k-line window)
   D1 Volume Spike             — implemented (unchanged trigger logic; context is a comparison
                                  against Quidax's own longer-term volume baseline. Runs on its
@@ -72,14 +86,14 @@ Alert scope (see OHM spec doc for full definitions):
   none of these are derivable from public Depth/K-line/reference-ticker data; they
   need direct telemetry from the bot's own process, which this monitor does not have.
 
-NOTE on B1/B2/B3 scope: MEXC and KuCoin only quote assets against USDT (and similar
-majors) — there is no MEXC/KuCoin "XNGN" or "XGHS" market to reference. So B1/B2/B3
+NOTE on B1/B2 scope: MEXC and KuCoin only quote assets against USDT (and similar
+majors) — there is no MEXC/KuCoin "XNGN" or "XGHS" market to reference. So B1/B2
 only run for pairs whose QUOTE currency is "usdt" (e.g. btcusdt, ethusdt). NGN/GHS pairs
 (btcngn, usdtngn, etc.) have no independent external price to check against — they're
 covered instead by F1, which checks them against the implied cross-rate built from their
 own USDT leg + the usdtngn/usdtghs bridge rate, all sourced from Quidax itself.
 
-NOTE on 24h data: nothing in this monitor needs it. B1/B2/B3/B4 only ever use the
+NOTE on 24h data: nothing in this monitor needs it. B1/B2/B4 only ever use the
 *current* price. MEXC's ticker/price endpoint returns price only (no volume at all),
 so that's enforced at the fetch layer. KuCoin's allTickers payload still technically
 contains 24h fields since there's no lighter batched alternative on their side — we
@@ -89,11 +103,12 @@ update_volume_baseline below) — no external volume data is fetched or used any
 
 NOTE on alert tiering & cooldowns:
   Tier 1 — fire on first occurrence, then 15-min cooldown per issue per pair:
-    A1, A3, A6 (CRITICAL/HIGH), B4-CRITICAL, D1, E1, E2, G2-CRITICAL
+    A2-CRITICAL (one-sided book), A6 (CRITICAL/HIGH), B2, B4-CRITICAL, E1, E2, G2-CRITICAL
   Tier 2 — fire only after N consecutive cycles of the same issue, then 15-min cooldown:
-    A2 (spread + shallow book), B1, B2, B3, B4-HIGH, G2-HIGH — N = TIER2_CONFIRM_CYCLES (3)
+    A2-HIGH (spread + shallow book), B1, B4-HIGH, D1, G2-HIGH — N = TIER2_CONFIRM_CYCLES (3)
   Tier 3 — dashboard flag only, never fire Telegram:
-    A4, A5, F1, A6-MEDIUM (monitor-only zero-baseline case — see check_layer_churn_stall)
+    A1, A4, A5, F1, A6-MEDIUM (monitor-only zero-baseline case — see
+    check_layer_churn_stall), B1-MEDIUM (peer-flat reference — see resolve_trusted_price)
 
   NOTE: A6 was previously Tier 2 (gated by a now-removed per-A6 confirm-cycles
   knob). It now fires immediately on first occurrence like the other Tier-1 ids.
@@ -114,7 +129,7 @@ NOTE on alert tiering & cooldowns:
   alert retries on the next cycle instead of going dark for the full window.
 
   DEDUPED ISSUE IDS: two checks legitimately emit the same id twice in one cycle —
-  A2 (spread widening + shallow book) and B3 (MEXC stale + KuCoin stale). Those tuples
+  A2 (spread widening + shallow book) and B1 (MEXC stale + KuCoin stale). Those tuples
   are collapsed by dedupe_actionable() at the point of detection so each id reaches
   should_fire_telegram exactly once per cycle (otherwise the Tier-2 counter would
   double-increment and confirm in 2 cycles instead of 3, and the cooldown set by the
@@ -256,7 +271,8 @@ def apply_config():
     """
     global PAIRS, PAIR_ALIASES, DEPTH_LIMIT, KLINE_CANDLE_MINUTES, KLINE_LOOKBACK_MINUTES
     global CYCLE_SLEEP_SECONDS
-    global MIN_ORDERBOOK_LAYERS, THIN_DEPTH_THRESHOLD, DEPTH_IMBALANCE_RATIO
+    global MIN_ORDERBOOK_LAYERS, DEPTH_DEVIATION_PCT, DEPTH_BASELINE_BUCKETS
+    global DEPTH_IMBALANCE_RATIO
     global DWS_POOR_THRESHOLD, MIN_ABS_SPREAD_DIFF_PCT
     global MAX_CONCURRENT_PAIRS, MONITOR_ONLY_SYMBOLS
     global PRICE_DISCREPANCY_PCT, SOURCE_DIVERGENCE_PCT, SOURCE_DIVERGENCE_OVERRIDES, STALE_REFERENCE_CYCLES
@@ -297,7 +313,13 @@ def apply_config():
 
     # Orderbook thresholds
     MIN_ORDERBOOK_LAYERS     = int(cfg["orderbook"]["min_orderbook_layers"])
-    THIN_DEPTH_THRESHOLD     = float(cfg["orderbook"]["thin_depth_threshold"])
+    # Clamped rather than trusted: 0 makes A4 fire on any dip below average (the
+    # floor becomes 1.0, so roughly half of all cycles), and >= 100 makes it
+    # unfireable on any book that holds a single order. Neither is a setting an
+    # operator means to choose, and both are one fat-fingered keystroke away in
+    # the config drawer.
+    DEPTH_DEVIATION_PCT      = min(99.0, max(1.0, float(cfg["orderbook"]["depth_deviation_pct"])))
+    DEPTH_BASELINE_BUCKETS   = int(cfg["orderbook"]["depth_baseline_buckets"])
     DEPTH_IMBALANCE_RATIO    = float(cfg["orderbook"]["depth_imbalance_ratio"])
     DWS_POOR_THRESHOLD       = float(cfg["orderbook"]["dws_poor_threshold"])
     MIN_ABS_SPREAD_DIFF_PCT  = float(cfg["orderbook"]["min_abs_spread_diff_pct"])
@@ -392,7 +414,8 @@ KLINE_CANDLE_MINUTES:        int   = 1
 KLINE_LOOKBACK_MINUTES:      int   = 60
 CYCLE_SLEEP_SECONDS:         float = 60
 MIN_ORDERBOOK_LAYERS:        int   = 10
-THIN_DEPTH_THRESHOLD:        float = 5_000
+DEPTH_DEVIATION_PCT:         float = 50.0
+DEPTH_BASELINE_BUCKETS:      int   = 20
 DEPTH_IMBALANCE_RATIO:       float = 5.0
 DWS_POOR_THRESHOLD:          float = 0.5
 MIN_ABS_SPREAD_DIFF_PCT:     float = 0.05
@@ -448,6 +471,12 @@ VOLUME_TOPUP_HOURS          = 6    # hours re-fetched each pass; the overlap let
                                     # get filled in on the next
 VOLUME_TOPUP_DELAY_SECONDS  = 120  # wait this long after the hour boundary before
                                     # topping up, so the just-closed candle exists
+
+DEPTH_MIN_HISTORY_BUCKETS       = 5   # A4 cold-start gate — min prior depth readings
+                                       # before the self-baseline is trusted. Same
+                                       # value and same reasoning as A6's gate below;
+                                       # kept as a separate constant so retuning one
+                                       # check never silently retunes the other.
 
 LAYER_CHURN_MIN_HISTORY_BUCKETS = 5   # A6 cold-start gate — min prior churn readings
                                        # needed before the self-baseline is trusted at
@@ -701,7 +730,7 @@ async def fetch_kucoin_tickers(session: aiohttp.ClientSession) -> dict[str, dict
 async def fetch_reference_data(session: aiohttp.ClientSession) -> tuple[dict, dict, list]:
     """
     Fetches both reference exchanges. Each is independent — if one fails, the other
-    can still be used (B2/B3 logic below degrades gracefully to single-source).
+    can still be used (B1/B2 logic below degrades gracefully to single-source).
     Returns (mexc_map, kucoin_map, e2_issues).
     """
     mexc_map, kucoin_map = {}, {}
@@ -758,17 +787,29 @@ def compute_mid_and_spread(asks_df: pd.DataFrame, bids_df: pd.DataFrame) -> tupl
     return mid, spread, spread_pct
 
 
-def calculate_liquidity_depth(asks_df: pd.DataFrame, bids_df: pd.DataFrame,
-                               mid: float, spread_pct_range: float) -> float:
-    if asks_df.empty or bids_df.empty:
-        return 0.0
-    upper = mid * (1 + spread_pct_range / 100)
-    lower = mid * (1 - spread_pct_range / 100)
-    bid_d = (bids_df.loc[bids_df["price"] >= lower, "price"] *
-             bids_df.loc[bids_df["price"] >= lower, "amount"]).sum()
-    ask_d = (asks_df.loc[asks_df["price"] <= upper, "price"] *
-             asks_df.loc[asks_df["price"] <= upper, "amount"]).sum()
-    return bid_d + ask_d
+def calculate_book_depth(asks_df: pd.DataFrame, bids_df: pd.DataFrame) -> tuple[float, float]:
+    """
+    Quote-currency value resting on each side of the WHOLE visible book, as
+    (bid_value, ask_value).
+
+    "Whole book" means every level the depth endpoint returned, which is capped
+    by orderbook.depth_limit (200 by default) — not literally every order on the
+    exchange. A market deep enough to exceed 200 levels a side reports the top
+    200, which is the same ceiling every cycle, so the A4 self-baseline stays
+    comparable against itself either way.
+
+    Replaces the pair of ±1.25× / ±1.5× spread-band sums this used to compute.
+    Those bands moved with the spread they were derived from, so the measurement
+    window widened exactly when the spread blew out — the moment depth mattered
+    most, the ruler grew to cover more of the book and hid it. A fixed reference
+    (the whole book) has no such feedback, and both A4 and A5 now read from it.
+
+    Needs no mid price, which is why the one-sided short-circuit can report real
+    per-side values where the band version could only write zero.
+    """
+    bid_value = float((bids_df["price"] * bids_df["amount"]).sum()) if not bids_df.empty else 0.0
+    ask_value = float((asks_df["price"] * asks_df["amount"]).sum()) if not asks_df.empty else 0.0
+    return bid_value, ask_value
 
 
 def calculate_dws(asks_df: pd.DataFrame, bids_df: pd.DataFrame,
@@ -783,30 +824,42 @@ def calculate_dws(asks_df: pd.DataFrame, bids_df: pd.DataFrame,
     return (num / den) / mid * 100 if den > 0 else 0.0
 
 
-def calculate_depth_imbalance(asks_df: pd.DataFrame, bids_df: pd.DataFrame,
-                               mid: float, spread_pct_range: float,
+def calculate_depth_imbalance(bid_value: float, ask_value: float,
                                metrics: Optional[dict] = None) -> tuple:
-    if asks_df.empty or bids_df.empty:
-        return None, None
-    upper = mid * (1 + spread_pct_range / 100)
-    lower = mid * (1 - spread_pct_range / 100)
-    bid_d = (bids_df.loc[bids_df["price"] >= lower, "price"] *
-             bids_df.loc[bids_df["price"] >= lower, "amount"]).sum()
-    ask_d = (asks_df.loc[asks_df["price"] <= upper, "price"] *
-             asks_df.loc[asks_df["price"] <= upper, "amount"]).sum()
+    """
+    A5's ratio between the two sides of the whole book, as (ratio, heavier_side).
+
+    Takes the two side values calculate_book_depth already computed rather than
+    re-walking the frames — the numbers are identical and A4 needs the same walk.
+
+    Reading the ratio differently now matters: this compares total resting value
+    per side, not near-touch value. A book with everything stacked far from mid
+    on one side reads as imbalanced here even when the touch is even — the
+    maker's inventory is lopsided — which is NOT what the old ±1.25× band saw.
+
+    Measured across all 45 pairs at the time of the change, the two rules differ
+    in shape rather than in strictness: the middle of the distribution compresses
+    slightly (median 1.17 -> 1.12, since a band that widens with the spread was
+    itself picking up noise), while the tail moves the other way and exposes skew
+    the band could not see — xyousdt read 1.07 in-band and 62.5 across the book,
+    because its ask stack sits well away from mid. Fire count at the unchanged
+    5.0x threshold went 1 -> 2 of 45. So 5.0 is not obviously mistuned for the new
+    measure, and it was left alone; retune from observed data, not from the
+    assumption that a wider window must mean a smaller number.
+    """
     # The two sides behind the ratio. A5 reports "3.2x, bids heavier", which says
     # nothing about whether that's $300 vs $95 or $3M vs $940k — the dashboard row
     # shows both legs so the operator can tell those apart at a glance.
     if metrics is not None:
-        metrics["band_bid_value"] = float(bid_d)
-        metrics["band_ask_value"] = float(ask_d)
-    if ask_d == 0 and bid_d == 0:
+        metrics["book_bid_value"] = float(bid_value)
+        metrics["book_ask_value"] = float(ask_value)
+    if ask_value == 0 and bid_value == 0:
         return 1.0, "balanced"
-    lighter = min(bid_d, ask_d)
-    heavier = max(bid_d, ask_d)
+    lighter = min(bid_value, ask_value)
+    heavier = max(bid_value, ask_value)
     if lighter == 0:
-        return float("inf"), "bids" if bid_d > ask_d else "asks"
-    return heavier / lighter, ("bids" if bid_d > ask_d else "asks")
+        return float("inf"), "bids" if bid_value > ask_value else "asks"
+    return heavier / lighter, ("bids" if bid_value > ask_value else "asks")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -814,15 +867,15 @@ def calculate_depth_imbalance(asks_df: pd.DataFrame, bids_df: pd.DataFrame,
 # ══════════════════════════════════════════════════════════════════════════════
 
 def check_depth_imbalance(imbalance_ratio, heavier_side) -> list:
-    """A5 — depth imbalance. (Computed in v1 but never wired into alerting.)"""
+    """A5 — depth imbalance across the whole visible book."""
     if imbalance_ratio is None:
         return []
     if imbalance_ratio == float("inf"):
         return [("A5", "HIGH", f"Depth imbalance — all visible depth is on the {heavier_side} side")]
     if imbalance_ratio >= DEPTH_IMBALANCE_RATIO:
         return [("A5", "MEDIUM",
-            f"Depth imbalance {imbalance_ratio:.1f}x — {heavier_side} side heavier "
-            f"(threshold {DEPTH_IMBALANCE_RATIO}x)")]
+            f"Depth imbalance {imbalance_ratio:.1f}x across the book — {heavier_side} "
+            f"side heavier (threshold {DEPTH_IMBALANCE_RATIO}x)")]
     return []
 
 
@@ -872,6 +925,69 @@ def compute_layer_churn(prev_asks: Optional[list], prev_bids: Optional[list],
     if total == 0:
         return None
     return (a_changed + b_changed) / total
+
+
+def update_depth_baseline(symbol: str, depth_total: float,
+                          depth_hist_root: dict) -> tuple[Optional[float], int]:
+    """
+    A4 self-baseline: mean of THIS market's own prior whole-book depth readings.
+
+    Same "exclude the current reading from its own baseline" pattern as A6's
+    churn baseline and D1's volume baseline — a reading that contributes to the
+    average it is judged against can never look anomalous enough, and the effect
+    is worst exactly when the window is short.
+
+    No time-bucketing (unlike D1): depth is a point-in-time snapshot of the book,
+    not an overlapping rolling window, so consecutive cycles are already distinct
+    readings. Returns (baseline, prior_sample_count); the count is what gates the
+    cold start in check_depth_deviation.
+    """
+    hist   = depth_hist_root.setdefault(symbol, {})
+    values = hist.setdefault("depth_values", [])
+    prior  = list(values)
+    baseline = (sum(prior) / len(prior)) if prior else None
+    values.append(float(depth_total))
+    hist["depth_values"] = values[-DEPTH_BASELINE_BUCKETS:]
+    return baseline, len(prior)
+
+
+def check_depth_deviation(depth_total: float, baseline: Optional[float],
+                          bucket_count: int, metrics: Optional[dict] = None) -> list:
+    """
+    A4 — fires when the whole book has thinned out relative to what THIS market
+    normally carries: depth at or below (100 - DEPTH_DEVIATION_PCT)% of its own
+    rolling average.
+
+    Drops only. A depth *spike* is not a liquidity problem — someone posting size
+    is the outcome the bot exists to produce — so the check is deliberately
+    one-sided, unlike A6's ratio test which has no meaningful upper failure mode
+    either way.
+
+    Silent until the baseline has DEPTH_MIN_HISTORY_BUCKETS prior readings. On a
+    cold start every market's average is one cycle deep and would flag on any
+    ordinary fluctuation, so A4 reports nothing rather than something wrong; the
+    dashboard shows the row as "still building" the way A6 does.
+
+    baseline <= 0 returns nothing on purpose. That means the book carried no
+    value at all for the whole window, which is not a *deviation* — it is an
+    empty or one-sided book, and A3 (one-sided) and A2 (shallow) already own that
+    case with far better messages than a ratio against zero could produce.
+    """
+    floor = 1.0 - (DEPTH_DEVIATION_PCT / 100.0)
+    if metrics is not None:
+        metrics["depth_ratio_floor"]   = round(floor, 4)
+        metrics["depth_min_history"]   = DEPTH_MIN_HISTORY_BUCKETS
+    if baseline is None or bucket_count < DEPTH_MIN_HISTORY_BUCKETS or baseline <= 0:
+        return []
+    ratio = depth_total / baseline
+    if metrics is not None:
+        metrics["depth_ratio"] = round(ratio, 4)
+    if ratio <= floor:
+        return [("A4", "MEDIUM",
+            f"Book depth {format_depth(depth_total)} — {ratio:.0%} of the "
+            f"{format_depth(baseline)} this market typically carries "
+            f"({bucket_count}-cycle baseline), fires at or below {floor:.0%}")]
+    return []
 
 
 def update_layer_churn_baseline(symbol: str, churn_score: float, layer_hist_root: dict) -> tuple[Optional[float], int]:
@@ -974,9 +1090,22 @@ def resolve_trusted_price(asset: str, m_price, m_ok: bool, k_price, k_ok: bool,
                            divergence_threshold: Optional[float] = None,
                            metrics: Optional[dict] = None) -> tuple[Optional[float], list]:
     """
-    Per-asset reference resolution: detects B3 (stale feed) per source, then B2
-    (source divergence) between the two surviving sources, and returns a single
-    trusted price plus whatever issues fired along the way. `ref_hist` is the
+    Per-asset reference resolution: detects an unusable feed per source (emitted
+    as B1 — see below), then B2 (source divergence) between the two surviving
+    sources, and returns a single trusted price plus whatever issues fired along
+    the way.
+
+    Staleness used to be its own id, B3. It is now emitted as B1, because the two
+    were always answering one question — "can I trust the comparison between
+    Quidax and the outside world?" — from opposite ends. B1 said the comparison
+    disagreed; B3 said the thing being compared against was rotten. Merging them
+    means an operator reads one row, and dedupe_actionable folds a stale-reference
+    B1 and a price-discrepancy B1 in the same cycle into a single tuple (highest
+    severity, both labels), so the Tier-2 counter advances once rather than twice.
+
+    The DETECTION and EXCLUSION logic is untouched by that relabelling: a source
+    ruled stale is still dropped from the trusted-price math below, which is the
+    part that actually protects B1's arithmetic. `ref_hist` is the
     persisted per-asset state dict (rolling history + stale counters).
 
     `divergence_threshold` is the effective B2 % for THIS pair: the caller resolves
@@ -984,9 +1113,9 @@ def resolve_trusted_price(asset: str, m_price, m_ok: bool, k_price, k_ok: bool,
     (e.g. a direct/legacy call), it falls back to the global SOURCE_DIVERGENCE_PCT
     here, so old call sites keep their previous behaviour.
 
-    NOTE: this can legitimately return TWO ("B3", ...) tuples in one cycle (one
-    per source) — the caller folds them via dedupe_actionable before any tier /
-    cooldown logic runs, so the duplicate id never double-counts.
+    NOTE: this can legitimately return TWO stale ("B1", ...) tuples in one cycle
+    (one per source) — the caller folds them via dedupe_actionable before any
+    tier / cooldown logic runs, so the duplicate id never double-counts.
     """
     issues = []
     ref_hist.setdefault("mexc", [])
@@ -1002,7 +1131,7 @@ def resolve_trusted_price(asset: str, m_price, m_ok: bool, k_price, k_ok: bool,
     if k_ok:
         ref_hist["k_ever_ok"] = True
 
-    # ---- B3: per-source staleness, split into two independent conditions ----
+    # ---- Per-source staleness (emitted as B1), split into two conditions ----
     # The old single counter conflated two very different failures:
     #   (a) UNAVAILABLE — the source didn't resolve at all (API error / unlisted /
     #       wrong alias). A genuinely dead upstream feed; fires fast (Tier 2) once
@@ -1052,17 +1181,19 @@ def resolve_trusted_price(asset: str, m_price, m_ok: bool, k_price, k_ok: bool,
         ref_hist["kucoin"] = (ref_hist["kucoin"] + [k_price])[-REF_HISTORY_LEN:]
 
     # --- firing decisions, per source ---
-    # *_pricing_stale: exclude this source from B1/B2 trusted-price math. Only a
+    # *_pricing_stale: exclude this source from B1/B2 trusted-price math. This is
+    # the half of the old B3 that was never really an alert — it is a gate, and it
+    # keeps working exactly as before regardless of what id the alert carries. Only a
     # confirmed dead feed or a confirmed real freeze (peer moving) does this; a
     # calm-flat source stays usable, since its price is still good.
     m_pricing_stale = False
     k_pricing_stale = False
 
     # Effective B2 threshold for THIS pair (override map, falling back to global).
-    # Hoisted above the B3 block so the frozen-but-agreeing gate can reuse it: a
+    # Hoisted above the stale block so the frozen-but-agreeing gate can reuse it: a
     # source that's frozen while its peer moves is only a *real* stale feed if the
     # frozen price has actually drifted from the peer past this same threshold. If
-    # it still agrees, the price is fine — suppress B3 entirely and keep the source
+    # it still agrees, the price is fine — suppress the alert entirely and keep the source
     # usable. Reused unchanged by the B2 section below.
     div_thr = divergence_threshold if divergence_threshold is not None else SOURCE_DIVERGENCE_PCT
 
@@ -1079,7 +1210,7 @@ def resolve_trusted_price(asset: str, m_price, m_ok: bool, k_price, k_ok: bool,
     # MEXC
     if ref_hist["m_unavail"] >= STALE_REFERENCE_CYCLES and ref_hist["m_ever_ok"]:
         sev = "CRITICAL" if ref_hist["m_unavail"] >= STALE_REFERENCE_CYCLES * 2 else "HIGH"
-        issues.append(("B3", sev,
+        issues.append(("B1", sev,
             f"MEXC {asset}USDT feed unavailable — failed to resolve for {ref_hist['m_unavail']} cycles"))
         m_pricing_stale = True
     elif ref_hist["m_unchanged"] >= STALE_UNCHANGED_CYCLES and ref_hist["m_ever_ok"]:
@@ -1091,21 +1222,21 @@ def resolve_trusted_price(asset: str, m_price, m_ok: bool, k_price, k_ok: bool,
         # moved far enough that the frozen price has drifted past the B2 threshold.
         if peer_moving and not _still_agrees(m_price, k_price):
             sev = "CRITICAL" if ref_hist["m_unchanged"] >= STALE_UNCHANGED_CYCLES * 2 else "HIGH"
-            issues.append(("B3", sev,
+            issues.append(("B1", sev,
                 f"MEXC {asset}USDT feed frozen — unchanged for {ref_hist['m_unchanged']} cycles "
                 f"while KuCoin still moving and price now diverges"))
             m_pricing_stale = True
         elif peer_moving:
             pass  # frozen but still agrees with peer — price is fine, stay silent & usable
         else:
-            issues.append(("B3", "MEDIUM",
+            issues.append(("B1", "MEDIUM",
                 f"MEXC {asset}USDT unchanged for {ref_hist['m_unchanged']} cycles "
                 f"(peer flat/absent — likely quiet market, not a dead feed)"))
 
     # KuCoin
     if ref_hist["k_unavail"] >= STALE_REFERENCE_CYCLES and ref_hist["k_ever_ok"]:
         sev = "CRITICAL" if ref_hist["k_unavail"] >= STALE_REFERENCE_CYCLES * 2 else "HIGH"
-        issues.append(("B3", sev,
+        issues.append(("B1", sev,
             f"KuCoin {asset}-USDT feed unavailable — failed to resolve for {ref_hist['k_unavail']} cycles"))
         k_pricing_stale = True
     elif ref_hist["k_unchanged"] >= STALE_UNCHANGED_CYCLES and ref_hist["k_ever_ok"]:
@@ -1115,28 +1246,28 @@ def resolve_trusted_price(asset: str, m_price, m_ok: bool, k_price, k_ok: bool,
         # agrees with the moving peer; only fire once it has drifted past B2 thr.
         if peer_moving and not _still_agrees(k_price, m_price):
             sev = "CRITICAL" if ref_hist["k_unchanged"] >= STALE_UNCHANGED_CYCLES * 2 else "HIGH"
-            issues.append(("B3", sev,
+            issues.append(("B1", sev,
                 f"KuCoin {asset}-USDT feed frozen — unchanged for {ref_hist['k_unchanged']} cycles "
                 f"while MEXC still moving and price now diverges"))
             k_pricing_stale = True
         elif peer_moving:
             pass  # frozen but still agrees with peer — price is fine, stay silent & usable
         else:
-            issues.append(("B3", "MEDIUM",
+            issues.append(("B1", "MEDIUM",
                 f"KuCoin {asset}-USDT unchanged for {ref_hist['k_unchanged']} cycles "
                 f"(peer flat/absent — likely quiet market, not a dead feed)"))
 
     usable_m = m_price if (m_ok and not m_pricing_stale) else None
     usable_k = k_price if (k_ok and not k_pricing_stale) else None
 
-    # ---- Per-source detail for the dashboard's B2 / B3 rows ----
+    # ---- Per-source detail for the dashboard's B1 / B2 rows ----
     # Both checks are resolved per ASSET, once, before any pair is processed, so
     # these numbers are otherwise invisible from a pair's row — a B2 row could
     # only say "MEXC and KuCoin agree" without being able to show what either one
     # actually said. Recorded on every cycle, firing or not.
     #
     # *_usable is the distinction that matters when reading these: a source can
-    # have resolved fine and still be excluded from the trusted price because B3
+    # have resolved fine and still be excluded from the trusted price because staleness
     # ruled it stale, and the raw price alone doesn't show that.
     if metrics is not None:
         metrics["ref_mexc"]             = float(m_price) if m_price is not None else None
@@ -1150,7 +1281,7 @@ def resolve_trusted_price(asset: str, m_price, m_ok: bool, k_price, k_ok: bool,
         metrics["ref_divergence_threshold_pct"] = round(div_thr, 4)
 
     # ---- B2: source divergence ----
-    # Effective threshold `div_thr` was resolved above (hoisted for the B3 gate).
+    # Effective threshold `div_thr` was resolved above (hoisted for the stale gate).
     trusted = None
     if usable_m is not None and usable_k is not None:
         avg = (usable_m + usable_k) / 2
@@ -1176,7 +1307,25 @@ def resolve_trusted_price(asset: str, m_price, m_ok: bool, k_price, k_ok: bool,
         trusted = usable_m
     elif usable_k is not None:
         trusted = usable_k
-    # else: neither source usable -> trusted stays None (B1 will simply be skipped)
+    # else: neither source usable -> trusted stays None, and B1's price comparison
+    # below is skipped. That is NOT a silent failure any more, which was the whole
+    # point of folding staleness into B1: whatever made both sources unusable has
+    # already appended its own ("B1", ...) tuple above, so the id an operator
+    # watches still fires. Deliberately no extra "no reference" alert on top —
+    # the only way to reach here without one is the debounce window (both sources
+    # down for fewer than STALE_REFERENCE_CYCLES) or an asset neither exchange
+    # ever listed, and both of those are meant to be quiet.
+    if metrics is not None:
+        metrics["b1_reference_usable"] = trusted is not None
+        # Whether the STALE half of B1 actually fired this cycle, as opposed to a
+        # source merely being absent. The dashboard cannot infer this: a source
+        # that is "not usable" is very often one the exchange never listed, which
+        # is a coverage fact and deliberately silent (the *_ever_ok gates above).
+        # Without this flag the stale row reads HIGH on every pair whose asset
+        # only trades on one of the two exchanges. Mirrors b1_price_diff_fired.
+        metrics["b1_stale_fired"]     = any(i[0] == "B1" for i in issues)
+        metrics["b1_stale_severity"]  = next(
+            (i[1] for i in issues if i[0] == "B1"), "")
 
     return trusted, issues
 
@@ -1210,11 +1359,19 @@ def check_price_discrepancy(quidax_mid: float, trusted_price: Optional[float],
     # Recorded whether or not this fires: the dashboard's B1 row shows the live
     # numbers on a passing check too, and the firing point is per-pair (see above),
     # so it can't be re-derived from a single global constant on the client.
+    fired = abs(diff_pct) >= threshold_pct
     if metrics is not None:
         metrics["b1_diff_pct"]            = round(diff_pct, 4)
         metrics["b1_expected_offset_pct"] = round(expected_offset_pct, 4)
         metrics["b1_threshold_pct"]       = round(threshold_pct, 4)
-    if abs(diff_pct) >= threshold_pct:
+        # Recorded separately from the issue list because B1 now carries two very
+        # different failures: this one (Quidax disagrees with the reference) and
+        # the stale-reference case merged in from B3. F1 attributes an arbitrage
+        # gap to whichever leg "already fired B1", and only THIS half means the
+        # leg's price is suspect — a leg whose reference feed is merely quiet has
+        # no bearing on a cross-rate gap. See run_cycle's b1_fired.
+        metrics["b1_price_diff_fired"]    = fired
+    if fired:
         severity = "CRITICAL" if abs(diff_pct) >= expected_offset_pct + (PRICE_DISCREPANCY_PCT * 2) else "HIGH"
         return [("B1", severity,
             f"Quidax {quidax_mid:,.6g} vs reference {trusted_price:,.6g} "
@@ -1282,7 +1439,7 @@ def check_candle_wicks(kline_raw: list, metrics: Optional[dict] = None) -> list:
       (high - low) / open * 100 >= G2_SWING_PCT -> HIGH, total-range swing.
 
     Multiple candles firing in one cycle emit multiple ("G2", ...) tuples —
-    dedupe_actionable() (same as A2/B3) folds them into one, keeping the
+    dedupe_actionable() (same as A2/B1) folds them into one, keeping the
     highest severity and merging labels.
     """
     if not kline_raw:
@@ -1425,7 +1582,7 @@ def get_recent_spikes(window_info: Optional[dict], sym: str,
     ("D1", "HIGH", label) — so the rest of the pipeline (dedupe_actionable,
     classify_tier, should_fire_telegram, the anomaly Telegram message loop,
     update_daily_log, and the dashboard's issues badge parsing) all treat D1
-    identically to A1/A3/A6/B1/B2/B3/B4. Previously D1 lived in its own parallel
+    identically to A1/A2/A6/B1/B2/B4. Previously D1 lived in its own parallel
     `_spikes` list of dicts with a separate Telegram message, separate cooldown-
     detail branches, a separate daily-log status ("SPIKE") — all removed as of
     this consolidation. Severity is fixed at "HIGH" per user's chosen policy;
@@ -2214,7 +2371,11 @@ def update_daily_log(all_results: list):
     rows = [{
         "Timestamp": ts, "Market": r["symbol"], "Status": r["status"].upper(),
         "Issues": r.get("issues", ""),
-        "Depth": f"{r.get('depth_1.25x', '')} / {r.get('depth_1.5x', '')}",
+        # Same "X / Y" shape it has always had, but the two figures changed
+        # meaning in the 2026-08 depth rework: they were the ±1.25× and ±1.5×
+        # spread-band totals, and are now the whole book's bid side and ask side.
+        # Rows written before that change carry the old pair.
+        "Depth": f"{r.get('depth_bid', '')} / {r.get('depth_ask', '')}",
     } for r in warning_results]
 
     new_df      = pd.DataFrame(rows)
@@ -2320,6 +2481,7 @@ async def process_pair(
     ref_issues: list,
     vol_hist_root: dict,
     layer_hist_root: dict,
+    depth_hist_root: dict,
     ref_metrics: Optional[dict] = None,
 ) -> Optional[dict]:
     """
@@ -2330,7 +2492,8 @@ async def process_pair(
     resolve_trusted_price) and only populated for USDT-quoted pairs. `vol_hist_root`
     is the persisted per-pair volume-bucket history D1 uses for its own baseline.
     `layer_hist_root` is the persisted per-pair near-touch-level history A6 uses for
-    its own churn self-baseline. `ref_metrics` carries the B2/B3 per-source detail
+    its own churn self-baseline. `depth_hist_root` is the equivalent for A4 — the
+    per-pair whole-book depth readings it averages into its own baseline. `ref_metrics` carries the B2/B3 per-source detail
     already resolved for this pair's asset, which is merged into the returned row
     so the dashboard can show what each reference exchange actually quoted.
 
@@ -2356,46 +2519,66 @@ async def process_pair(
             )
             asks_df, bids_df = build_orderbook_dfs(depth_raw)
 
-            # ── A3 — One-sided market ───────────────────────────────────────
+            # ── A2:CRITICAL — One-sided market (was A3) ─────────────────────
             # NOTE: v1 of this monitor silently `return None`-ed here, which meant
             # a genuinely one-sided book (the most severe market-structure failure
             # in the spec) never actually fired an alert — it just vanished from
-            # the cycle and looked like a fetch failure. Fixed: report it as A3.
-            # A6 snapshot is intentionally NOT written here — a one-sided book
-            # produces no meaningful near-touch levels to diff against next cycle,
-            # and writing empty/partial snapshots would corrupt the churn baseline.
+            # the cycle and looked like a fetch failure. Fixed: reported as an
+            # issue like anything else.
+            #
+            # Emits A2 rather than the old A3 id. A missing side and a side with
+            # too few levels are the same failure at different magnitudes — one
+            # book, too little of it — and splitting them across two ids meant an
+            # operator watching "shallow book" could miss the case where shallow
+            # became empty. Urgency is preserved by severity, not by id:
+            # classify_tier routes A2:CRITICAL to Tier 1, exactly where A3 sat,
+            # while the thin-but-present cases stay Tier 2.
+            #
+            # The CONTROL FLOW below is unchanged and must stay that way. A6's
+            # snapshot is intentionally NOT written — a one-sided book produces no
+            # meaningful near-touch levels to diff against next cycle, and writing
+            # empty/partial snapshots would corrupt the churn baseline.
             if asks_df.empty or bids_df.empty:
                 side = "ask" if asks_df.empty else "bid"
-                print(f"[{symbol}] 🚨 A3 — one-sided market, no {side} orders")
+                print(f"[{symbol}] 🚨 A2 — one-sided market, no {side} orders")
+                # Whole-book values need no mid price, so unlike the old spread-band
+                # figures these are real on a one-sided book: the surviving side
+                # reports what it actually holds instead of a placeholder zero.
+                oneside_bid, oneside_ask = calculate_book_depth(asks_df, bids_df)
                 return {
                     "timestamp": ngt_now().strftime("%Y-%m-%d %H:%M:%S"),
                     "symbol": symbol, "monitor_only": monitor_only,
-                    "status": "Warning", "issues": "A3:CRITICAL", "should_alert": True,
+                    "status": "Warning", "issues": "A2:CRITICAL", "should_alert": True,
+                    # Hardcoded rather than computed because this row short-circuits
+                    # before the normal worst_tier() call. It must agree with
+                    # classify_tier("A2", "CRITICAL") — see defaults.py.
                     "alert_tier": 1,
                     "current_spread": "N/A", "spread_abs": "N/A",
                     "target_spread": target if not monitor_only else "N/A",
                     "percent_diff": "N/A", "mid_price": "N/A",
                     "ask_layers": len(asks_df), "bid_layers": len(bids_df),
                     "dws": "N/A", "dws_poor": False,
-                    "depth_1.25x": "$0", "depth_1.5x": "$0",
+                    "depth_bid": format_depth(oneside_bid),
+                    "depth_ask": format_depth(oneside_ask),
                     "imbalance_ratio": "inf", "heavier_side": "bids" if asks_df.empty else "asks",
                     "trusted_ref": round(trusted_price, 8) if trusted_price else "N/A",
                     "layer_churn_pct": "N/A", "layer_churn_baseline_pct": "N/A",
                     "telegram_fired": False, "telegram_detail": "",
-                    "_actionable": [("A3", "CRITICAL", f"One-sided market — no {side} orders")],
+                    "_actionable": [("A2", "CRITICAL", f"One-sided market — no {side} orders")],
                 }
 
             ask_layers, bid_layers = len(asks_df), len(bids_df)
             mid_price, spread_abs, curr_spread = compute_mid_and_spread(asks_df, bids_df)
             dws      = calculate_dws(asks_df, bids_df, mid_price)
-            depth_25 = calculate_liquidity_depth(asks_df, bids_df, mid_price, curr_spread * 1.25)
-            depth_50 = calculate_liquidity_depth(asks_df, bids_df, mid_price, curr_spread * 1.50)
+            # One walk of the book feeds both A4 (total) and A5 (the two sides).
+            book_bid, book_ask = calculate_book_depth(asks_df, bids_df)
+            book_total = book_bid + book_ask
             # Per-check evidence for the dashboard, filled in as the checks run
             # below and flattened into the returned row. Seeded with the B2/B3
             # detail resolved once per asset back in run_cycle.
             metrics: dict = dict(ref_metrics or {})
             imbalance_ratio, heavier_side = calculate_depth_imbalance(
-                asks_df, bids_df, mid_price, curr_spread * 1.25, metrics=metrics)
+                book_bid, book_ask, metrics=metrics)
 
             issues = []
 
@@ -2445,11 +2628,14 @@ async def process_pair(
                 issues.append(("A2", "HIGH",
                     f"Shallow orderbook — asks:{ask_layers} bids:{bid_layers} (min {MIN_ORDERBOOK_LAYERS})"))
 
-            # ── A4 — Thin mid-market ────────────────────────────────────────
-            if 0 < depth_25 < THIN_DEPTH_THRESHOLD:
-                issues.append(("A4", "MEDIUM",
-                    f"Thin mid-market — depth within spread: {format_depth(depth_25)} "
-                    f"(min {format_depth(THIN_DEPTH_THRESHOLD)})"))
+            # ── A4 — Book depth below this market's own norm ─────────────────
+            # Self-baseline per market, same shape as A6's churn baseline — see
+            # check_depth_deviation for why a flat cross-market floor could not
+            # work here (it judged a naira book against a dollar number).
+            depth_baseline, depth_bucket_count = update_depth_baseline(
+                symbol, book_total, depth_hist_root)
+            issues += check_depth_deviation(book_total, depth_baseline,
+                                            depth_bucket_count, metrics=metrics)
 
             # ── A5 — Depth imbalance ────────────────────────────────────────
             issues += check_depth_imbalance(imbalance_ratio, heavier_side)
@@ -2487,7 +2673,7 @@ async def process_pair(
                 issues += check_price_discrepancy(mid_price, trusted_price, target, metrics=metrics)
 
             # ── B2 / B3 — carried in from the per-asset reference pass ──────
-            # ref_issues may carry two ("B3", ...) tuples (MEXC + KuCoin); the
+            # ref_issues may carry two stale ("B1", ...) tuples (MEXC + KuCoin); the
             # dedupe below folds them so B3 counts once per cycle.
             issues += ref_issues
 
@@ -2525,8 +2711,11 @@ async def process_pair(
             # with the values that were actually in force when it was written —
             # these are live-editable from the config drawer, and a row rendered
             # against a threshold edited since would quietly misreport why it fired.
-            metrics["depth_band_value"]          = float(depth_25)
-            metrics["thin_depth_threshold"]      = THIN_DEPTH_THRESHOLD
+            metrics["depth_book_value"]          = float(book_total)
+            metrics["depth_baseline_value"]      = (float(depth_baseline)
+                                                    if depth_baseline is not None else None)
+            metrics["depth_baseline_samples"]    = depth_bucket_count
+            metrics["depth_deviation_pct"]       = DEPTH_DEVIATION_PCT
             metrics["min_orderbook_layers"]      = MIN_ORDERBOOK_LAYERS
             metrics["dws_threshold"]             = DWS_POOR_THRESHOLD
             metrics["imbalance_threshold"]       = DEPTH_IMBALANCE_RATIO
@@ -2540,7 +2729,7 @@ async def process_pair(
             # ── D1 dashboard detail fields (informational, not divergent behaviour) ──
             # These populate the dashboard's dedicated D1 detail row (volume vs. floor,
             # ref context). They're NOT alert plumbing — they're per-check data fields
-            # analogous to depth_1.25x or current_spread, kept alongside the rest of
+            # analogous to depth_bid or current_spread, kept alongside the rest of
             # the row so the dashboard doesn't have to re-derive them from `issues`.
             d1_threshold = get_threshold(symbol)
             if has_d1:
@@ -2593,8 +2782,8 @@ async def process_pair(
                 "bid_layers":      bid_layers,
                 "dws":             round(dws, 4),
                 "dws_poor":        dws_poor,
-                "depth_1.25x":     format_depth(depth_25),
-                "depth_1.5x":      format_depth(depth_50),
+                "depth_bid":       format_depth(book_bid),
+                "depth_ask":       format_depth(book_ask),
                 "imbalance_ratio": (round(imbalance_ratio, 2)
                                     if imbalance_ratio and imbalance_ratio != float("inf")
                                     else ("inf" if imbalance_ratio == float("inf") else "")),
@@ -2943,6 +3132,7 @@ async def run_cycle(shared_state: dict, session: aiohttp.ClientSession, cycle_nu
     ref_hist_root = shared_state.setdefault("_ref_hist", {})
     vol_hist_root = shared_state.setdefault("_vol_hist", {})
     layer_hist_root = shared_state.setdefault("_layer_hist", {})
+    depth_hist_root = shared_state.setdefault("_depth_hist", {})
     assets = {split_symbol(sym)[0].upper() for sym, _ in PAIRS if split_symbol(sym)[1] == "usdt"}
 
     # Per-asset reference-exchange aliases, pulled from each usdt pair's optional
@@ -3000,6 +3190,7 @@ async def run_cycle(shared_state: dict, session: aiohttp.ClientSession, cycle_nu
             ref_metrics=ref_metrics_by_asset.get(asset, {}) if is_usdt_pair else {},
             vol_hist_root=vol_hist_root,
             layer_hist_root=layer_hist_root,
+            depth_hist_root=depth_hist_root,
         ))
     raw_results = await asyncio.gather(*tasks)
     results = [r for r in raw_results if r is not None]
@@ -3020,7 +3211,11 @@ async def run_cycle(shared_state: dict, session: aiohttp.ClientSession, cycle_nu
 
     # ── Step 4: F1 — cross-pair arbitrage, needs every pair's mid in hand ──────
     mids = {r["symbol"]: r["mid_price"] for r in results if isinstance(r["mid_price"], (int, float))}
-    b1_fired = {r["symbol"] for r in results if "B1:" in (r.get("issues") or "")}
+    # Only a genuine price disagreement counts, not the stale-reference variant
+    # B1 absorbed from B3 — see check_price_discrepancy. Reading the flag rather
+    # than substring-matching the issues string also stops "B1:" matching a
+    # merged label that mentions it in passing.
+    b1_fired = {r["symbol"] for r in results if r.get("b1_price_diff_fired") is True}
     triangles = find_arb_triangles(PAIRS)
     arb_gaps = check_arb_gaps(triangles, mids, b1_fired)
 

@@ -139,7 +139,11 @@ def parse_latest_csv() -> list[dict]:
 
     # Normalise types — booleans arrive as strings from CSV
     for col in ("monitor_only", "should_alert", "telegram_fired", "dws_poor", "d1_spike",
-                "ref_mexc_usable", "ref_kucoin_usable"):
+                "ref_mexc_usable", "ref_kucoin_usable",
+                # B1's two halves, reported separately so the dashboard can show
+                # which one fired — the engine folds them into a single issue
+                # tuple, so the issues string alone cannot tell them apart.
+                "b1_price_diff_fired", "b1_stale_fired", "b1_reference_usable"):
         if col in df.columns:
             df[col] = df[col].map(
                 lambda v: str(v).strip().lower() in ("true", "1", "yes")
@@ -161,8 +165,10 @@ def parse_latest_csv() -> list[dict]:
                 "best_ask", "best_bid", "spread_diff_pp",
                 "min_orderbook_layers", "dws_threshold", "min_abs_spread_diff_pct",
                 # A4 / A5
-                "depth_band_value", "thin_depth_threshold",
-                "band_bid_value", "band_ask_value", "imbalance_threshold",
+                "depth_book_value", "depth_baseline_value", "depth_baseline_samples",
+                "depth_deviation_pct", "depth_ratio", "depth_ratio_floor",
+                "depth_min_history",
+                "book_bid_value", "book_ask_value", "imbalance_threshold",
                 # A6
                 "layer_churn_ratio", "layer_churn_samples",
                 "layer_churn_ratio_floor", "layer_churn_min_history",
@@ -376,6 +382,45 @@ def serve_favicon():
     return FileResponse(path)
 
 
+# ── Alert tier metadata for the dashboard's grouped dropdowns ────────────────
+# The two alert-type dropdowns group their options by delivery tier, which means
+# the browser needs to know each id's tier. That answer is DERIVED here by asking
+# classify_tier — never transcribed — because a hand-maintained copy in the page
+# would drift silently the first time a check is retiered, and the symptom would
+# be a dropdown quietly filing an alert under the wrong urgency.
+#
+# Severity is half the input (A2 is Tier 1 at CRITICAL and Tier 2 otherwise; A6
+# and B1 have Tier 3 MEDIUM variants), so the map is keyed by BOTH. The page
+# needs both projections of it: the alert-type dropdowns group an id by the most
+# urgent tier it can reach (distinct values), while the per-market check panel
+# files each ROW by its own case — A2's spread and shallow-book rows are Tier 2
+# even though the id can reach Tier 1 through the one-sided case. Serving the
+# full matrix lets the page answer both without a second endpoint or a local
+# copy of the rules.
+#
+# E1/E2 are included even though they never reach classify_tier (both are keyed
+# "_global", not to a market): they are Tier 1 by definition and an operator
+# reading the dropdown should see them where they belong. The retired A3/B3 are
+# included by virtue of being in ACKABLE_ISSUE_IDS, which is what lets historical
+# log rows still group correctly.
+_TIER_SEVERITIES = ("CRITICAL", "HIGH", "MEDIUM")
+
+
+def _issue_tier_map() -> dict[str, dict[str, int]]:
+    """{issue_id: {severity: tier}} — computed, not transcribed."""
+    out = {}
+    for iid in sorted(ACKABLE_ISSUE_IDS):
+        out[iid] = {sev: classify_tier(iid, sev) for sev in _TIER_SEVERITIES}
+    # Global ids never reach classify_tier (both keyed "_global", not a market)
+    # but are Tier 1 by definition.
+    for iid in ("E1", "E2"):
+        out[iid] = {sev: 1 for sev in _TIER_SEVERITIES}
+    return out
+
+
+ISSUE_TIERS = _issue_tier_map()
+
+
 @app.get("/api/status")
 def get_status():
     """
@@ -388,6 +433,11 @@ def get_status():
     return JSONResponse({
         "summary": summary_stats(records),
         "pairs":   records,
+        # Static per-process, but served here rather than from its own endpoint so
+        # the page has it after the very first poll — both alert dropdowns need it
+        # to group their options, and one of them lives on a tab the user may open
+        # before any other request has been made.
+        "issue_tiers": ISSUE_TIERS,
     })
 
 
@@ -740,64 +790,6 @@ def _build_episodes(ex: pd.DataFrame, cycle_s: float, gap_cycles: int) -> pd.Dat
     return eps
 
 
-def _wall_minutes_by_market(eps: pd.DataFrame, cycle_s: float) -> dict:
-    """
-    Wall-clock minutes each market spent in ANY alert state — overlapping
-    episodes counted once.
-
-    Deliberately not the sum of episode durations. A pair carrying A2, A5 and B1
-    simultaneously for an hour has three hours of episode time but was only
-    unhealthy for one, and ranking markets by the sum would put whichever pair
-    trips the most checks at once on top regardless of how long it was actually
-    broken. Both are reported; the sum is alert_minutes_sum.
-
-    Two episodes merge when they overlap OR sit within one cycle of each other,
-    matching how each episode's own end is extended by a cycle — otherwise
-    back-to-back episodes would leave a phantom gap the market was never actually
-    healthy for.
-
-    Vectorised as a running-max sweep over market-code order: within a market an
-    episode opens a new block exactly when its start is past the furthest end
-    seen so far. The two reduceats then fold episodes into blocks and blocks into
-    per-market totals.
-
-    The running max MUST reset at each market boundary, which is why this uses a
-    grouped cummax and not a plain maximum.accumulate. A global accumulate leaks
-    the previous market's furthest end into the next one: the boundary test opens
-    a block at the first episode of the new market, but every later episode there
-    is compared against the stale carried-over maximum, so genuinely separate runs
-    silently merge into one block and the market's wall-clock time comes out
-    LARGER than the sum of its own episode durations — which is impossible for a
-    union, and is exactly the symptom that caught it.
-    """
-    if eps.empty:
-        return {}
-
-    codes_all = eps["market"].cat.codes.to_numpy()
-    order   = np.lexsort((eps["start_s"].to_numpy(), codes_all))
-    codes   = codes_all[order]
-    start_s = eps["start_s"].to_numpy()[order]
-    end_ext = eps["end_s"].to_numpy()[order] + cycle_s
-
-    running_max = (pd.Series(end_ext).groupby(codes, sort=False)
-                     .cummax().to_numpy())
-    new_block = np.empty(len(codes), dtype=bool)
-    new_block[0] = True
-    new_block[1:] = (codes[1:] != codes[:-1]) | (start_s[1:] > running_max[:-1])
-
-    bs = np.flatnonzero(new_block)
-    block_len  = np.maximum.reduceat(end_ext, bs) - start_s[bs]
-    block_code = codes[bs]
-
-    mkt_brk = np.empty(len(bs), dtype=bool)
-    mkt_brk[0] = True
-    mkt_brk[1:] = block_code[1:] != block_code[:-1]
-    ms = np.flatnonzero(mkt_brk)
-    totals = np.add.reduceat(block_len, ms) / 60.0
-    names  = eps["market"].cat.categories.to_numpy()
-    return {names[c]: t for c, t in zip(block_code[ms], totals)}
-
-
 def _sev_columns(frame: pd.DataFrame, key) -> pd.DataFrame:
     """severity value-counts pivoted to CRITICAL/HIGH/MEDIUM columns, always all
     three present so callers can index without a .get dance."""
@@ -842,11 +834,11 @@ def get_alert_analysis(start: Optional[str] = None,
         "gap_cycles":         gap_cycles,
     }
     blank = {
-        "coverage": coverage, "summary": {}, "by_issue": [], "by_market": [],
+        "coverage": coverage, "summary": {}, "by_issue": [],
         "longest_episodes": [], "flapping": [],
         "hourly": {"hours": list(range(24)), "issues": [], "matrix": [],
                    "detections": [0] * 24, "episode_starts": [0] * 24},
-        "daily": [], "still_open": [],
+        "still_open": [],
     }
 
     if all_df.empty:
@@ -904,33 +896,16 @@ def get_alert_analysis(start: Optional[str] = None,
     } for issue, r in ei.iterrows()]
     by_issue.sort(key=lambda r: (-r["episodes"], -r["detections"]))
 
-    # ── Per-market ────────────────────────────────────────────────────────────
-    det_by_market = ex.groupby("market", sort=False, observed=True).size()
-    wall          = _wall_minutes_by_market(eps, cycle_s)
+    # ── Worst market ──────────────────────────────────────────────────────────
+    # A full per-market table used to ship in this payload for the analysis tab's
+    # market chart. That chart is gone and the only survivor is the single name
+    # behind the "Markets affected" card, so all that is computed now is the
+    # ranking's head: most episodes, ties broken by summed episode minutes.
     em = eps.groupby("market", sort=False, observed=True).agg(
         episodes  = ("duration_min", "size"),
-        issues    = ("issue",        "nunique"),
         total_min = ("duration_min", "sum"),
-        peak_rank = ("peak_rank",    "max"),
-        open_now  = ("open_at_end",  "sum"),
-    )
-    em_sev   = _sev_columns(eps, "market")
-    em_issue = eps.groupby(["market", "issue"], sort=False, observed=True).size()
-    by_market = [{
-        "market":            str(market),
-        "episodes":          int(r.episodes),
-        "detections":        int(det_by_market.get(market, 0)),
-        "issues":            int(r.issues),
-        "time_in_alert_min": round(float(wall.get(market, 0.0)), 2),
-        "alert_minutes_sum": round(float(r.total_min), 2),
-        "worst_severity":    _RANK_TO_SEV.get(int(r.peak_rank), "UNKNOWN"),
-        "critical":          int(em_sev.loc[market, "CRITICAL"]),
-        "high":              int(em_sev.loc[market, "HIGH"]),
-        "medium":            int(em_sev.loc[market, "MEDIUM"]),
-        "by_issue":          {str(i): int(v) for i, v in em_issue.loc[market].items()},
-        "open_now":          int(r.open_now),
-    } for market, r in em.iterrows()]
-    by_market.sort(key=lambda r: (-r["episodes"], -r["time_in_alert_min"]))
+    ).sort_values(["episodes", "total_min"], ascending=False)
+    top_market = str(em.index[0]) if len(em) else None
 
     # ── Longest episodes ──────────────────────────────────────────────────────
     longest = eps.nlargest(_MAX_LONGEST, "duration_min")
@@ -986,25 +961,6 @@ def get_alert_analysis(start: Optional[str] = None,
                                              .reindex(range(24), fill_value=0)],
     }
 
-    # ── Per-day trend ─────────────────────────────────────────────────────────
-    # Episodes are attributed to the day they STARTED, so one spanning midnight
-    # is counted once rather than split across two bars. Detections are counted
-    # where they fall, which is why the two series don't reconcile row-by-row.
-    ep_dates = eps["start"].dt.strftime("%Y-%m-%d")
-    d_det    = ex.groupby("_date", sort=False, observed=True).size()
-    d_mkt    = ex.groupby("_date", sort=False, observed=True)["market"].nunique()
-    d_eps    = ep_dates.value_counts()
-    d_sev    = _sev_columns(eps.assign(_d=ep_dates), "_d")
-    daily = [{
-        "date":       ds,
-        "detections": int(d_det.get(ds, 0)),
-        "episodes":   int(d_eps.get(ds, 0)),
-        "markets":    int(d_mkt.get(ds, 0)),
-        "critical":   int(d_sev.loc[ds, "CRITICAL"]) if ds in d_sev.index else 0,
-        "high":       int(d_sev.loc[ds, "HIGH"])     if ds in d_sev.index else 0,
-        "medium":     int(d_sev.loc[ds, "MEDIUM"])   if ds in d_sev.index else 0,
-    } for ds in found]
-
     # ── Still open at range end ───────────────────────────────────────────────
     still = eps[eps["open_at_end"]].nlargest(_MAX_LONGEST, "duration_min")
     still_open = [{
@@ -1037,7 +993,7 @@ def get_alert_analysis(start: Optional[str] = None,
         "longest_min":         round(float(eps["duration_min"].max()), 2),
         "longest_episode":     longest_episodes[0] if longest_episodes else None,
         "top_issue":           by_issue[0]["issue"]   if by_issue  else None,
-        "top_market":          by_market[0]["market"] if by_market else None,
+        "top_market":          top_market,
         # Cycle accounting. observed_cycles counts distinct timestamps in the log
         # — i.e. cycles that produced AT LEAST ONE warning. expected_cycles is the
         # elapsed span ÷ measured period. Their ratio is the only defensible "how
@@ -1054,11 +1010,9 @@ def get_alert_analysis(start: Optional[str] = None,
         "coverage":         coverage,
         "summary":          summary,
         "by_issue":         by_issue,
-        "by_market":        by_market,
         "longest_episodes": longest_episodes,
         "flapping":         flapping,
         "hourly":           hourly,
-        "daily":            daily,
         "still_open":       still_open,
     }))
 
@@ -1170,6 +1124,9 @@ def get_alert_log(start: Optional[str] = None,
                   for t in (1, 2, 3)},
         "markets": sorted(set(markets[m_tier & m_issue].tolist())),
         "issues":  sorted(set(issues[m_tier & m_market].tolist())),
+        # Tier per id, for grouping the alert-type dropdown. Sent with the facets
+        # rather than relied upon from /api/status so this tab is self-sufficient.
+        "issue_tiers": ISSUE_TIERS,
     }
 
     keep = np.flatnonzero(m_tier & m_market & m_issue)

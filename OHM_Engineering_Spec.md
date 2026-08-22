@@ -109,14 +109,16 @@ Every check emits `(alert_id, severity, label)` tuples. Delivery is decided by a
 
 | Tier | Behaviour | Alert IDs |
 |---|---|---|
-| **1** | Fire on first occurrence; then 15-min cooldown per (pair, alert_id) | A1, A3, A6 (non-monitor-only), D1, B4-CRITICAL, E1, E2 |
-| **2** | Fire only after N consecutive cycles of the same issue (default N=3), then 15-min cooldown | A2, B1, B2, B3, B4-HIGH |
-| **3** | Dashboard visibility only — never fires external alert | A4, A5, F1, and MEDIUM variants of A6/B3 |
+| **1** | Fire on first occurrence; then 15-min cooldown per (pair, alert_id) | A2-CRITICAL, A6 (non-monitor-only), B2, B4-CRITICAL, E1, E2 |
+| **2** | Fire only after N consecutive cycles of the same issue (default N=3), then 15-min cooldown | A2-HIGH, B1, D1, B4-HIGH |
+| **3** | Dashboard visibility only — never fires external alert | A1, A4, A5, F1, and MEDIUM variants of A6/B1 |
 
 Two subtleties in classification:
 
 - **B4 is severity-split:** CRITICAL (at/beyond the breaker threshold) is Tier 1; HIGH (approaching) is Tier 2.
-- **A6 and B3 have MEDIUM variants that route to Tier 3.** These are "visible but silent" cases — an A6 on a monitor-only pair with no bot target, or a B3-unchanged where the peer source is also flat (quiet market, not a dead feed).
+- **A2 is severity-split too:** CRITICAL is the one-sided book merged in from the retired A3 and is Tier 1; HIGH (spread widening, shallow book) is Tier 2.
+- **A6 and B1 have MEDIUM variants that route to Tier 3.** These are "visible but silent" cases — an A6 on a monitor-only pair with no bot target, or a B1 stale-reference-unchanged where the peer source is also flat (quiet market, not a dead feed).
+- **A3 and B3 are retired.** A3 merged into A2 (severity-split) and B3 into B1, both in the 2026-08 review. `RETIRED_TIERS` in `defaults.py` keeps them classifying at their original tiers so historical log rows read back correctly.
 
 ### Delivery flow per issue
 
@@ -176,7 +178,7 @@ if best_bid >= best_ask:
     fire ("A1", "CRITICAL", ...)
 ```
 
-**Tier:** 1 (immediate). No confirmation because a crossed book is unambiguous — no threshold to argue with.
+**Tier:** 3 (dashboard-only). A crossed book is unambiguous — there is no threshold to argue with and no confirmation to wait for — but correcting it is the LM bot's own quoting job, not an operator's. It stays CRITICAL on the dashboard and never reaches Telegram.
 
 **State needed:** none.
 
@@ -218,7 +220,7 @@ Independent of DWS.
 
 ---
 
-#### A3 — One-Sided Market
+#### A3 — One-Sided Market (RETIRED — now A2:CRITICAL)
 
 **Detects:** the depth snapshot has zero orders on one side.
 
@@ -228,35 +230,52 @@ if asks empty OR bids empty:
     fire ("A3", "CRITICAL", side)
 ```
 
-**Tier:** 1.
+**Tier:** 1, now reached as `A2:CRITICAL` rather than as its own id — see the A2 section. The check itself is unchanged; only the label moved, on the grounds that an empty side and a too-thin side are the same failure at different magnitudes.
 
-Note: when A3 fires, the rest of the per-pair checks are skipped for that cycle (no mid, no spread, no meaningful A6 snapshot). Do not store empty/partial layer snapshots because it corrupts the churn baseline for A6.
+Note: when it fires, the rest of the per-pair checks are skipped for that cycle (no mid, no spread, no meaningful A6 snapshot). Do not store empty/partial layer snapshots — or A4 depth readings — because both corrupt the respective self-baselines.
 
 ---
 
-#### A4 — Thin Mid-Market
+#### A4 — Book Depth Deviation
 
-**Detects:** total quote-currency liquidity within ±25% of the current spread band around mid is below a floor.
+**Detects:** the whole visible book is worth materially less than this market normally carries.
 
 **Algorithm:**
 ```
-depth_25 = sum(amount * price for levels within (mid ± 1.25 * spread))
-if 0 < depth_25 < thin_depth_threshold:   # default 5,000
+book_total = sum(amount * price over ALL ask levels)
+           + sum(amount * price over ALL bid levels)
+
+baseline = mean of this market's prior depth_baseline_buckets readings   # default 20 cycles,
+                                                                         # current reading excluded
+floor = 1 - depth_deviation_pct / 100                                    # default 50% -> 0.5
+
+if baseline is None or prior_readings < 5 or baseline <= 0:
+    no verdict          # cold start, or an empty book that A2/A3 already own
+elif book_total / baseline <= floor:
     fire ("A4", "MEDIUM", ...)
 ```
 
-**Tier:** 3 (dashboard-only).
+Drops only — a depth *increase* is never A4. "Whole book" means every level the depth endpoint
+returned, capped by `orderbook.depth_limit` (200/side); the cap is constant per cycle, so the
+self-baseline stays comparable against itself.
+
+**Tier:** 3 (dashboard-only). **State needed:** per-pair rolling depth readings (`_depth_hist`).
+
+**Superseded:** the original rule fired when an in-band figure (±1.25× spread) fell below a flat
+`thin_depth_threshold` of 5,000. The threshold was compared without currency conversion, so a
+naira book met the same number as a dollar one, and the band widened with the spread — meaning the
+measurement window grew exactly when depth mattered most.
 
 ---
 
 #### A5 — Depth Imbalance
 
-**Detects:** one side has substantially more depth than the other, within the near-mid band.
+**Detects:** one side of the whole book has substantially more resting value than the other.
 
 **Algorithm:**
 ```
 imbalance_ratio = max(ask_depth, bid_depth) / min(ask_depth, bid_depth)
-    # within (mid ± 1.25 * spread)
+    # whole book per side — the same totals A4 sums
 
 if imbalance_ratio == inf:                    # all depth on one side
     fire ("A5", "HIGH")
@@ -266,13 +285,19 @@ elif imbalance_ratio >= depth_imbalance_ratio:   # default 5.0
 
 **Tier:** 3.
 
+**Note on the 2026-08 switch from the ±1.25× band to the whole book:** the two rules differ in
+shape, not strictness. Measured across all 45 pairs at cutover, the median ratio moved 1.17 → 1.12
+(a band that widens with the spread was itself picking up noise), while the tail moved the other
+way — xyousdt read 1.07 in-band and 62.5 across the book, because its ask stack sits far from mid.
+Fires at the unchanged 5.0 threshold went 1 → 2 of 45, so the threshold was left alone.
+
 ---
 
 #### A6 — Layer Churn Stall
 
 **Detects:** near-touch price levels have stopped refreshing relative to how much this pair *normally* churns. Uses a **per-pair self-baseline**, not a global threshold — busy markets naturally have more churn than quiet ones.
 
-**Distinct from B3:** B3 detects a dead upstream reference feed connection; A6 detects a live Quidax feed whose *content* has stopped moving. The API keeps returning fresh 200 OKs; the book itself is frozen.
+**Distinct from B1's stale-reference variant:** that detects a dead upstream reference feed connection; A6 detects a live Quidax feed whose *content* has stopped moving. The API keeps returning fresh 200 OKs; the book itself is frozen.
 
 **Per-cycle computation:**
 1. Extract "near-touch" layers: the top `top_pct` (default 0.5, i.e. nearest half) of each side, ordered nearest-to-mid.
@@ -336,15 +361,17 @@ flowchart TD
 
 ### 5.2 Category B — Pricing
 
-B1/B2/B3 require an external reference exchange price. **They run only for USDT-quoted pairs**, because MEXC/KuCoin don't list NGN or GHS pairs. NGN/GHS pairs are covered by F1 via triangulation instead.
+B1/B2 require an external reference exchange price. **They run only for USDT-quoted pairs**, because MEXC/KuCoin don't list NGN or GHS pairs. NGN/GHS pairs are covered by F1 via triangulation instead.
 
 B4 is reference-free — it uses Quidax's own k-line window.
 
 ---
 
-#### Reference resolution (B2/B3 combined pipeline)
+#### Reference resolution (B1-stale / B2 combined pipeline)
 
-Before B1 can run, both reference prices for the asset are pulled from the batched ticker snapshots. A per-asset resolver decides whether each source is usable, emits B3 if stale, then compares the survivors and emits B2 if they disagree.
+Before B1's price comparison can run, both reference prices for the asset are pulled from the batched ticker snapshots. A per-asset resolver decides whether each source is usable, emits B1 if a source is stale, then compares the survivors and emits B2 if they disagree.
+
+Note what this means when *neither* source is usable: the price comparison is skipped, but the cycle is not silent — whatever made the sources unusable has already emitted its own B1. Before the merge that case fired B3 while B1 stayed quiet, so an operator filtering the log for B1 saw nothing at the exact moment the reference died.
 
 ```mermaid
 flowchart TD
@@ -392,7 +419,7 @@ flowchart TD
     NoTrust --> Done([Return trusted price + issues])
 ```
 
-#### B3 — Stale Reference Price Feed
+#### B3 — Stale Reference Price Feed (RETIRED — now emitted as B1)
 
 Two structurally different failures, tracked with two separate counters, both surfaced under the id B3:
 
@@ -404,7 +431,11 @@ Two structurally different failures, tracked with two separate counters, both su
 
 Why the cross-source gate: an unchanged price alone is not evidence of a dead feed — quiet markets naturally sit flat. Firing on any unchanged reading produces massive noise on low-vol pairs.
 
-**Tier:** 2 (except the MEDIUM peer-flat variant, which is Tier 3).
+**Tier:** 2 (except the MEDIUM peer-flat variant, which is Tier 3) — now reached as `B1` rather than as its own id.
+
+The detection logic and the source-exclusion it drives are unchanged; only the emitted id moved. The rationale: B1 and B3 were answering one question from opposite ends — B1 said the Quidax-vs-reference comparison disagreed, B3 said the thing being compared against was rotten. One row now carries both, and `dedupe_actionable` folds a stale-reference B1 and a price-discrepancy B1 in the same cycle into a single tuple (highest severity, both labels), so the Tier-2 counter advances once rather than twice.
+
+One consequence to be aware of: acknowledging B1 for a pair now mutes both halves. There is no way to ack "the price disagreement but not the stale feed" any more — that is the cost of the merge, and it is the same trade A2 already made across its three sub-checks.
 
 **State needed per asset:** rolling price history from each source (used for both liveness detection and outlier identification in B2), plus the four counters (`m_unavail`, `k_unavail`, `m_unchanged`, `k_unchanged`), plus `m_ever_ok` / `k_ever_ok` flags (an UNCHANGED alert requires the source to have worked at least once, or we can't tell "stale" from "never worked").
 
@@ -424,7 +455,7 @@ else:
     trusted = avg(mexc, kucoin)
 ```
 
-**Tier:** 2. **State needed:** rolling per-source price history (already maintained for B3).
+**Tier:** 1 (immediate). Both reference exchanges disagreeing means the trusted price B1 is judged against is itself suspect; waiting three cycles to say so only delays the operator's one clue that pricing is unreliable. **State needed:** rolling per-source price history (already maintained for B3).
 
 ---
 
@@ -443,7 +474,7 @@ if diff_pct > expected_offset + price_discrepancy_pct:   # default 0.5 extra
 
 Flat global thresholds fire constantly on pairs with legitimate bot-applied offsets. This formulation aligns per-pair.
 
-**Tier:** 2. **State needed:** none beyond what B2/B3 already track.
+**Tier:** 2 for the price-discrepancy and dead-feed cases, 3 for the MEDIUM quiet-reference case. **State needed:** none beyond the per-source rolling history the resolver already tracks.
 
 ---
 
@@ -497,7 +528,7 @@ else:
 
 **Mode = `absolute`:** bypass the baseline entirely, use only the floor. Provided as an escape hatch for fast rollback without redeploy.
 
-**Tier:** 1. **State needed:** per-pair rolling volume buckets + last-bucket timestamp.
+**Tier:** 2 (requires N consecutive confirmations). A volume spike is context rather than an incident, and the confirmation requirement filters the single-candle blips that made D1 the noisiest Tier-1 id. Note this stacks with `volume_spike.max_fires`, which caps deliveries per episode. **State needed:** per-pair rolling volume buckets + last-bucket timestamp.
 
 ```mermaid
 flowchart TD
@@ -688,7 +719,8 @@ timing:
 orderbook:
   depth_limit: 200
   min_orderbook_layers: 10
-  thin_depth_threshold: 5000
+  depth_deviation_pct: 50.0           # A4 drop below own rolling average
+  depth_baseline_buckets: 20          # A4 baseline length, in cycles
   depth_imbalance_ratio: 5.0
   dws_poor_threshold: 0.5
   min_abs_spread_diff_pct: 0.05

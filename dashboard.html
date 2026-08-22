@@ -367,6 +367,16 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
 .detail-alerts-title { font-size: 12px; font-weight: 600; color: var(--text-secondary); text-transform: uppercase; letter-spacing: .04em; margin-bottom: 10px; }
 
 .alert-checks { display: flex; flex-direction: column; gap: 6px; }
+/* Tier heading inside the check list. Quieter than .detail-alerts-title above it
+   — this is a divider within a section, not a section of its own — and given a
+   little top margin so a group reads as a block rather than as a row that lost
+   its background. The :first-child reset stops the first group pushing the list
+   away from its own title. */
+.check-group {
+  font-size: 10px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase;
+  color: var(--text-muted); margin: 8px 0 -1px 2px;
+}
+.check-group:first-child { margin-top: 0; }
 .check-row {
   display: flex; align-items: flex-start; gap: 10px;
   padding: 9px 12px; border-radius: var(--radius-sm); font-size: 12px;
@@ -686,16 +696,6 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
 .feed-stale b { color: var(--amber-text); }
 
 /* ─── Alert analysis tab ────────────────────────── */
-.aa-note {
-  display: flex; align-items: flex-start; gap: 8px;
-  font-size: 12px; color: var(--text-secondary);
-  background: var(--bg-card); border-left: 3px solid var(--accent);
-  border-radius: var(--radius-sm); padding: 10px 13px; margin-bottom: 20px;
-  box-shadow: var(--shadow);
-}
-.aa-note i { color: var(--accent); font-size: 14px; margin-top: 1px; flex-shrink: 0; }
-.aa-note b { color: var(--text-primary); }
-
 .aa-grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; align-items: start; }
 @media (max-width: 1180px) { .aa-grid-2 { grid-template-columns: 1fr; } }
 
@@ -1174,8 +1174,8 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
       <!-- Controls: range presets + explicit dates -->
       <div class="slippage-controls">
         <div class="range-group" id="aa-range-group">
-          <button class="range-btn"        data-range="1d"  onclick="setAaRange('1d')">Today</button>
-          <button class="range-btn active" data-range="7d"  onclick="setAaRange('7d')">7d</button>
+          <button class="range-btn active" data-range="1d"  onclick="setAaRange('1d')">Today</button>
+          <button class="range-btn"        data-range="7d"  onclick="setAaRange('7d')">7d</button>
           <button class="range-btn"        data-range="14d" onclick="setAaRange('14d')">14d</button>
           <button class="range-btn"        data-range="30d" onclick="setAaRange('30d')">30d</button>
         </div>
@@ -1189,21 +1189,6 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
           <i class="ti ti-refresh"></i> Reload
         </button>
         <span class="aa-coverage" id="aa-coverage" style="margin-left:auto">—</span>
-      </div>
-
-      <!-- What the numbers mean. This caption is not decoration: the daily log
-           records detections, and reading these charts as "alerts we sent" would
-           overstate Telegram volume by whatever the tier/cooldown gate absorbed. -->
-      <div class="aa-note">
-        <i class="ti ti-info-circle"></i>
-        <span>
-          Counts <b>detections</b>, not Telegram deliveries — the daily log records every
-          issue the monitor saw, with no record of what the tier, cooldown, acknowledgement
-          and episode-cap gates then suppressed. An <b>episode</b> is one unbroken run of a
-          single issue on a single market, stitched across up to <b id="aa-gap">2</b> missing
-          cycles. <b>E1/E2 are absent</b> — both are global alerts and the log only holds
-          per-market rows.
-        </span>
       </div>
 
       <!-- Headline counters -->
@@ -1272,32 +1257,6 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
             <div class="aa-sub">unresolved when the log ends</div>
           </div>
         </div>
-      </div>
-
-      <!-- Worst markets -->
-      <div class="chart-card">
-        <div class="chart-header">
-          <div>
-            <div class="chart-title">Worst markets</div>
-            <div class="aa-sub" id="aa-market-caption">top 15 by episode count</div>
-          </div>
-          <div class="chart-selector" id="aa-market-metric">
-            <div class="chart-pill active" data-metric="episodes" onclick="setAaMarketMetric('episodes')">Episodes</div>
-            <div class="chart-pill"        data-metric="time"     onclick="setAaMarketMetric('time')">Time in alert</div>
-          </div>
-        </div>
-        <div style="height:330px"><canvas id="aa-market-chart"></canvas></div>
-      </div>
-
-      <!-- Trend -->
-      <div class="chart-card">
-        <div class="chart-header">
-          <div>
-            <div class="chart-title">Daily trend</div>
-            <div class="aa-sub">episodes per day, by peak severity — attributed to the day the episode started</div>
-          </div>
-        </div>
-        <div style="height:240px"><canvas id="aa-daily-chart"></canvas></div>
       </div>
 
       <!-- Hour-of-day -->
@@ -1384,7 +1343,9 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
           Every issue the monitor logged in the selected range, one row per detection.
           Defaults to <b>Tier 1</b> — the alerts that page someone on first sight. Market and
           alert-type options are rebuilt from what the tier above them actually contains, so
-          no combination lands you on an empty table.
+          no combination lands you on an empty table. Alert types are grouped by the most
+          urgent tier each can reach; an id that spans tiers (A2 pages at CRITICAL but
+          confirms otherwise) says so on its own option.
         </div>
 
         <div class="daily-log-controls">
@@ -1492,9 +1453,14 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
             <span class="hint">Fewer layers on either side triggers a shallow book warning.</span>
           </div>
           <div class="config-field">
-            <label>Thin depth threshold ($)</label>
-            <input type="number" id="cfg-thin-depth" min="0" step="100" />
-            <span class="hint">USD-equiv total depth within spread band below which A4 fires.</span>
+            <label>Depth deviation threshold (%)</label>
+            <input type="number" id="cfg-depth-deviation" min="1" max="99" step="1" />
+            <span class="hint">A4 — how far whole-book depth must fall below this market's own rolling average before it fires. 50 = half its usual depth. Clamped to 1–99.</span>
+          </div>
+          <div class="config-field">
+            <label>Depth baseline cycles</label>
+            <input type="number" id="cfg-depth-baseline" min="1" step="1" />
+            <span class="hint">A4 — how many prior cycles the depth average covers. Needs 5 readings before A4 says anything at all.</span>
           </div>
           <div class="config-field">
             <label>DWS poor threshold</label>
@@ -1539,17 +1505,17 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
           <div class="config-field">
             <label>Stale reference cycles (unavailable)</label>
             <input type="number" id="cfg-stale-ref-cycles" min="1" step="1" />
-            <span class="hint">B3 — consecutive <b>failed-to-resolve</b> reads before a dead feed fires (Tier 2). API error / unlisted / wrong alias.</span>
+            <span class="hint">B1 (stale-reference variant) — consecutive <b>failed-to-resolve</b> reads before a dead feed fires (Tier 2). API error / unlisted / wrong alias.</span>
           </div>
           <div class="config-field">
             <label>Stale unchanged cycles</label>
             <input type="number" id="cfg-stale-unchanged-cycles" min="1" step="1" />
-            <span class="hint">B3 — consecutive <b>unchanged</b> reads before the cross-source liveness check runs. Fires Telegram only if the peer source is still moving; otherwise (calm market / single-source) it's dashboard-only.</span>
+            <span class="hint">B1 (stale-reference variant) — consecutive <b>unchanged</b> reads before the cross-source liveness check runs. Fires Telegram only if the peer source is still moving; otherwise (calm market / single-source) it's dashboard-only.</span>
           </div>
           <div class="config-field">
             <label>Stale movement epsilon (%)</label>
             <input type="number" id="cfg-stale-movement-epsilon" min="0" step="0.001" />
-            <span class="hint">B3 — a move ≤ this % counts as "unchanged"; the same threshold decides whether a peer is "moving". 0 = exact equality (original behaviour). Raise slightly to absorb sub-tick wiggle.</span>
+            <span class="hint">B1 (stale-reference variant) — a move ≤ this % counts as "unchanged"; the same threshold decides whether a peer is "moving". 0 = exact equality (original behaviour). Raise slightly to absorb sub-tick wiggle.</span>
           </div>
           <div class="config-field">
             <label>Circuit breaker (%)</label>
@@ -1803,6 +1769,67 @@ let spreadChart;
 let spreadHistoryMap = {};
 let targetMap = {};
 let alertLog = [];
+
+// {issue_id: {severity: tier}}, served by the API (see ISSUE_TIERS in api.py).
+// Deliberately NOT hardcoded here: tier is a function of id AND severity, the
+// rules live in defaults.classify_tier, and a copy in this file would drift the
+// first time a check is retiered — mislabelling how urgently an alert pages,
+// which is the one thing these groupings exist to communicate.
+let issueTiers = {};
+
+// Every tier an id can reach, most urgent first. Used where the thing being
+// grouped is the ID (the two alert-type dropdowns filter by id alone).
+function alertTiersFor(id) {
+  const m = issueTiers[id];
+  return m ? [...new Set(Object.values(m))].sort((a, b) => a - b) : [];
+}
+
+// The tier for one specific case. Used where the thing being grouped is a ROW
+// representing a known severity — A2's shallow-book row is Tier 2 even though
+// the A2 id reaches Tier 1 through its one-sided case.
+function alertTierOf(id, severity) {
+  const m = issueTiers[id];
+  if (!m) return null;
+  return severity && m[severity] != null ? m[severity] : Math.min(...Object.values(m));
+}
+
+const TIER_GROUP_LABELS = {
+  1: "Tier 1 · pages immediately",
+  2: "Tier 2 · needs 3 cycles",
+  3: "Tier 3 · dashboard only",
+  0: "Unrecognised",
+};
+
+// Build <optgroup>-segmented <option> markup for a list of alert ids.
+//
+// An id is filed under the MOST URGENT tier it can reach, because that is the
+// question the grouping answers ("how loudly does this one shout?"). Ids that
+// span tiers say so on the option itself rather than appearing twice: these
+// dropdowns filter by id alone, so two entries for A2 would filter identically
+// and only look like a bug.
+//
+// Falls back to a flat list when the tier map has not arrived yet, so the
+// dropdown is never empty or wrong while the first poll is in flight.
+function alertOptionsHtml(ids, selected) {
+  const opt = id => {
+    const tiers = alertTiersFor(id);
+    const extra = tiers.length > 1 ? ` · also T${tiers.slice(1).join("/T")}` : "";
+    const sel   = id === selected ? " selected" : "";
+    return `<option value="${id}"${sel}>${id}${extra}</option>`;
+  };
+  if (!Object.keys(issueTiers).length) return ids.map(opt).join("");
+
+  const buckets = { 1: [], 2: [], 3: [], 0: [] };
+  ids.forEach(id => {
+    const tiers = alertTiersFor(id);
+    buckets[tiers.length ? tiers[0] : 0].push(id);
+  });
+  return [1, 2, 3, 0]
+    .filter(t => buckets[t].length)
+    .map(t => `<optgroup label="${TIER_GROUP_LABELS[t]}">`
+              + buckets[t].map(opt).join("") + `</optgroup>`)
+    .join("");
+}
 let lastData = null;
 let showAll = false;
 let selectedSym = null;
@@ -1912,7 +1939,7 @@ function showTab(tab, anchor) {
   // on first open and then only when the operator changes the range — no polling
   // and no refetch on every tab switch. setAaRange seeds the date inputs and
   // fetches; after that aaData is already populated.
-  if (tab === "alerts" && !aaData) setAaRange(aaRange || "7d");
+  if (tab === "alerts" && !aaData) setAaRange(aaRange || "1d");
 
   if (anchor) {
     // Wait one frame so the newly-visible panel has laid out before scrolling
@@ -1981,6 +2008,7 @@ async function fetchAndRender() {
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
     lastData = data;
+    if (data.issue_tiers) issueTiers = data.issue_tiers;
     banner.style.display = "none";
 
     // "Live" has to mean the MONITOR is cycling, not merely that this fetch
@@ -2149,8 +2177,12 @@ function renderPairs(pairs) {
   }
   // Default view: Tier 1 / Tier 2 issues (actionable) plus any pair with a live
   // "Show all" reveals Tier 3 flags and healthy pairs too. D1 spikes emit a
-  // standard issue tuple now (see get_recent_spikes) and flip alert_tier to 1
-  // like every other Tier-1 id, so no separate d1_spike gate is needed here.
+  // standard issue tuple (see get_recent_spikes) and set alert_tier like every
+  // other id, so no separate d1_spike gate is needed here.
+  //
+  // Note that A1 is Tier 3 as of the 2026-08 retiering: a pair whose ONLY issue
+  // is a crossed book now lands here as a flag, so it appears under "Show all"
+  // rather than in the default list.
   const visible = showAll
     ? pairs
     : pairs.filter(p => (p.alert_tier === 1 || p.alert_tier === 2));
@@ -2281,11 +2313,16 @@ function renderDetailPanel(p) {
       desc: `Best bid ${fmtPrice(p.best_bid)} vs best ask ${fmtPrice(p.best_ask)}`
             + (nOrNull(p.best_ask) !== null && nOrNull(p.best_bid) !== null
                ? ` — gap ${fmtPrice(Number(p.best_ask) - Number(p.best_bid))}` : ""),
-      note: "Fires when best bid ≥ best ask: someone is bidding at or above the offer.",
+      note: "Fires when best bid ≥ best ask: someone is bidding at or above the offer. "
+            + "Dashboard-only — never sends Telegram, since the correction is the maker's own quoting.",
     },
     {
       id: "A2-Spread", name: "Spread Widening", alertId: "A2",
       severity: "HIGH",
+      // Which severity THIS row represents, for tier grouping. Without it the
+      // row would inherit A2's most urgent tier (1, via the one-sided case) and
+      // be filed as though a wide spread pages on sight, which it does not.
+      tierSeverity: "HIGH",
       test: () => p.monitor_only ? "na" : activeIssues["A2"] ? "warn" : "pass",
       desc: `Spread ${fmt(p.current_spread, 4)} vs target `
             + `${p.target_spread && p.target_spread !== "N/A" ? p.target_spread + "%" : "N/A"}`
@@ -2299,6 +2336,7 @@ function renderDetailPanel(p) {
     {
       id: "A2-Depth", name: "Shallow Book", alertId: "A2",
       severity: "HIGH",
+      tierSeverity: "HIGH",
       test: () => (nOrNull(p.ask_layers) !== null && Number(p.ask_layers) < Number(p.min_orderbook_layers || 10))
                 || (nOrNull(p.bid_layers) !== null && Number(p.bid_layers) < Number(p.min_orderbook_layers || 10))
                 ? "warn" : "pass",
@@ -2307,37 +2345,49 @@ function renderDetailPanel(p) {
             + `Shares the A2 id with spread widening, so one checkbox covers both.`,
     },
     {
-      id: "A3", name: "One-Sided Market", alertId: "A3",
+      id: "A2-Empty", name: "One-Sided Market", alertId: "A2",
       severity: "CRITICAL",
-      test: () => activeIssues["A3"] ? "crit" : "pass",
-      desc: activeIssues["A3"]
+      tierSeverity: "CRITICAL",
+      // Was its own id (A3) until the 2026-08 merge. An empty side and a
+      // too-thin side are one failure at two magnitudes, so they share the A2 id
+      // and separate on severity: CRITICAL here routes to Tier 1, exactly where
+      // A3 sat, while the shallow-book row above stays Tier 2.
+      test: () => activeIssues["A2"] === "CRITICAL" ? "crit" : "pass",
+      desc: activeIssues["A2"] === "CRITICAL"
             ? `No ${Number(p.ask_layers) === 0 ? "ask" : "bid"} orders at all — no mid price exists`
             : `Both sides quoting — ${fmtQty(p.ask_layers)} asks, ${fmtQty(p.bid_layers)} bids`,
       note: "An empty side short-circuits the cycle: every other check is skipped, "
-            + "and the A6 churn snapshot is deliberately not written.",
+            + "and the A6 churn snapshot is deliberately not written. Fires as "
+            + "A2:CRITICAL — Tier 1, pages on sight, unlike A2's other two cases.",
     },
     {
-      id: "A4", name: "Thin Mid-Market", alertId: "A4",
+      id: "A4", name: "Book Depth", alertId: "A4",
       severity: "MEDIUM",
-      test: () => activeIssues["A4"] ? "info" : "pass",
-      desc: `${fmtCur(p.depth_band_value, cur)} resting within the ±${fmt(Number(p.current_spread) * 1.25, 3)} band around mid`,
-      // The engine compares the raw in-band figure against thin_depth_threshold
-      // directly, with no FX conversion — so on an NGN pair a naira amount is
-      // being measured against the same bare 5000 as a dollar one. Rendered
-      // without a currency symbol rather than mislabelled "$", since attaching
-      // one would imply a conversion that does not happen.
-      note: `Flags below ${fmtQty(p.thin_depth_threshold)} of in-band value (a raw threshold — `
-            + `not currency-converted, so it is compared against the ${cur || "quote"} figure as-is). `
+      test: () => activeIssues["A4"] ? "info"
+                : (nOrNull(p.depth_baseline_value) === null ? "na" : "pass"),
+      desc: `${fmtCur(p.depth_book_value, cur)} resting across the whole book vs `
+            + `${fmtCur(p.depth_baseline_value, cur)} typical for this market`
+            + (nOrNull(p.depth_ratio) !== null ? ` — ${fmtPct(Number(p.depth_ratio) * 100, 0)} of normal` : ""),
+      // Judged against the market's own history rather than a fixed number, so
+      // there is no currency-conversion problem to disclose here any more: a
+      // naira book is compared to its own naira average.
+      note: `Fires when depth falls ${fmtPct(p.depth_deviation_pct, 0)} or more below this `
+            + `market's own rolling average — at or below `
+            + `${fmtPct(Number(p.depth_ratio_floor) * 100, 0)} of normal. Baseline: `
+            + `${fmtQty(p.depth_baseline_samples)} of ${fmtQty(p.depth_min_history ?? 5)} `
+            + `readings needed. Drops only — a depth spike is not an alert. `
             + `Dashboard-only — never sends Telegram.`,
+      naDesc: "Self-baseline still building — not enough cycle history for this pair yet",
     },
     {
       id: "A5", name: "Depth Imbalance", alertId: "A5",
       severity: "MEDIUM",
       test: () => activeIssues["A5"] ? "warn" : "pass",
       desc: `${fmtRatio(p.imbalance_ratio)}${p.heavier_side ? " — " + p.heavier_side + " heavier" : ""}`
-            + ` (bids ${fmtCur(p.band_bid_value, cur)} vs asks ${fmtCur(p.band_ask_value, cur)})`,
+            + ` (bids ${fmtCur(p.book_bid_value, cur)} vs asks ${fmtCur(p.book_ask_value, cur)})`,
       note: `Fires at ${fmtRatio(p.imbalance_threshold, 0)} or worse, HIGH when one side is empty. `
-            + `Same ±1.25× spread band A4 measures.`,
+            + `Compares total resting value per side across the whole book — the same `
+            + `figures A4 sums — so it reads inventory lopsidedness, not a skew at the touch.`,
     },
     {
       id: "A6", name: "Layer Churn Stall", alertId: "A6",
@@ -2387,11 +2437,23 @@ function renderDetailPanel(p) {
       naDesc: "No external reference for this pair",
     },
     {
-      id: "B3", name: "Stale Reference Feed", alertId: "B3",
-      severity: activeIssues["B3"] === "CRITICAL" ? "CRITICAL" : "HIGH",
-      test: () => activeIssues["B3"] === "CRITICAL" ? "crit"
-                : activeIssues["B3"] ? "warn"
-                : (nOrNull(p.trusted_ref) === null ? "na" : "pass"),
+      id: "B1-Stale", name: "Stale Reference Feed", alertId: "B1",
+      severity: p.b1_stale_severity || "HIGH",
+      // Was its own id (B3) until the 2026-08 merge. Staleness and price
+      // discrepancy are the same question from opposite ends — "can I trust this
+      // comparison?" — so they share the B1 id. This row can only report what the
+      // per-source counters say, not which half of B1 fired: the engine folds
+      // both into one tuple, by design (the Tier-2 counter must advance once).
+      // Driven by what the engine actually emitted (b1_stale_fired), NOT by
+      // whether a source is "usable". Most unusable sources are simply assets the
+      // exchange never listed — a coverage fact the engine deliberately stays
+      // quiet about, which this row would otherwise report as a HIGH warning on
+      // every single-source pair.
+      test: () => p.b1_stale_fired === true
+                    ? (p.b1_stale_severity === "CRITICAL" ? "crit"
+                       : p.b1_stale_severity === "MEDIUM" ? "info" : "warn")
+                : (nOrNull(p.trusted_ref) === null) ? "na"
+                : "pass",
       desc: `MEXC: ${p.ref_mexc_usable ? "usable" : "not priced"}`
             + ` (${fmtQty(p.ref_mexc_unavail)} unavailable / ${fmtQty(p.ref_mexc_unchanged)} unchanged in a row)`
             + ` · KuCoin: ${p.ref_kucoin_usable ? "usable" : "not priced"}`
@@ -2399,7 +2461,8 @@ function renderDetailPanel(p) {
       note: "Unavailable fires HIGH at 3 cycles, CRITICAL at 6. Unchanged only escalates "
             + "if the PEER exchange is still moving and the frozen price has already drifted "
             + "past the B2 threshold — a quiet market, or a frozen price that's still correct, "
-            + "stays dashboard-only.",
+            + "stays dashboard-only (B1:MEDIUM, Tier 3). A source ruled stale is dropped from "
+            + "the trusted price, which is what protects the comparison above.",
       naDesc: "No external reference for this pair",
     },
     {
@@ -2468,16 +2531,50 @@ function renderDetailPanel(p) {
       id: "DEPTH", name: "Depth Liquidity", alertId: null,
       severity: "INFO",
       test: () => "info",
-      desc: `1.25× band: ${p.depth_1_25x || p["depth_1.25x"] || "—"}`
-            + ` · 1.5× band: ${p.depth_1_5x || p["depth_1.5x"] || "—"}`,
-      note: "Value of all resting orders within a multiple of the spread around mid. "
-            + "Context for A4 and A5 rather than a check.",
+      desc: `Bid side: ${p.depth_bid || "—"} · Ask side: ${p.depth_ask || "—"}`,
+      note: "Value of every resting order on each side of the book, capped at the "
+            + "depth limit the API is asked for. Context for A4 and A5 rather than a check.",
     },
   ];
 
   const checkIcons = { pass: "ti-circle-check", warn: "ti-alert-triangle", crit: "ti-alert-circle", info: "ti-info-circle", na: "ti-minus" };
 
-  const checksHtml = checks.map(c => {
+  // ── Order by delivery tier, not by id ───────────────────────────────────────
+  // Reading this panel top-down should answer "what would have woken me?" before
+  // "what does the book look like?", and id order buries a Tier-1 churn stall
+  // between two dashboard-only rows. Within a tier the original catalogue order
+  // survives (Array.prototype.sort is stable), so related checks stay adjacent —
+  // A2's three rows still read spread → shallow → empty.
+  //
+  // Bucket 4 is the two context rows (DWS, DEPTH): inputs to other checks rather
+  // than checks themselves, so they carry no alertId and no tier. If the tier map
+  // has not arrived yet every row buckets to 4 and the panel simply keeps its
+  // catalogue order — the pre-2026-08 behaviour, not an error state.
+  const CHECK_GROUP_LABELS = {
+    1: "Tier 1 · pages immediately",
+    2: "Tier 2 · needs 3 cycles",
+    3: "Tier 3 · dashboard only",
+    4: "Context · not alerts",
+  };
+  const checkTier = c => {
+    if (!c.alertId) return 4;
+    const t = alertTierOf(c.alertId, c.tierSeverity);
+    return t == null ? 4 : t;
+  };
+  const ordered = checks
+    .map((c, i) => ({ c, i, tier: checkTier(c) }))
+    .sort((a, b) => (a.tier - b.tier) || (a.i - b.i));
+
+  // No headings at all until the tier map has arrived: every row buckets to 4 in
+  // that window, so a single "Context · not alerts" heading would sit above the
+  // whole list calling the alerts something they are not. Unlabelled catalogue
+  // order is the honest rendering of "tier unknown".
+  const tiersKnown = Object.keys(issueTiers).length > 0;
+  let lastTier = null;
+  const checksHtml = ordered.map(({ c, tier }) => {
+    const heading = (tiersKnown && tier !== lastTier)
+      ? `<div class="check-group">${CHECK_GROUP_LABELS[tier]}</div>` : "";
+    lastTier = tier;
     const state = c.test();
     const icon  = checkIcons[state] || "ti-circle";
     // naDesc replaces the evidence line, because on an N/A row there IS no
@@ -2521,7 +2618,7 @@ function renderDetailPanel(p) {
     const chev = discloses
       ? `<i class="ti ti-chevron-right check-chev" aria-hidden="true"></i>` : "";
 
-    return `<div class="check-row ${state}${ackedCls}${expanded ? " expanded" : ""}"${rowAttrs}>
+    return `${heading}<div class="check-row ${state}${ackedCls}${expanded ? " expanded" : ""}"${rowAttrs}>
       <i class="ti ${icon} check-icon"></i>
       <div class="check-body">
         <div class="check-name">[${c.id}] ${c.name}${ackBadge}${chev}</div>
@@ -2607,11 +2704,14 @@ function rebuildAlertLogFilter() {
   if (alertLogFilter) ids.add(alertLogFilter);
   const sorted = [...ids].sort();
 
-  const desired = ["", ...sorted].join("|");
+  // The tier map is part of the cache key: it arrives on the first /api/status
+  // poll, which can land after the log has already drawn once, and without it
+  // the options would stay flat until the id set happened to change.
+  const desired = ["", ...sorted, `t:${Object.keys(issueTiers).length}`].join("|");
   if (sel.dataset.built === desired) { sel.value = alertLogFilter; return; }
   sel.dataset.built = desired;
   sel.innerHTML = `<option value="">All alert types</option>`
-    + sorted.map(id => `<option value="${id}">${id}</option>`).join("");
+    + alertOptionsHtml(sorted, alertLogFilter);
   sel.value = alertLogFilter;
 }
 
@@ -4091,7 +4191,8 @@ function populateConfigFields(cfg) {
 
   set("cfg-depth-limit",     o.depth_limit);
   set("cfg-min-ob-layers",   o.min_orderbook_layers);
-  set("cfg-thin-depth",      o.thin_depth_threshold);
+  set("cfg-depth-deviation", o.depth_deviation_pct);
+  set("cfg-depth-baseline",  o.depth_baseline_buckets);
   set("cfg-imbalance-ratio", o.depth_imbalance_ratio);
   set("cfg-dws-poor",        o.dws_poor_threshold);
   set("cfg-min-abs-spread",  o.min_abs_spread_diff_pct);
@@ -4265,7 +4366,8 @@ function buildConfigPayload() {
     orderbook: {
       depth_limit:               num("cfg-depth-limit"),
       min_orderbook_layers:      num("cfg-min-ob-layers"),
-      thin_depth_threshold:      num("cfg-thin-depth"),
+      depth_deviation_pct:       num("cfg-depth-deviation"),
+      depth_baseline_buckets:    num("cfg-depth-baseline"),
       depth_imbalance_ratio:     num("cfg-imbalance-ratio"),
       dws_poor_threshold:        num("cfg-dws-poor"),
       min_abs_spread_diff_pct:   num("cfg-min-abs-spread"),
@@ -4398,31 +4500,16 @@ setInterval(fetchAndRender, 60_000);
 // Vocabulary used throughout, and the reason the tab keeps insisting on it:
 //   detection — one issue on one market in one cycle (a row in the daily log).
 //   episode   — an unbroken run of the same detection, stitched over gaps.
-// A four-hour B1 is 240 detections and 1 episode. Ranking alert types by
-// detections therefore ranks by how long they linger, which is a real question
-// but not the same one as "which alert fires most often" — so the charts that
-// could mean either let you switch, and the stat cards show both.
+// A four-hour B1 is 240 detections and 1 episode. Counting detections therefore
+// counts how long issues linger, which is a real question but not the same one
+// as "how often did they fire" — so the stat cards show both.
 
-let aaData         = null;
-let aaMarketChart  = null;
-let aaDailyChart   = null;
-let aaMarketMetric = "episodes";
-let aaRange        = "7d";
-let aaLoading      = false;
-
-const AA_SEV_ORDER = ["CRITICAL", "HIGH", "MEDIUM", "UNKNOWN"];
+let aaData    = null;
+let aaRange   = "1d";
+let aaLoading = false;
 
 function aaCssVar(name) {
   return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
-}
-
-function aaSevColors() {
-  return {
-    CRITICAL: aaCssVar("--red"),
-    HIGH:     aaCssVar("--amber"),
-    MEDIUM:   aaCssVar("--blue"),
-    UNKNOWN:  aaCssVar("--text-muted"),
-  };
 }
 
 // Durations are read at a glance far more often than they're compared precisely,
@@ -4490,7 +4577,7 @@ async function fetchAlertAnalysis() {
   if (aaLoading) return;
   const start = document.getElementById("aa-date-start").value;
   const end   = document.getElementById("aa-date-end").value;
-  if (!start || !end) { setAaRange("7d"); return; }
+  if (!start || !end) { setAaRange("1d"); return; }
 
   aaLoading = true;
   const cov = document.getElementById("aa-coverage");
@@ -4521,7 +4608,6 @@ function renderAlertAnalysis() {
   document.getElementById("aa-coverage").textContent =
     `${cov.start} → ${cov.end} · ${cov.days_with_data}/${cov.days_in_range} day(s) with alerts` +
     (missing ? ` · ${missing} quiet` : "");
-  document.getElementById("aa-gap").textContent = cov.gap_cycles ?? 2;
 
   const hasData = (s.total_episodes || 0) > 0;
   document.getElementById("aa-empty").style.display = hasData ? "none" : "block";
@@ -4550,143 +4636,10 @@ function renderAlertAnalysis() {
   document.getElementById("aa-longest-sub").textContent =
     le ? `${String(le.market).toUpperCase()} · ${le.issue}` : "—";
 
-  renderAaMarketChart();
-  renderAaDailyChart();
   renderAaHourHeat();
   renderAaLongest();
   renderAaStillOpen();
   renderAaFlapping();
-}
-
-// ── Worst markets ─────────────────────────────────────────────────────────────
-function setAaMarketMetric(metric) {
-  aaMarketMetric = metric;
-  document.querySelectorAll("#aa-market-metric .chart-pill").forEach(p => {
-    p.classList.toggle("active", p.dataset.metric === metric);
-  });
-  renderAaMarketChart();
-}
-
-function renderAaMarketChart() {
-  const all = (aaData && aaData.by_market) || [];
-  const ctx = document.getElementById("aa-market-chart");
-  if (!ctx) return;
-
-  const byTime = aaMarketMetric === "time";
-  document.getElementById("aa-market-caption").textContent = byTime
-    ? "top 15 by wall-clock minutes unhealthy — simultaneous alerts counted once"
-    : "top 15 by episode count";
-
-  const sorted = [...all].sort((a, b) =>
-    byTime ? b.time_in_alert_min - a.time_in_alert_min : b.episodes - a.episodes
-  ).slice(0, 15);
-  const labels = sorted.map(r => r.market.toUpperCase());
-  const colors = aaSevColors();
-
-  const datasets = byTime
-    ? [{ label: "Minutes in alert", data: sorted.map(r => r.time_in_alert_min),
-         backgroundColor: aaCssVar("--accent"), borderRadius: 3 }]
-    : AA_SEV_ORDER.filter(sev => sorted.some(r => r[sev.toLowerCase()]))
-        .map(sev => ({
-          label: sev,
-          data: sorted.map(r => r[sev.toLowerCase()] || 0),
-          backgroundColor: colors[sev],
-          borderRadius: 3,
-        }));
-
-  const extra = sorted.reduce((m, r) => (m[r.market.toUpperCase()] = r, m), {});
-  aaMarketChart = aaDrawBar(aaMarketChart, ctx, labels, datasets, {
-    horizontal: true,
-    stacked: !byTime,
-    valueFmt: byTime ? (v => aaDur(v)) : null,
-    afterBody: items => {
-      const r = extra[items[0].label];
-      if (!r) return "";
-      const ids = Object.entries(r.by_issue || {})
-        .sort((a, b) => b[1] - a[1]).slice(0, 6)
-        .map(([k, v]) => `${k}×${v}`).join("  ");
-      return [`${aaNum(r.episodes)} episode(s) · ${aaDur(r.time_in_alert_min)} unhealthy`,
-              ids];
-    },
-  });
-}
-
-// ── Daily trend ───────────────────────────────────────────────────────────────
-function renderAaDailyChart() {
-  const rows = (aaData && aaData.daily) || [];
-  const ctx  = document.getElementById("aa-daily-chart");
-  if (!ctx) return;
-  const colors = aaSevColors();
-  aaDailyChart = aaDrawBar(aaDailyChart, ctx,
-    rows.map(r => r.date.slice(5)),
-    ["CRITICAL", "HIGH", "MEDIUM"]
-      .filter(sev => rows.some(r => r[sev.toLowerCase()]))
-      .map(sev => ({
-        label: sev,
-        data: rows.map(r => r[sev.toLowerCase()] || 0),
-        backgroundColor: colors[sev],
-        borderRadius: 3,
-      })),
-    {
-      stacked: true,
-      afterBody: items => {
-        const r = rows[items[0].dataIndex];
-        return r ? [`${aaNum(r.detections)} detection(s) · ${r.markets} market(s)`] : "";
-      },
-    });
-}
-
-// ── Shared bar renderer ───────────────────────────────────────────────────────
-// Both charts on this tab are bar charts of the same shape, so they share one
-// constructor. Charts are destroyed and rebuilt rather than mutated: the market
-// metric toggle switches the stacking mode, and Chart.js does not reliably
-// reconfigure that in place.
-function aaDrawBar(existing, canvas, labels, datasets, opt = {}) {
-  if (existing) existing.destroy();
-  const grid = aaCssVar("--chart-grid");
-  const tick = aaCssVar("--chart-tick");
-  const fmt  = opt.valueFmt || (v => aaNum(v));
-  const valueAxis = {
-    stacked: !!opt.stacked,
-    beginAtZero: true,
-    ticks: { color: tick, font: { size: 10 }, callback: v => fmt(v) },
-    grid:  { color: grid },
-  };
-  const catAxis = {
-    stacked: !!opt.stacked,
-    ticks: {
-      color: tick,
-      font: { size: 10, family: "'JetBrains Mono', monospace" },
-      // Never thin the labels. autoSkip drops every other one once rows get
-      // tight, which leaves bars on screen that you can see but cannot name.
-      autoSkip: false,
-    },
-    grid: { display: false },
-  };
-  return new Chart(canvas.getContext("2d"), {
-    type: "bar",
-    data: { labels, datasets },
-    options: {
-      indexAxis: opt.horizontal ? "y" : "x",
-      responsive: true,
-      maintainAspectRatio: false,
-      interaction: { mode: "index", intersect: false },
-      plugins: {
-        legend: {
-          display: datasets.length > 1,
-          position: "bottom",
-          labels: { color: tick, font: { size: 10 }, boxWidth: 10, boxHeight: 10, padding: 12 },
-        },
-        tooltip: {
-          callbacks: {
-            label: c => `${c.dataset.label}: ${fmt(c.parsed[opt.horizontal ? "x" : "y"])}`,
-            afterBody: opt.afterBody || undefined,
-          },
-        },
-      },
-      scales: opt.horizontal ? { x: valueAxis, y: catAxis } : { x: catAxis, y: valueAxis },
-    },
-  });
 }
 
 // ── Hour-of-day heatmap ───────────────────────────────────────────────────────
@@ -4876,12 +4829,14 @@ async function fetchAlertLog() {
 // Rebuild one <select> from its facet list, keeping the current choice when the
 // new facets still contain it. A selection that has become impossible is dropped
 // rather than left showing a value the table isn't actually filtered by.
-function logSyncSelect(id, options, allLabel, fmt = v => v) {
+function logSyncSelect(id, options, allLabel, fmt = v => v, grouped = false) {
   const sel  = document.getElementById(id);
   const prev = sel.value;
   const keep = prev && options.includes(prev);
   sel.innerHTML = `<option value="">${allLabel}</option>` +
-    options.map(o => `<option value="${o}"${o === prev ? " selected" : ""}>${fmt(o)}</option>`).join("");
+    (grouped
+      ? alertOptionsHtml(options, keep ? prev : "")
+      : options.map(o => `<option value="${o}"${o === prev ? " selected" : ""}>${fmt(o)}</option>`).join(""));
   if (!keep) sel.value = "";
   return keep || !prev;   // false == we just cleared a stale selection
 }
@@ -4892,7 +4847,11 @@ function renderAlertLog() {
 
   const marketOk = logSyncSelect("log-filter-market", f.markets || [],
                                  "All markets", m => m.toUpperCase());
-  const issueOk  = logSyncSelect("log-filter-alert", f.issues || [], "All alert types");
+  // Facets carry the tier map too, so the analysis tab groups correctly even if
+  // the user lands here before the first /api/status poll returns.
+  if (f.issue_tiers) issueTiers = f.issue_tiers;
+  const issueOk  = logSyncSelect("log-filter-alert", f.issues || [], "All alert types",
+                                 v => v, true);
   // Signal to the caller that a stale filter was cleared, so it can re-ask once
   // it has released the in-flight guard. Returning rather than re-fetching here
   // is deliberate — see fetchAlertLog.
