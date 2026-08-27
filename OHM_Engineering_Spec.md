@@ -109,15 +109,16 @@ Every check emits `(alert_id, severity, label)` tuples. Delivery is decided by a
 
 | Tier | Behaviour | Alert IDs |
 |---|---|---|
-| **1** | Fire on first occurrence; then 15-min cooldown per (pair, alert_id) | A2-CRITICAL, A6 (non-monitor-only), B2, B4-CRITICAL, E1, E2 |
-| **2** | Fire only after N consecutive cycles of the same issue (default N=3), then 15-min cooldown | A2-HIGH, B1, D1, B4-HIGH |
-| **3** | Dashboard visibility only — never fires external alert | A1, A4, A5, F1, and MEDIUM variants of A6/B1 |
+| **1** | Fire on first occurrence; then 15-min cooldown per (pair, alert_id) | A2-CRITICAL, A6 (non-monitor-only), B1 (non-quiet-reference), B4-CRITICAL, G2-CRITICAL, E1, E2 |
+| **2** | Fire only after N consecutive cycles of the same issue (default N=3), then 15-min cooldown | A2-HIGH, B4-HIGH, G2-HIGH |
+| **3** | Dashboard visibility only — never fires external alert | A1, A4, A5, B2, D1, F1, and MEDIUM variants of A6/B1 |
 
-Two subtleties in classification:
+Subtleties in classification:
 
 - **B4 is severity-split:** CRITICAL (at/beyond the breaker threshold) is Tier 1; HIGH (approaching) is Tier 2.
 - **A2 is severity-split too:** CRITICAL is the one-sided book merged in from the retired A3 and is Tier 1; HIGH (spread widening, shallow book) is Tier 2.
-- **A6 and B1 have MEDIUM variants that route to Tier 3.** These are "visible but silent" cases — an A6 on a monitor-only pair with no bot target, or a B1 stale-reference-unchanged where the peer source is also flat (quiet market, not a dead feed).
+- **A6 and B1 have MEDIUM variants that route to Tier 3.** These are "visible but silent" cases — an A6 on a monitor-only pair with no bot target, or a B1 stale-reference-unchanged where the peer source is also flat (quiet market, not a dead feed). Both ids are otherwise Tier 1, so the MEDIUM rule is deliberately tested *before* `TIER1_IDS` in `classify_tier`.
+- **B2 and D1 are dashboard-only.** Two reference sources disagreeing is a data-quality fact that `resolve_trusted_price` already acts on by dropping the outlier — and if the surviving price is still wrong, B1 pages at Tier 1. A volume spike is context rather than an incident, and it was the noisiest id when it paged.
 - **A3 and B3 are retired.** A3 merged into A2 (severity-split) and B3 into B1, both in the 2026-08 review. `RETIRED_TIERS` in `defaults.py` keeps them classifying at their original tiers so historical log rows read back correctly.
 
 ### Delivery flow per issue
@@ -431,9 +432,9 @@ Two structurally different failures, tracked with two separate counters, both su
 
 Why the cross-source gate: an unchanged price alone is not evidence of a dead feed — quiet markets naturally sit flat. Firing on any unchanged reading produces massive noise on low-vol pairs.
 
-**Tier:** 2 (except the MEDIUM peer-flat variant, which is Tier 3) — now reached as `B1` rather than as its own id.
+**Tier:** 1 (except the MEDIUM peer-flat variant, which is Tier 3) — now reached as `B1` rather than as its own id. The `stale_reference_cycles` / `stale_unchanged_cycles` counts are this check's own confirmation, which is what makes firing on sight safe here.
 
-The detection logic and the source-exclusion it drives are unchanged; only the emitted id moved. The rationale: B1 and B3 were answering one question from opposite ends — B1 said the Quidax-vs-reference comparison disagreed, B3 said the thing being compared against was rotten. One row now carries both, and `dedupe_actionable` folds a stale-reference B1 and a price-discrepancy B1 in the same cycle into a single tuple (highest severity, both labels), so the Tier-2 counter advances once rather than twice.
+The detection logic and the source-exclusion it drives are unchanged; only the emitted id moved. The rationale: B1 and B3 were answering one question from opposite ends — B1 said the Quidax-vs-reference comparison disagreed, B3 said the thing being compared against was rotten. One row now carries both, and `dedupe_actionable` folds a stale-reference B1 and a price-discrepancy B1 in the same cycle into a single tuple (highest severity, both labels), so the pair pages once rather than twice.
 
 One consequence to be aware of: acknowledging B1 for a pair now mutes both halves. There is no way to ack "the price disagreement but not the stale feed" any more — that is the cost of the merge, and it is the same trade A2 already made across its three sub-checks.
 
@@ -455,7 +456,7 @@ else:
     trusted = avg(mexc, kucoin)
 ```
 
-**Tier:** 1 (immediate). Both reference exchanges disagreeing means the trusted price B1 is judged against is itself suspect; waiting three cycles to say so only delays the operator's one clue that pricing is unreliable. **State needed:** rolling per-source price history (already maintained for B3).
+**Tier:** 3 (dashboard-only). The disagreement is already handled in-line: the outlier is dropped and the survivor becomes the trusted price, so there is no operator action pending at the moment B2 fires. If the survivor is *also* wrong, that surfaces as B1 at Tier 1 — which is the alert worth paging on. **State needed:** rolling per-source price history (already maintained for B3).
 
 ---
 
@@ -474,7 +475,7 @@ if diff_pct > expected_offset + price_discrepancy_pct:   # default 0.5 extra
 
 Flat global thresholds fire constantly on pairs with legitimate bot-applied offsets. This formulation aligns per-pair.
 
-**Tier:** 2 for the price-discrepancy and dead-feed cases, 3 for the MEDIUM quiet-reference case. **State needed:** none beyond the per-source rolling history the resolver already tracks.
+**Tier:** 1 for the price-discrepancy and dead-feed cases, 3 for the MEDIUM quiet-reference case. A mid that has drifted past its own expected offset costs money for every cycle it stands, and the threshold is already per-pair (target-spread-aware) rather than a flat global one, so three-cycle confirmation bought accuracy the formula had already paid for. **State needed:** none beyond the per-source rolling history the resolver already tracks.
 
 ---
 
@@ -528,7 +529,7 @@ else:
 
 **Mode = `absolute`:** bypass the baseline entirely, use only the floor. Provided as an escape hatch for fast rollback without redeploy.
 
-**Tier:** 2 (requires N consecutive confirmations). A volume spike is context rather than an incident, and the confirmation requirement filters the single-candle blips that made D1 the noisiest Tier-1 id. Note this stacks with `volume_spike.max_fires`, which caps deliveries per episode. **State needed:** per-pair rolling volume buckets + last-bucket timestamp.
+**Tier:** 3 (dashboard-only). A volume spike is context rather than an incident — nothing is broken and no operator action follows from it — and it was the noisiest id when it paged. `volume_spike.max_fires` still caps deliveries per episode and stays in place for a future retier, but nothing reaches Telegram while D1 is Tier 3. **State needed:** per-pair rolling volume buckets + last-bucket timestamp.
 
 ```mermaid
 flowchart TD

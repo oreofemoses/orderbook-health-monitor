@@ -1325,7 +1325,7 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
 
            One row per DETECTION, not per (cycle, market) as the CSV stores it.
            That regrain is what makes the tier filter meaningful: a cycle whose
-           Issues column reads "A1:CRITICAL|B1:HIGH|A4:MEDIUM" is simultaneously
+           Issues column reads "B1:HIGH|A2:HIGH|A4:MEDIUM" is simultaneously
            Tier 1, 2 and 3, so as a single row it can be neither shown nor hidden
            correctly. Split, each row has exactly one tier. -->
       <div id="aa-log-section" class="chart-card">
@@ -1505,7 +1505,7 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
           <div class="config-field">
             <label>Stale reference cycles (unavailable)</label>
             <input type="number" id="cfg-stale-ref-cycles" min="1" step="1" />
-            <span class="hint">B1 (stale-reference variant) — consecutive <b>failed-to-resolve</b> reads before a dead feed fires (Tier 2). API error / unlisted / wrong alias.</span>
+            <span class="hint">B1 (stale-reference variant) — consecutive <b>failed-to-resolve</b> reads before a dead feed fires (B1, Tier 1 — this count IS the confirmation). API error / unlisted / wrong alias.</span>
           </div>
           <div class="config-field">
             <label>Stale unchanged cycles</label>
@@ -2180,9 +2180,10 @@ function renderPairs(pairs) {
   // standard issue tuple (see get_recent_spikes) and set alert_tier like every
   // other id, so no separate d1_spike gate is needed here.
   //
-  // Note that A1 is Tier 3 as of the 2026-08 retiering: a pair whose ONLY issue
-  // is a crossed book now lands here as a flag, so it appears under "Show all"
-  // rather than in the default list.
+  // Note that A1, B2 and D1 are all Tier 3 as of the 2026-08 retiering: a pair
+  // whose ONLY issue is a crossed book, a source disagreement or a volume spike
+  // now lands here as a flag, so it appears under "Show all" rather than in the
+  // default list.
   const visible = showAll
     ? pairs
     : pairs.filter(p => (p.alert_tier === 1 || p.alert_tier === 2));
@@ -2433,7 +2434,8 @@ function renderDetailPanel(p) {
               + (p.ref_outlier ? ` · ${p.ref_outlier} ruled the outlier and dropped from pricing` : ""),
       note: `Fires past ${fmtPct(p.ref_divergence_threshold_pct, 2)} for this asset. The source `
             + `further from its own 8-reading mean is the one dropped; the other becomes the `
-            + `trusted price.`,
+            + `trusted price. Dashboard-only — never sends Telegram: the outlier is already `
+            + `dropped in-line, and B1 pages if the surviving price is still wrong.`,
       naDesc: "No external reference for this pair",
     },
     {
@@ -2502,7 +2504,8 @@ function renderDetailPanel(p) {
             + `${fmtCur(p.d1_threshold, cur)} floor`
             + (p.d1_context ? ` — ${p.d1_context}` : ""),
       note: "Needs BOTH: ≥3× this pair's own rolling baseline AND above its absolute floor. "
-            + "The floor stops a normally-tiny pair firing on a ratio with no economic meaning.",
+            + "The floor stops a normally-tiny pair firing on a ratio with no economic meaning. "
+            + "Dashboard-only — never sends Telegram: a spike is context, not an incident.",
       naDesc: "Monitor-only pair — no volume floor defined",
     },
     {

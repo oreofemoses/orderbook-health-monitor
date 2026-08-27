@@ -491,13 +491,21 @@ The dashboard shows every issue found. Telegram is gated much more tightly.
 
 | Tier | Behaviour | Issues |
 |---|---|---|
-| 1 | Fires immediately on first detection | A2-CRITICAL, A6, B2, B4-CRITICAL, G2-CRITICAL, E1, E2 |
-| 2 | Must repeat 3 consecutive cycles first | A2-HIGH, B1, D1, B4-HIGH, G2-HIGH |
-| 3 | Dashboard flag only, never Telegram | A1, A4, A5, F1, A6-MEDIUM, B1-MEDIUM |
+| 1 | Fires immediately on first detection | A2-CRITICAL, A6, B1, B4-CRITICAL, G2-CRITICAL, E1, E2 |
+| 2 | Must repeat 3 consecutive cycles first | A2-HIGH, B4-HIGH, G2-HIGH |
+| 3 | Dashboard flag only, never Telegram | A1, A4, A5, B2, D1, F1, A6-MEDIUM, B1-MEDIUM |
 
 The MEDIUM variants of A6 and B1 exist *specifically* to land in Tier 3 — they're
 the "visible but probably benign" cases (a monitor-only pair with a frozen book;
-a reference source that is quiet rather than dead).
+a reference source that is quiet rather than dead). They outrank the id's own
+tier because `classify_tier` tests the MEDIUM rule before `TIER1_IDS`.
+
+**Why B1 pages and B2 doesn't.** A quoted price that has drifted from the trusted
+reference costs money every cycle it stands, so B1 fires on sight. Two reference
+sources merely disagreeing does not: `resolve_trusted_price` already drops the
+outlier and keeps pricing running, and if the survivor is still wrong, B1 says so
+at Tier 1. D1 sits alongside it — a volume spike is context, not an incident, and
+it was the noisiest id when it paged.
 
 **A3 and B3 are retired ids.** A3 merged into A2 and B3 into B1 in the 2026-08
 review. They still classify at their original tiers (`RETIRED_TIERS` in
@@ -753,7 +761,7 @@ per-day endpoint (`/api/history`) still exists and is unchanged; nothing in the
 dashboard calls it any more.
 
 **One row per detection, not per cycle.** The CSV stores one row per (cycle,
-market) with a packed `A1:CRITICAL|B1:HIGH|A4:MEDIUM` column. The table explodes
+market) with a packed `B1:HIGH|A2:HIGH|A4:MEDIUM` column. The table explodes
 that so each row carries exactly one id, one severity and one tier. This is not
 cosmetic: that example row is simultaneously Tier 1, Tier 2 and Tier 3, so as a
 single row a tier filter can neither show nor hide it correctly. Depth is
@@ -764,8 +772,9 @@ per-cycle and so repeats across the rows of one cycle.
 1. **Tier** — 1, 2, 3 or all. Defaults to **Tier 1**, the set that actually pages
    someone. Tier is a function of id *and* severity, not id alone: B4 and G2 are
    Tier 1 at CRITICAL and Tier 2 otherwise, A2 is Tier 1 at CRITICAL (the
-   one-sided book) and Tier 2 otherwise, and A6/B1 have MEDIUM variants that are
-   Tier 3. So the same id legitimately appears under two tiers.
+   one-sided book) and Tier 2 otherwise, and A6/B1 are Tier 1 with MEDIUM
+   variants that are Tier 3. So the same id legitimately appears under two
+   tiers.
 
    The alert-type dropdown is segmented into `<optgroup>`s by tier to make this
    readable. An id is filed under the most urgent tier it can reach and annotates

@@ -103,18 +103,25 @@ update_volume_baseline below) — no external volume data is fetched or used any
 
 NOTE on alert tiering & cooldowns:
   Tier 1 — fire on first occurrence, then 15-min cooldown per issue per pair:
-    A2-CRITICAL (one-sided book), A6 (CRITICAL/HIGH), B2, B4-CRITICAL, E1, E2, G2-CRITICAL
+    A2-CRITICAL (one-sided book), A6 (CRITICAL/HIGH), B1 (CRITICAL/HIGH),
+    B4-CRITICAL, E1, E2, G2-CRITICAL
   Tier 2 — fire only after N consecutive cycles of the same issue, then 15-min cooldown:
-    A2-HIGH (spread + shallow book), B1, B4-HIGH, D1, G2-HIGH — N = TIER2_CONFIRM_CYCLES (3)
+    A2-HIGH (spread + shallow book), B4-HIGH, G2-HIGH — N = TIER2_CONFIRM_CYCLES (3)
   Tier 3 — dashboard flag only, never fire Telegram:
-    A1, A4, A5, F1, A6-MEDIUM (monitor-only zero-baseline case — see
+    A1, A4, A5, B2, D1, F1, A6-MEDIUM (monitor-only zero-baseline case — see
     check_layer_churn_stall), B1-MEDIUM (peer-flat reference — see resolve_trusted_price)
 
   NOTE: A6 was previously Tier 2 (gated by a now-removed per-A6 confirm-cycles
   knob). It now fires immediately on first occurrence like the other Tier-1 ids.
   The MEDIUM monitor-only variant still routes to Tier 3 (dashboard-only) via
   classify_tier, so promoting A6 did not turn frozen monitor-only books into
-  Telegram noise.
+  Telegram noise. B1 was promoted the same way and keeps its own MEDIUM
+  (peer-flat reference) variant in Tier 3 for the same reason.
+
+  NOTE: B2 and D1 are dashboard-only. B2 disagreeing sources are already handled
+  in-line by resolve_trusted_price dropping the outlier, and B1 (Tier 1) reports
+  it if the surviving price is still wrong; D1 is context, not an incident. See
+  the reasoning block above TIER1_IDS in defaults.py.
 
   Consecutive counters and cooldown timestamps are persisted in health_state.json
   under each pair's "_alert" sub-key so they survive restarts. Counters reset to 0
@@ -1101,7 +1108,7 @@ def resolve_trusted_price(asset: str, m_price, m_ok: bool, k_price, k_ok: bool,
     disagreed; B3 said the thing being compared against was rotten. Merging them
     means an operator reads one row, and dedupe_actionable folds a stale-reference
     B1 and a price-discrepancy B1 in the same cycle into a single tuple (highest
-    severity, both labels), so the Tier-2 counter advances once rather than twice.
+    severity, both labels), so the pair pages once rather than twice.
 
     The DETECTION and EXCLUSION logic is untouched by that relabelling: a source
     ruled stale is still dropped from the trusted-price math below, which is the
@@ -1134,14 +1141,16 @@ def resolve_trusted_price(asset: str, m_price, m_ok: bool, k_price, k_ok: bool,
     # ---- Per-source staleness (emitted as B1), split into two conditions ----
     # The old single counter conflated two very different failures:
     #   (a) UNAVAILABLE — the source didn't resolve at all (API error / unlisted /
-    #       wrong alias). A genuinely dead upstream feed; fires fast (Tier 2) once
-    #       it has crossed STALE_REFERENCE_CYCLES.
+    #       wrong alias). A genuinely dead upstream feed; fires on sight (B1 is
+    #       Tier 1) once it has crossed STALE_REFERENCE_CYCLES.
+    #       The cycle counter here IS the confirmation — it is what makes the
+    #       tier-1 fire safe, and it is independent of TIER2_CONFIRM_CYCLES.
     #   (b) UNCHANGED   — the source resolved but returned a price within
     #       STALE_MOVEMENT_EPSILON_PCT of last cycle. In a quiet / low-vol market
     #       this is normal, so on its own it is NOT evidence of a dead feed.
     #
     # The unchanged path is gated on CROSS-SOURCE LIVENESS: once it crosses
-    # STALE_UNCHANGED_CYCLES it only escalates to Telegram (Tier 2) when the PEER
+    # STALE_UNCHANGED_CYCLES it only escalates to Telegram (as Tier-1 B1) when the PEER
     # source is still moving — market live, this source stuck. If the peer is also
     # flat (calm market) or there is no usable peer (single-source asset), it is
     # emitted as MEDIUM, which classify_tier() routes to Tier 3 (dashboard-only,
@@ -2846,7 +2855,9 @@ assert not _missing_acks, f"ACKABLE_ISSUE_IDS is missing {sorted(_missing_acks)}
 # keeps re-appearing): fire on detection, one final fire after the cooldown, then
 # silent-but-dashboard-visible until the window clears and the episode re-arms.
 # The cap value is a per-issue config global; _episode_fire_cap() maps id → value.
-# Both G2 (k-line wick window) and D1 (volume window) qualify.
+# Both G2 (k-line wick window) and D1 (volume window) qualify — though D1 is Tier 3
+# as of the retiering, so its cap is inert until D1 ever pages again. Kept because
+# the cap is a property of the window, not of the tier.
 _EPISODE_CAPPED_IDS = {"G2", "D1"}
 
 

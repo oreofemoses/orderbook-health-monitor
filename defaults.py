@@ -80,27 +80,41 @@ ACKABLE_ISSUE_IDS = frozenset({
 # E1/E2 are Tier 1 but absent from these sets: both are keyed "_global" rather
 # than to a market and never reach classify_tier, which is per-pair.
 #
-# Three ids were retiered in the 2026-08 alert review, and the reasons matter
-# more than the memberships:
+# The memberships have been retuned twice; the reasons matter more than the
+# memberships themselves:
 #   A1 -> Tier 3. A crossed book is unambiguous and still shows CRITICAL on the
 #         dashboard, but it is the LM bot's own quoting to correct, not something
 #         an operator acts on at 3am. Note that TIER3_IDS is tested FIRST in
 #         classify_tier, so this silences A1 at every severity.
-#   B2 -> Tier 1. Two independent reference exchanges disagreeing means the
-#         trusted price feeding B1 is suspect, so waiting three cycles to say so
-#         just delays the operator's only clue that pricing is unreliable.
-#   D1 -> Tier 2. A volume spike is context, not an incident; requiring it to
-#         persist three cycles filters the single-candle blips that made it the
-#         noisiest Tier 1 id.
+#   B1 -> Tier 1. A quoted price that has drifted from the trusted reference is
+#         the incident an operator actually acts on, and it costs money for every
+#         cycle it stands — holding it for three confirmations delayed the one
+#         alert worth waking up for. The MEDIUM (peer-flat / merely quiet source)
+#         variant is unaffected: the shared MEDIUM rule below is tested before
+#         TIER1_IDS, so it still lands in Tier 3.
+#   B2 -> Tier 3. Two reference exchanges disagreeing is a data-quality fact, not
+#         a market incident: resolve_trusted_price already drops the outlier and
+#         keeps pricing running, and if that leaves the comparison wrong, B1 says
+#         so at Tier 1. Dashboard visibility is what B2 is for. TIER3_IDS is
+#         tested first, so this silences B2 at every severity.
+#   D1 -> Tier 3. A volume spike is context rather than an incident — nothing is
+#         broken and there is no operator action it implies. It was the noisiest
+#         id at Tier 1, and three-cycle confirmation only made it a slower kind of
+#         noise, so it is now dashboard-only.
 #
 # A3 and B3 are absent because they no longer exist as live ids — the 2026-08
 # review merged A3 into A2 (an empty side is the extreme of a shallow book) and
 # B3 into B1 (an unusable reference is a fact about the price comparison, not a
 # separate incident). Both survive in RETIRED_TIERS below so historical log rows
 # still classify the way they did when they were written.
-TIER1_IDS = frozenset({"A6", "B2"})
-TIER2_IDS = frozenset({"A2", "B1", "D1"})
-TIER3_IDS = frozenset({"A1", "A4", "A5", "F1"})
+TIER1_IDS = frozenset({"A6", "B1"})
+# A2 is the only live Tier-2 id left, and it is severity-split, so classify_tier
+# answers for it before this set is ever consulted. Kept as the documented home
+# of "needs confirming" ids rather than emptied: B4-HIGH and G2-HIGH also land in
+# Tier 2 through their own severity splits, and the next id that needs
+# confirmation belongs here.
+TIER2_IDS = frozenset({"A2"})
+TIER3_IDS = frozenset({"A1", "A4", "A5", "B2", "D1", "F1"})
 
 
 # Ids that no longer fire, mapped to how they used to classify. Existing daily
@@ -123,8 +137,9 @@ def classify_tier(issue_id: str, severity: str) -> int:
     CRITICAL (the empty-book case it absorbed from A3, which has to page as fast
     as A3 did) and Tier 2 otherwise; A6 and B1 have MEDIUM variants that exist
     *specifically* to land in Tier 3 (a monitor-only pair with a frozen book; a
-    reference source that is merely quiet rather than dead). Anything reading
-    tiers off the id alone gets those five wrong.
+    reference source that is merely quiet rather than dead) even though the id
+    itself is Tier 1 — which is why the MEDIUM rule is tested BEFORE TIER1_IDS.
+    Anything reading tiers off the id alone gets those five wrong.
 
     Also classifies the retired ids A3 and B3 as they classified when they were
     still live, so historical log rows keep their original tier — see
