@@ -110,15 +110,16 @@ Every check emits `(alert_id, severity, label)` tuples. Delivery is decided by a
 | Tier | Behaviour | Alert IDs |
 |---|---|---|
 | **1** | Fire on first occurrence; then 15-min cooldown per (pair, alert_id) | A2-CRITICAL, A6 (non-monitor-only), B1 (non-quiet-reference), B4-CRITICAL, G2-CRITICAL, E1, E2 |
-| **2** | Fire only after N consecutive cycles of the same issue (default N=3), then 15-min cooldown | A2-HIGH, B4-HIGH, G2-HIGH |
-| **3** | Dashboard visibility only — never fires external alert | A1, A4, A5, B2, D1, F1, and MEDIUM variants of A6/B1 |
+| **2** | Fire only after N consecutive cycles of the same issue (default N=3), then 15-min cooldown | A2-HIGH, B2, B4-HIGH, G2-HIGH |
+| **3** | Dashboard visibility only — never fires external alert | A1, A4, A5, D1, F1, and MEDIUM variants of A6/B1 |
 
 Subtleties in classification:
 
 - **B4 is severity-split:** CRITICAL (at/beyond the breaker threshold) is Tier 1; HIGH (approaching) is Tier 2.
 - **A2 is severity-split too:** CRITICAL is the one-sided book merged in from the retired A3 and is Tier 1; HIGH (spread widening, shallow book) is Tier 2.
 - **A6 and B1 have MEDIUM variants that route to Tier 3.** These are "visible but silent" cases — an A6 on a monitor-only pair with no bot target, or a B1 stale-reference-unchanged where the peer source is also flat (quiet market, not a dead feed). Both ids are otherwise Tier 1, so the MEDIUM rule is deliberately tested *before* `TIER1_IDS` in `classify_tier`.
-- **B2 and D1 are dashboard-only.** Two reference sources disagreeing is a data-quality fact that `resolve_trusted_price` already acts on by dropping the outlier — and if the surviving price is still wrong, B1 pages at Tier 1. A volume spike is context rather than an incident, and it was the noisiest id when it paged.
+- **B2 confirms before it sends.** Two reference sources disagreeing is a data-quality fact that `resolve_trusted_price` already acts on by dropping the outlier, so no single cycle of it needs an operator. Three consecutive cycles of it is a degrading reference feed, which does — hence Tier 2 rather than Tier 1 or dashboard-only.
+- **D1 is dashboard-only.** A volume spike is context rather than an incident, and it was the noisiest id when it paged.
 - **A3 and B3 are retired.** A3 merged into A2 (severity-split) and B3 into B1, both in the 2026-08 review. `RETIRED_TIERS` in `defaults.py` keeps them classifying at their original tiers so historical log rows read back correctly.
 
 ### Delivery flow per issue
@@ -456,7 +457,7 @@ else:
     trusted = avg(mexc, kucoin)
 ```
 
-**Tier:** 3 (dashboard-only). The disagreement is already handled in-line: the outlier is dropped and the survivor becomes the trusted price, so there is no operator action pending at the moment B2 fires. If the survivor is *also* wrong, that surfaces as B1 at Tier 1 — which is the alert worth paging on. **State needed:** rolling per-source price history (already maintained for B3).
+**Tier:** 2 (confirm over `TIER2_CONFIRM_CYCLES` cycles, default 3). The disagreement is handled in-line — the outlier is dropped and the survivor becomes the trusted price — so a single cycle of it carries no pending operator action, and confirmation is what filters out one-cycle blips on either exchange. A divergence that persists across cycles is a reference feed degrading rather than a tick out of sync, and B1 is then pricing against whichever side happened to survive, so it is worth sending. **State needed:** rolling per-source price history (already maintained for B3).
 
 ---
 

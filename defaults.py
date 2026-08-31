@@ -92,11 +92,13 @@ ACKABLE_ISSUE_IDS = frozenset({
 #         alert worth waking up for. The MEDIUM (peer-flat / merely quiet source)
 #         variant is unaffected: the shared MEDIUM rule below is tested before
 #         TIER1_IDS, so it still lands in Tier 3.
-#   B2 -> Tier 3. Two reference exchanges disagreeing is a data-quality fact, not
-#         a market incident: resolve_trusted_price already drops the outlier and
-#         keeps pricing running, and if that leaves the comparison wrong, B1 says
-#         so at Tier 1. Dashboard visibility is what B2 is for. TIER3_IDS is
-#         tested first, so this silences B2 at every severity.
+#   B2 -> Tier 2. Two reference exchanges disagreeing is not a market incident —
+#         resolve_trusted_price already drops the outlier and keeps pricing
+#         running — but a divergence that persists across consecutive cycles
+#         means the reference feed itself is degrading, which is worth telling
+#         someone before B1 starts pricing off whichever side survived.
+#         Confirmation is what keeps it quiet: a one-cycle blip on either
+#         exchange never leaves the dashboard.
 #   D1 -> Tier 3. A volume spike is context rather than an incident — nothing is
 #         broken and there is no operator action it implies. It was the noisiest
 #         id at Tier 1, and three-cycle confirmation only made it a slower kind of
@@ -108,13 +110,12 @@ ACKABLE_ISSUE_IDS = frozenset({
 # separate incident). Both survive in RETIRED_TIERS below so historical log rows
 # still classify the way they did when they were written.
 TIER1_IDS = frozenset({"A6", "B1"})
-# A2 is the only live Tier-2 id left, and it is severity-split, so classify_tier
-# answers for it before this set is ever consulted. Kept as the documented home
-# of "needs confirming" ids rather than emptied: B4-HIGH and G2-HIGH also land in
-# Tier 2 through their own severity splits, and the next id that needs
-# confirmation belongs here.
-TIER2_IDS = frozenset({"A2"})
-TIER3_IDS = frozenset({"A1", "A4", "A5", "B2", "D1", "F1"})
+# B2 is the only id this set actually decides: A2 is severity-split, so
+# classify_tier answers for it before this set is ever consulted, and it is kept
+# here only as documentation of where "needs confirming" ids live. B4-HIGH and
+# G2-HIGH likewise land in Tier 2 through their own severity splits.
+TIER2_IDS = frozenset({"A2", "B2"})
+TIER3_IDS = frozenset({"A1", "A4", "A5", "D1", "F1"})
 
 
 # Ids that no longer fire, mapped to how they used to classify. Existing daily

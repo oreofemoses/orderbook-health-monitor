@@ -106,9 +106,9 @@ NOTE on alert tiering & cooldowns:
     A2-CRITICAL (one-sided book), A6 (CRITICAL/HIGH), B1 (CRITICAL/HIGH),
     B4-CRITICAL, E1, E2, G2-CRITICAL
   Tier 2 — fire only after N consecutive cycles of the same issue, then 15-min cooldown:
-    A2-HIGH (spread + shallow book), B4-HIGH, G2-HIGH — N = TIER2_CONFIRM_CYCLES (3)
+    A2-HIGH (spread + shallow book), B2, B4-HIGH, G2-HIGH — N = TIER2_CONFIRM_CYCLES (3)
   Tier 3 — dashboard flag only, never fire Telegram:
-    A1, A4, A5, B2, D1, F1, A6-MEDIUM (monitor-only zero-baseline case — see
+    A1, A4, A5, D1, F1, A6-MEDIUM (monitor-only zero-baseline case — see
     check_layer_churn_stall), B1-MEDIUM (peer-flat reference — see resolve_trusted_price)
 
   NOTE: A6 was previously Tier 2 (gated by a now-removed per-A6 confirm-cycles
@@ -118,10 +118,12 @@ NOTE on alert tiering & cooldowns:
   Telegram noise. B1 was promoted the same way and keeps its own MEDIUM
   (peer-flat reference) variant in Tier 3 for the same reason.
 
-  NOTE: B2 and D1 are dashboard-only. B2 disagreeing sources are already handled
-  in-line by resolve_trusted_price dropping the outlier, and B1 (Tier 1) reports
-  it if the surviving price is still wrong; D1 is context, not an incident. See
-  the reasoning block above TIER1_IDS in defaults.py.
+  NOTE: B2 is Tier 2, not Tier 1. Disagreeing sources are already handled in-line
+  by resolve_trusted_price dropping the outlier, so a single-cycle divergence
+  needs no operator; a divergence that survives three consecutive cycles means
+  the reference feed itself is degrading and is worth sending. D1 stays
+  dashboard-only — it is context, not an incident. See the reasoning block above
+  TIER1_IDS in defaults.py.
 
   Consecutive counters and cooldown timestamps are persisted in health_state.json
   under each pair's "_alert" sub-key so they survive restarts. Counters reset to 0

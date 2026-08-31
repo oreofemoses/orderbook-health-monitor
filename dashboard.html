@@ -2180,10 +2180,10 @@ function renderPairs(pairs) {
   // standard issue tuple (see get_recent_spikes) and set alert_tier like every
   // other id, so no separate d1_spike gate is needed here.
   //
-  // Note that A1, B2 and D1 are all Tier 3 as of the 2026-08 retiering: a pair
-  // whose ONLY issue is a crossed book, a source disagreement or a volume spike
-  // now lands here as a flag, so it appears under "Show all" rather than in the
-  // default list.
+  // Note that A1 and D1 are both Tier 3 as of the 2026-08 retiering: a pair whose
+  // ONLY issue is a crossed book or a volume spike now lands here as a flag, so
+  // it appears under "Show all" rather than in the default list. B2 was retiered
+  // with them but to Tier 2, so a source disagreement stays in the default list.
   const visible = showAll
     ? pairs
     : pairs.filter(p => (p.alert_tier === 1 || p.alert_tier === 2));

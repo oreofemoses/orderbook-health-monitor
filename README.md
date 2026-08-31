@@ -492,20 +492,23 @@ The dashboard shows every issue found. Telegram is gated much more tightly.
 | Tier | Behaviour | Issues |
 |---|---|---|
 | 1 | Fires immediately on first detection | A2-CRITICAL, A6, B1, B4-CRITICAL, G2-CRITICAL, E1, E2 |
-| 2 | Must repeat 3 consecutive cycles first | A2-HIGH, B4-HIGH, G2-HIGH |
-| 3 | Dashboard flag only, never Telegram | A1, A4, A5, B2, D1, F1, A6-MEDIUM, B1-MEDIUM |
+| 2 | Must repeat 3 consecutive cycles first | A2-HIGH, B2, B4-HIGH, G2-HIGH |
+| 3 | Dashboard flag only, never Telegram | A1, A4, A5, D1, F1, A6-MEDIUM, B1-MEDIUM |
 
 The MEDIUM variants of A6 and B1 exist *specifically* to land in Tier 3 — they're
 the "visible but probably benign" cases (a monitor-only pair with a frozen book;
 a reference source that is quiet rather than dead). They outrank the id's own
 tier because `classify_tier` tests the MEDIUM rule before `TIER1_IDS`.
 
-**Why B1 pages and B2 doesn't.** A quoted price that has drifted from the trusted
-reference costs money every cycle it stands, so B1 fires on sight. Two reference
-sources merely disagreeing does not: `resolve_trusted_price` already drops the
-outlier and keeps pricing running, and if the survivor is still wrong, B1 says so
-at Tier 1. D1 sits alongside it — a volume spike is context, not an incident, and
-it was the noisiest id when it paged.
+**Why B1 pages on sight and B2 confirms first.** A quoted price that has drifted
+from the trusted reference costs money every cycle it stands, so B1 fires
+immediately. Two reference sources merely disagreeing does not:
+`resolve_trusted_price` already drops the outlier and keeps pricing running, so a
+one-cycle blip on either exchange needs nobody. A divergence that holds for three
+consecutive cycles is a different thing — the reference feed itself is degrading,
+and B1 is about to price off whichever side survived — so B2 sends at Tier 2.
+D1 stays dashboard-only: a volume spike is context, not an incident, and it was
+the noisiest id when it paged.
 
 **A3 and B3 are retired ids.** A3 merged into A2 and B3 into B1 in the 2026-08
 review. They still classify at their original tiers (`RETIRED_TIERS` in
