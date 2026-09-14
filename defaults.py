@@ -61,7 +61,7 @@ VOLUME_ARCHIVE_RETENTION_DAYS = 730
 ACKABLE_ISSUE_IDS = frozenset({
     "A1", "A2", "A3", "A4", "A5", "A6",
     "B1", "B2", "B3", "B4",
-    "D1", "F1", "G2",
+    "D1", "D2", "F1", "G2",
 })
 
 
@@ -115,7 +115,25 @@ TIER1_IDS = frozenset({"A6", "B1"})
 # here only as documentation of where "needs confirming" ids live. B4-HIGH and
 # G2-HIGH likewise land in Tier 2 through their own severity splits.
 TIER2_IDS = frozenset({"A2", "B2"})
-TIER3_IDS = frozenset({"A1", "A4", "A5", "D1", "F1"})
+#   D2 -> Tier 3 AT EVERY SEVERITY, deliberately, while the check is on trial.
+#         It is the newest id and the only one whose baseline is built from data
+#         this system collects itself rather than fetches, so its false-positive
+#         rate is genuinely unknown until it has run for a while against real
+#         hours. Dashboard-only until that is measured — an unproven check that
+#         pages at 3am gets the whole taxonomy distrusted, not just itself.
+#         TIER3_IDS is tested FIRST in classify_tier, so listing it here silences
+#         it at every severity (same mechanism as A1) and no severity branch below
+#         can override it.
+#         TO PROMOTE after the trial: drop "D2" from this set and restore the
+#         severity split it was written with —
+#             if issue_id == "D2":
+#                 if severity == "CRITICAL":   # complete stop, pages on sight
+#                     return 1
+#                 return 3 if severity == "MEDIUM" else 2   # HIGH confirms first
+#         placed next to the A2/B4/G2 branches. MEDIUM must stay Tier 3 in that
+#         split: it is the shallow end of the deviation, where Poisson noise on an
+#         hourly count is still a plausible explanation.
+TIER3_IDS = frozenset({"A1", "A4", "A5", "D1", "D2", "F1"})
 
 
 # Ids that no longer fire, mapped to how they used to classify. Existing daily
@@ -157,12 +175,17 @@ def classify_tier(issue_id: str, severity: str) -> int:
         # market is missing, which is unambiguous and pages on sight. Everything
         # else A2 emits (wide spread, thin layer count) still confirms first.
         return 1 if severity == "CRITICAL" else 2
+    # D2 has no severity branch here on purpose — it sits in TIER3_IDS, which is
+    # tested above, so it is dashboard-only at every severity while the check is
+    # on trial. See the TIER3_IDS comment for what to restore when promoting it.
     if severity == "MEDIUM" and issue_id in ("A6", "B1", "B3"):
         # A6: monitor-only zero-baseline case (see check_layer_churn_stall).
         # B1: an UNCHANGED reference source whose peer is flat or absent (quiet
         # market or single-source asset) — see resolve_trusted_price. Both emit
         # MEDIUM precisely to land here: dashboard visibility, no Telegram noise.
         # B3 is the retired id B1 absorbed that case from.
+        # D2 is NOT listed here — it is severity-split above and answers for its
+        # own MEDIUM, because that branch is tested before this rule.
         return 3
     if issue_id in TIER1_IDS:
         return 1
@@ -287,6 +310,44 @@ DEFAULT_CONFIG: dict = {
         "baseline_buckets": 20,   # how many prior cycles' churn scores to average for the self-baseline
         "ratio_threshold":  0.2,  # A6 fires when this cycle's churn drops below this fraction of baseline
     },
+    "fill_rate": {
+        # D2 — fill-rate deviation. Fed by ticker_fill_loop, which polls the ONE
+        # batched /markets/tickers call and counts markets whose 24h rolling
+        # `vol` increased since the previous poll. See fill_rate.py for why a
+        # fill has to be inferred this way (there is no trades endpoint) and why
+        # an "event" is a ~5s window rather than a trade.
+        #
+        # 5s matches Quidax's own ticker refresh, measured — polling faster
+        # resolves nothing extra because the server hands back the same snapshot.
+        # fill_rate.SERVER_TICKER_REFRESH_SECONDS documents that floor.
+        "poll_interval_seconds":    5,
+        "baseline_buckets":         24,   # prior CLOSED hours averaged for the self-baseline
+        "min_baseline_buckets":     6,    # refuse to judge until this many closed hours exist
+        # Below this many events/hour a market is too thin for a ratio test to
+        # mean anything (Poisson noise swamps it) — reported, never alerted.
+        # See classify_deviation's docstring for the arithmetic.
+        "min_baseline_events":      8.0,
+        "ratio_threshold":          0.35, # fires when the trailing hour drops below this fraction
+        "condensed_retention_days": 30,
+    },
+    # Markets that no longer trade because the ASSET WAS DELISTED, not because
+    # anything is wrong. These keep full, healthy-looking books — all seven were
+    # verified still quoting ~25 levels a side on 2026-09-14 — so no check in the
+    # taxonomy can distinguish them from a live market that has stopped filling,
+    # and D2 would fire on them permanently. There is no API signal to infer this
+    # from: `is_visible` on /markets does NOT track listing status (usdtngn and
+    # btcngn, the two busiest markets on the exchange, are both is_visible=false,
+    # while delisted algousdt is true — it tracks NGN-pair UI visibility). So the
+    # list is necessarily manual. Remove an entry here if a pair is ever relisted.
+    #
+    # These stay in `pairs` deliberately: the A-series structural checks still
+    # have something to say about a book that is being quoted, and dropping them
+    # from the pair list would silently remove them from the dashboard too. Only
+    # D2 skips them.
+    "delisted_markets": [
+        "algousdt", "rndrusdt", "slpusdt", "wifusdt",
+        "usdtcngn", "cngnngn", "usdtghs",
+    ],
     "alerts": {
         # Global suspend duration (minutes). When an operator taps "Suspend" next
         # to a pair in the config drawer, that pair's Telegram alerts are muted for

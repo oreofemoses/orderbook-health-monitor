@@ -10,6 +10,8 @@ data/
   daily_log_YYYY-MM-DD.csv
   suspensions.json   ← api writes / monitor reads: per-pair 30m Telegram mutes
   alert_acks.json    ← api writes / monitor reads: per-(pair, issue) acks
+  cycle_request.json ← api writes / monitor reads: dashboard "run a cycle now"
+  fill_rate_hourly.json ← monitor writes: D2 hourly fill events per market
 ```
 
 ## Setup
@@ -47,7 +49,35 @@ To watch it live, just keep your monitor running alongside uvicorn.
 | `POST /api/alert-acks` | set/clear one ack: `{symbol, issue_id, ack}` |
 | `GET /api/usdtngn-volume` | USDTNGN hourly base volume (USDT); `?start=&end=` (ISO date or datetime, NGT) |
 | `GET /api/usdtngn-volume/rolling` | USDTNGN trailing-window volume, `?minutes=` (default 60) |
+| `GET /api/fill-rate` | D2 hourly fill-event series + per-market baseline; `?market=&hours=` |
+| `POST /api/request-cycle` | ask the monitor to start a cycle now — see below |
 | `GET /health` | liveness check |
+
+### Requesting a cycle
+
+The dashboard's Refresh button does two things: it reloads what the API already
+holds (fast), then asks the monitor to run a fresh cycle (~45–60s). The second
+part is what actually produces new numbers — reloading alone just redraws
+whatever the last cycle wrote to `latest.csv`.
+
+`api.py` and `debug.py` are **separate processes** (`start.sh` runs the monitor in
+the background, then execs uvicorn) sharing only the data volume, so there is no
+call to make. The endpoint writes `cycle_request.json`; the monitor polls it once
+a second during its inter-cycle sleep and starts immediately when the stamp
+changes. Same api-writes / monitor-reads direction as `monitor_config.json` and
+`suspensions.json`.
+
+It returns **202 immediately** — it does not wait for the cycle. Callers detect
+completion by watching `summary.last_updated` on `/api/status` advance.
+
+Two responses worth handling:
+
+- **429** — throttled. One accepted request per 20s; a cycle is ~135 upstream
+  requests, so the throttle is what stops a held-down key becoming sustained load
+  on the exchange. Carries `retry_after_seconds`.
+- **202 with `monitor_stale: true`** — the request was recorded but the monitor
+  process may not be running to see it. The dashboard says so instead of spinning
+  until its timeout.
 
 ### USDTNGN volume
 
@@ -357,6 +387,83 @@ the absolute floor alone (`warmup_fallback: "absolute"`) — so a restart that
 wipes `health_state.json` doesn't create a blind spot. Setting it to `"suppress"`
 trades that for silence during warm-up instead. Setting `mode: "absolute"`
 bypasses the baseline permanently.
+
+### D2 — Fill rate deviation (MEDIUM/HIGH/CRITICAL)
+
+The only check that distinguishes a **quoted** book from a **traded** one. Every
+A-series check reads the order book, and a book can look flawless while nothing
+ever crosses it. Verified 2026-09-14: all seven delisted pairs were still quoting
+~25 levels a side, passed every structural check, and had not filled in five
+hours. A maker that has stopped hedging, a stuck matching engine, or a market
+that has quietly died all present the same way — as a healthy book.
+
+**There is no public trades endpoint on Quidax.** `/markets/{m}/trades`,
+`/trades?market=`, `/markets/{m}/recent_trades`, `/markets/{m}/fills`,
+`/markets/{m}/history` and `/markets/{m}/k_with_pending_trades` all 404.
+`/markets/{m}/order_book` looks like a fill feed — it returns individual orders
+with `state`, `executed_volume` and `trades_count` — but it is a 20-deep
+top-of-book sorted by price, padded with FILLED orders from 2018, and it honours
+neither paging nor sort (`page`, `limit`, `order_by`, `state` are all ignored;
+only `ask_limit`/`bid_limit` do anything). It cannot be walked toward the present.
+
+So fills are **inferred**: `ticker_fill_loop` polls the single batched
+`/markets/tickers` call every 5s, and a market whose 24h rolling `vol` increased
+since the previous poll is recorded as one fill **event**. One call covers all
+110 markets Quidax lists, which is what makes 5s sampling affordable.
+
+**An event is not a trade.** Quidax rebuilds its ticker roughly every 5 seconds
+(measured over 103 polls: `at` advanced in steps of 5s ×14, 3s ×4, 2s ×5, 1s ×3),
+so any number of fills inside one window collapses into a single observation. The
+series is a **floor** on trade count. That ceiling belongs to the exchange, not
+the sampler — polling faster resolves nothing, and the config rejects an interval
+below 5s. It is still ~3.5–4× finer than the best alternative (1-minute k-line
+candles with volume > 0), measured across 36 active markets.
+
+Two measurement details that matter:
+
+- **`vol`, not `last`.** `last` only moves when the price changes, so a run of
+  fills at one price is invisible to it — measured, `last` undercounts by ~3.8×.
+- **Only increases count.** `vol` is a 24h *rolling* window, so it also falls as
+  old trades age out. Treating any change as a fill roughly doubles the count on
+  quiet markets, where that decay dominates.
+
+D2 compares each market's trailing-hour event count against **its own** mean over
+prior closed hours — a self-baseline like A4 and A6, because measured rates span
+an order of magnitude across the pair list (usdtngn ~92 events/hr, aaveusdt ~10)
+and no fixed cutoff serves both ends. It fires below `ratio_threshold` (0.35) of
+that baseline, at CRITICAL (complete stop), HIGH (partial collapse) or MEDIUM
+(shallow dip).
+
+**D2 is Tier 3 — dashboard only, no Telegram — at every severity while the check
+is on trial.** It is the newest id and the only one whose baseline is built from
+data the monitor collects itself rather than fetches, so its false-positive rate
+is unknown until it has run against real hours. `defaults.py` carries the
+severity split to restore when promoting it.
+
+Three guards keep it quiet when it has nothing to say:
+
+- **`min_baseline_events` (8/hr).** Fill arrivals are Poisson-ish, so noise on a
+  count of *n* is about √n. At a baseline of 40/hr that's ±6 and a 0.35 ratio test
+  is nowhere near it; at 2/hr it's ±1.4, and a perfectly healthy market trips 0.35
+  by chance alone. Markets below the floor are reported, never alerted.
+- **`min_baseline_buckets` (6).** No verdict until six closed hours exist.
+- **The startup hour is discarded.** A process starting 59 minutes into an hour
+  would otherwise persist that partial count as a full one, biasing the baseline
+  *downward* — the direction that suppresses future alerts.
+
+**Delisted markets are excluded by config** (`delisted_markets` in
+`defaults.py`), because a delisted pair is indistinguishable from a dead one by
+construction and would otherwise alert forever. This list cannot be inferred from
+the API: `is_visible` on `/markets` tracks NGN-pair UI visibility, not listing
+status — usdtngn and btcngn, the two busiest markets on the exchange, are both
+`false`, while delisted algousdt is `true`.
+
+The hourly archive (`fill_rate_hourly.json`) is **load-bearing in the strictest
+sense in this codebase**. The volume archive can at least re-fetch ~12.5 days from
+the k-line endpoint; fill events exist nowhere upstream, so an hour the sampler
+did not observe can never be recovered from any endpoint.
+
+Series and per-market baselines are served at `GET /api/fill-rate`.
 
 ### E-series — infrastructure
 

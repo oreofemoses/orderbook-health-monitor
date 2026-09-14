@@ -3,6 +3,11 @@ Quidax Market Monitor — API-based, OHM alert taxonomy v3
 ──────────────────────────────────────────────────────────────────────────────
 Endpoints used:
   Quidax Depth       : GET /exchange-open-api/api/v1/markets/{symbol}/depth?limit=200
+  Quidax Tickers (D2): GET /exchange-open-api/api/v1/markets/tickers
+                       (EVERY market in one response — 110 as of 2026-09-14, against the
+                        45 in `pairs`. Polled every 5s by ticker_fill_loop; a market whose
+                        24h rolling `vol` INCREASED since the last poll is counted as one
+                        fill event. fetch_quidax_tickers().)
   Quidax K-Line (B4) : GET /exchange-open-api/api/v1/markets/{symbol}/k?period=1&limit=60
                        (1-minute candles, last 60 minutes — a rolling hourly window.
                         Feeds check_circuit_breaker_proximity ONLY. See KLINE_CANDLE_MINUTES/
@@ -54,6 +59,32 @@ Alert scope (see OHM spec doc for full definitions):
                                  the id moved, so one row answers "can I trust this
                                  price comparison" from both ends
   B4 Circuit Breaker Proximity — implemented, reference-free (uses Quidax's own k-line window)
+  D2 Fill Rate Deviation      — implemented, ALL markets. TIER 3 AT EVERY SEVERITY
+                                 while on trial (dashboard-only, never Telegram).
+                                 Own 5s polling task
+                                 (ticker_fill_loop), separate from the main cycle and
+                                 from G1's. Fires when a market's observed fill rate
+                                 collapses against THIS market's own hourly baseline —
+                                 a self-baseline like A4/A6, because measured rates span
+                                 an order of magnitude across the pair list (usdtngn
+                                 ~92 events/hr vs aaveusdt ~10) and no fixed cutoff can
+                                 serve both ends.
+
+                                 WHAT IT ADDS: it is the only check that distinguishes a
+                                 QUOTED book from a TRADED one. Every A-series check reads
+                                 the book, and a book can look flawless while nothing
+                                 crosses it — verified 2026-09-14, when all seven delisted
+                                 pairs still quoted ~25 levels a side, passed every
+                                 structural check, and had not filled in five hours.
+
+                                 Fills are INFERRED, not read: Quidax has no public trades
+                                 endpoint (see fill_rate.py for the full list of 404s and
+                                 why order_book is not one). An "event" is a ~5s window
+                                 containing at least one fill, not a trade — the exchange
+                                 refreshes its ticker on that cadence, so sub-5s polling
+                                 resolves nothing. Delisted markets are excluded via
+                                 config (defaults.py delisted_markets); nothing in the API
+                                 reports listing status, is_visible included.
   D1 Volume Spike             — implemented (unchanged trigger logic; context is a comparison
                                  against Quidax's own longer-term volume baseline. Runs on its
                                  OWN k-line fetch (fetch_kline_volume, default 60min candles /
@@ -108,8 +139,10 @@ NOTE on alert tiering & cooldowns:
   Tier 2 — fire only after N consecutive cycles of the same issue, then 15-min cooldown:
     A2-HIGH (spread + shallow book), B2, B4-HIGH, G2-HIGH — N = TIER2_CONFIRM_CYCLES (3)
   Tier 3 — dashboard flag only, never fire Telegram:
-    A1, A4, A5, D1, F1, A6-MEDIUM (monitor-only zero-baseline case — see
-    check_layer_churn_stall), B1-MEDIUM (peer-flat reference — see resolve_trusted_price)
+    A1, A4, A5, D1, D2 (at EVERY severity, while on trial — see defaults.py
+    TIER3_IDS for the split to restore), F1, A6-MEDIUM (monitor-only zero-baseline
+    case — see check_layer_churn_stall), B1-MEDIUM (peer-flat reference — see
+    resolve_trusted_price)
 
   NOTE: A6 was previously Tier 2 (gated by a now-removed per-A6 confirm-cycles
   knob). It now fires immediately on first occurrence like the other Tier-1 ids.
@@ -154,6 +187,7 @@ import json
 import math
 import os
 import time
+from decimal import Decimal, InvalidOperation
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -169,6 +203,10 @@ from defaults import (merge_config, default_config, UPTIME_FIXED_STEP_NGN,
 # the pure functions are used here — the module's urllib fetch is for api.py's
 # threadpool routes; this process fetches over aiohttp like everything else.
 import kline_volume as klv
+# D2 fill-rate helpers — same import-only contract as kline_volume above, shared
+# with api.py so the hourly bucketing and the baseline maths can't drift between
+# the monitor and the dashboard. All fetching for D2 happens here over aiohttp.
+import fill_rate as flr
 
 try:
     from dotenv import load_dotenv
@@ -190,6 +228,9 @@ if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_IDS:
     print("⚠️  QUIDAX_TG_BOT_TOKEN / QUIDAX_TG_CHAT_IDS not set — Telegram alerts are disabled.")
 
 BASE_API_URL        = "https://openapi.quidax.io/exchange-open-api/api/v1"
+# D2's feed — every Quidax market's ticker in one response. Not a per-pair URL on
+# purpose; see fetch_quidax_tickers.
+QUIDAX_TICKERS_URL   = f"{BASE_API_URL}/markets/tickers"
 MEXC_TICKER_URL      = "https://api.mexc.com/api/v3/ticker/price"
 KUCOIN_TICKER_URL    = "https://api.kucoin.com/api/v1/market/allTickers"
 
@@ -233,6 +274,19 @@ SUSPENSIONS_FILE = os.path.join(DATA_DIR, "suspensions.json")
 # on its own writes. Neither process ever needs to write the other's file.
 ALERT_ACKS_FILE = os.path.join(DATA_DIR, "alert_acks.json")
 
+# Manual cycle request — {"requested_at": ISO (NGT)}. Written by api.py when an
+# operator hits Refresh on the dashboard; read here to cut the inter-cycle sleep
+# short and run immediately.
+#
+# A FILE, not a call, because api.py and debug.py are separate PROCESSES that only
+# share /app/data (see start.sh: `python debug.py &` then `exec uvicorn`). There is
+# no channel between them but the volume, so this follows the same api-writes /
+# monitor-reads direction as monitor_config.json and suspensions.json — and for the
+# same reason those are separate files, it gets its own rather than riding
+# health_state.json, which this process rewrites wholesale at the end of each cycle
+# and would clobber a request written mid-cycle.
+CYCLE_REQUEST_FILE = os.path.join(DATA_DIR, "cycle_request.json")
+
 # G1 — USDTNGN depth-walk slippage tracker persistence. Separate files from
 # STATE_FILE deliberately: this data updates every 5s (vs. the main 60s cycle)
 # and has its own bucket/condense lifecycle — mixing it into health_state.json
@@ -252,6 +306,18 @@ DEPTH_WALK_CONDENSED_FILE = os.path.join(DATA_DIR, "usdtngn_slippage_hourly.json
 # the dashboard's longer windows.
 KLINE_VOLUME_SYMBOL = "usdtngn"
 KLINE_VOLUME_FILE   = os.path.join(DATA_DIR, "usdtngn_volume_hourly.json")
+
+# ── D2 fill-rate archive ──────────────────────────────────────────────────────
+# {"markets": {market: [{"ts": iso_hour, "events": int}, ...]}} — one point per
+# CLOSED NGT hour per market, which is what D2's self-baseline averages.
+#
+# LOAD-BEARING, like the volume archive above and for a stricter reason: that one
+# can at least re-fetch ~12.5 days from the k-line endpoint, whereas fill events
+# are inferred from a live ticker poll and exist NOWHERE upstream. An hour this
+# process did not observe can never be recovered from any endpoint. A restart
+# therefore loses the in-progress hour (and D2 stays quiet for a warm-up window
+# afterwards — see ticker_fill_loop), but every closed hour survives.
+FILL_RATE_FILE = os.path.join(DATA_DIR, "fill_rate_hourly.json")
 
 # ── Default configuration ─────────────────────────────────────────────────────
 # Canonical defaults now live in defaults.py, shared verbatim with api.py so the
@@ -296,6 +362,9 @@ def apply_config():
     global DEPTH_WALK_RAW_RETENTION_SECONDS, DEPTH_WALK_CONDENSED_RETENTION_DAYS
     global DEPTH_WALK_MID_WEIGHT_USDT
     global UPTIME_REFERENCE_PRICE, UPTIME_WEIGHT_USDT, UPTIME_BAND_PCT
+    global FILL_RATE_POLL_INTERVAL_SECONDS, FILL_RATE_BASELINE_BUCKETS
+    global FILL_RATE_MIN_BASELINE_BUCKETS, FILL_RATE_MIN_BASELINE_EVENTS
+    global FILL_RATE_RATIO_THRESHOLD, FILL_RATE_RETENTION_DAYS, DELISTED_MARKETS
 
     cfg = _load_config_from_disk()
 
@@ -410,6 +479,27 @@ def apply_config():
     # p = n/s*100 — constant given config, recomputed on each apply.
     UPTIME_BAND_PCT        = UPTIME_FIXED_STEP_NGN / UPTIME_REFERENCE_PRICE * 100.0
 
+    # D2 — fill-rate deviation (all markets, independent 5s task)
+    fr = cfg.get("fill_rate", {})
+    _fr_interval = float(fr.get("poll_interval_seconds", 5))
+    if _fr_interval < flr.SERVER_TICKER_REFRESH_SECONDS:
+        # Quidax rebuilds its ticker snapshot roughly every 5s, so a shorter
+        # interval re-reads a snapshot that has not changed: same event count,
+        # more load on the exchange, and a duplicate-suppression burden we would
+        # then have to carry. Clamp rather than honour it. Raising it above 5s is
+        # allowed — that only trades resolution for request volume, which is a
+        # legitimate thing to want.
+        _fr_interval = flr.SERVER_TICKER_REFRESH_SECONDS
+    FILL_RATE_POLL_INTERVAL_SECONDS = _fr_interval
+    FILL_RATE_BASELINE_BUCKETS      = int(fr.get("baseline_buckets", 24))
+    FILL_RATE_MIN_BASELINE_BUCKETS  = int(fr.get("min_baseline_buckets", 6))
+    FILL_RATE_MIN_BASELINE_EVENTS   = float(fr.get("min_baseline_events", 8.0))
+    FILL_RATE_RATIO_THRESHOLD       = float(fr.get("ratio_threshold", 0.35))
+    FILL_RATE_RETENTION_DAYS        = float(fr.get("condensed_retention_days", 30))
+    # Delisted assets — D2 skips these entirely. Not inferable from the API; see
+    # the defaults.py comment on why is_visible can't stand in for it.
+    DELISTED_MARKETS = {str(m).lower() for m in cfg.get("delisted_markets", [])}
+
     # Derived
     MAX_CONCURRENT_PAIRS = 10   # not user-facing yet; keep fixed
     MONITOR_ONLY_SYMBOLS = {sym for sym, tgt in PAIRS if tgt is None}
@@ -460,6 +550,13 @@ DEPTH_WALK_CONDENSED_RETENTION_DAYS: float = 365
 UPTIME_REFERENCE_PRICE:              float = 1400
 UPTIME_WEIGHT_USDT:                  float = 100_000
 UPTIME_BAND_PCT:                     float = UPTIME_FIXED_STEP_NGN / 1400 * 100.0
+FILL_RATE_POLL_INTERVAL_SECONDS:     float = 5
+FILL_RATE_BASELINE_BUCKETS:          int   = 24
+FILL_RATE_MIN_BASELINE_BUCKETS:      int   = 6
+FILL_RATE_MIN_BASELINE_EVENTS:       float = 8.0
+FILL_RATE_RATIO_THRESHOLD:           float = 0.35
+FILL_RATE_RETENTION_DAYS:            float = 30
+DELISTED_MARKETS:                    set   = set()
 apply_config()  # populate from disk immediately
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -564,9 +661,13 @@ FETCH_RETRY_BACKOFF = 1.5   # seconds, doubles each retry
 # and G2 share it) and kline-volume (D1's own). Named because the connection
 # pool has to be sized against it — see the TCPConnector in main().
 FETCHES_PER_PAIR = 3
-# Spare connections held back for the depth-walk poller and the volume archive,
-# so a background loop is never queued behind a full cycle.
-BACKGROUND_CONNECTIONS = 5
+# Spare connections held back for the three background loops — the depth-walk
+# poller, the volume archive and the D2 fill-rate sampler — so none of them is
+# ever queued behind a full cycle. Raised from 5 when the fill-rate sampler was
+# added: it polls every 5s like the depth walker, and the two of them sharing
+# headroom sized for one would reintroduce exactly the queueing that the
+# reserved pool exists to prevent.
+BACKGROUND_CONNECTIONS = 8
 
 
 async def _request_json(session: aiohttp.ClientSession, url: str, timeout: int = 10) -> dict | list:
@@ -689,6 +790,40 @@ async def fetch_kline_volume_hourly(session: aiohttp.ClientSession, symbol: str,
            f"?period={klv.HOUR_MINUTES}&limit={limit}&timestamp={timestamp_s}")
     payload = await _request_json(session, url, timeout=30)
     return payload["data"]
+
+
+async def fetch_quidax_tickers(session: aiohttp.ClientSession) -> dict[str, dict]:
+    """
+    D2 feed. ONE call returning every market Quidax lists — 110 of them as of
+    2026-09-14, against the 45 in `pairs`. That batching is the whole reason D2
+    can afford 5s sampling: covering the configured pairs individually would be
+    45 requests per tick instead of 1.
+
+    Returns {market: {"vol": str|None, "last": str|None, "at": int|None}}.
+
+    Values are kept as STRINGS rather than parsed to float, deliberately. The
+    only question asked of `vol` is "did it change", and exact decimal strings
+    answer that without float round-tripping turning a real 9-decimal change
+    into an equal pair of floats. The comparison to "did it INCREASE" is done
+    with Decimal at the call site, where a parse failure can be handled per
+    market instead of poisoning the batch.
+
+    Markets whose ticker is missing `vol` entirely are returned with None rather
+    than skipped, so the caller can tell "market absent from the response" from
+    "market present but quoting nothing" — the first is a listing change, the
+    second is a market with no trades yet today.
+    """
+    payload = await _request_json(session, QUIDAX_TICKERS_URL, timeout=15)
+    data = payload["data"] if isinstance(payload, dict) else payload
+    out: dict[str, dict] = {}
+    for market, blob in (data or {}).items():
+        ticker = (blob or {}).get("ticker") or {}
+        out[str(market).lower()] = {
+            "vol":  None if ticker.get("vol") is None else str(ticker["vol"]),
+            "last": None if ticker.get("last") is None else str(ticker["last"]),
+            "at":   (blob or {}).get("at"),
+        }
+    return out
 
 
 async def fetch_mexc_tickers(session: aiohttp.ClientSession) -> dict[str, dict]:
@@ -1057,6 +1192,84 @@ def check_layer_churn_stall(churn_score: Optional[float], baseline: Optional[flo
             f"{baseline:.0%} typical for this market (ratio {ratio:.2f}, "
             f"fires below {LAYER_CHURN_RATIO_THRESHOLD:.2f})")]
     return []
+
+
+def check_fill_rate_deviation(symbol: str, fill_snapshot: Optional[dict]) -> tuple[list, dict]:
+    """
+    D2 — fires when a market's fill rate collapses relative to THIS market's own
+    typical rate. Returns (issues, metrics); metrics are reported whether or not
+    the check fires, same convention as every other check in this module.
+
+    What D2 actually adds to the taxonomy: it is the ONLY check that can tell a
+    quoted book from a traded one. Every A-series check reads the book, and a
+    book can look perfect while nothing crosses it — verified 2026-09-14, when
+    all seven delisted pairs were still quoting ~25 levels a side with zero fills
+    in five hours, and every structural check passed them. A maker that has
+    stopped hedging, a stuck matching engine, a market that has silently died:
+    all of them present as a healthy book.
+
+    The data comes from ticker_fill_loop (a global 5s task), not from this
+    pair's own fetch — so unlike the other checks here, D2 reads a snapshot
+    captured out-of-cycle. `fill_snapshot` is None until the loop has warmed,
+    which is the normal state for the first hour after a restart.
+    """
+    metrics: dict = {
+        "fill_events_1h":        None,
+        "fill_baseline_hourly":  None,
+        "fill_baseline_hours":   0,
+        "fill_ratio":            None,
+        "fill_rate_threshold":   FILL_RATE_RATIO_THRESHOLD,
+        "fill_rate_status":      "warming",
+    }
+
+    if symbol in DELISTED_MARKETS:
+        # Delisted, not broken. Skipped before any judgement so the permanent
+        # zero can never reach classify_deviation's zero-baseline branch. Still
+        # reported, so the dashboard shows WHY this market reads zero rather
+        # than leaving an unexplained blank next to a healthy-looking book.
+        metrics["fill_rate_status"] = "delisted"
+        return [], metrics
+
+    if not fill_snapshot:
+        return [], metrics
+
+    current  = fill_snapshot.get("events_1h")
+    baseline = fill_snapshot.get("baseline")
+    buckets  = fill_snapshot.get("baseline_hours", 0)
+
+    metrics["fill_events_1h"]       = current
+    metrics["fill_baseline_hourly"] = (round(baseline, 2) if baseline is not None else None)
+    metrics["fill_baseline_hours"]  = buckets
+    if baseline:
+        metrics["fill_ratio"] = round((current or 0) / baseline, 3)
+
+    if not fill_snapshot.get("window_complete"):
+        # The trailing-hour count is still filling up after a restart. Comparing
+        # a partial window against a mean of full hours reads as a collapse for
+        # up to 59 minutes — precisely the false CRITICAL that would train an
+        # operator to ignore D2 on every deploy.
+        metrics["fill_rate_status"] = "warming"
+        return [], metrics
+
+    verdict = flr.classify_deviation(
+        current, baseline, buckets,
+        min_buckets=FILL_RATE_MIN_BASELINE_BUCKETS,
+        min_baseline_events=FILL_RATE_MIN_BASELINE_EVENTS,
+        ratio_threshold=FILL_RATE_RATIO_THRESHOLD,
+    )
+
+    if buckets < FILL_RATE_MIN_BASELINE_BUCKETS:
+        metrics["fill_rate_status"] = "warming"
+    elif baseline is not None and 0 < baseline < FILL_RATE_MIN_BASELINE_EVENTS:
+        # Reported but never alerted — too thin for a ratio test to carry signal.
+        metrics["fill_rate_status"] = "too_thin"
+    else:
+        metrics["fill_rate_status"] = "alert" if verdict else "ok"
+
+    if verdict is None:
+        return [], metrics
+    severity, reason = verdict
+    return [("D2", severity, reason)], metrics
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -2199,6 +2412,231 @@ async def depth_walk_loop(session: aiohttp.ClientSession):
         await asyncio.sleep(max(0.0, delay))
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# D2 — FILL-RATE SAMPLING (all markets, independent 5s task)
+# ══════════════════════════════════════════════════════════════════════════════
+# In-memory sampler state, owned exclusively by ticker_fill_loop. run_cycle reads
+# it through fill_rate_snapshot() and never mutates it.
+#
+#   _FILL_LAST_VOL   {market: vol string as last seen}
+#   _FILL_EVENTS     {market: [epoch seconds of each fill event in the last hour]}
+#   _FILL_HOUR       the NGT hour currently accumulating, as an iso string
+#   _FILL_HOUR_COUNT {market: events so far in _FILL_HOUR}
+#   _FILL_STARTED_AT monotonic clock at first successful poll, or None
+#
+# Plain dicts with no lock: asyncio is single-threaded and every mutation below
+# happens between awaits, so a reader in run_cycle can never observe a half-built
+# structure. (The same reasoning the depth-walk raw bucket relies on.)
+#   _FILL_HOUR_PARTIAL whether the accumulating hour was observed from its start
+_FILL_LAST_VOL:   dict[str, str] = {}
+_FILL_EVENTS:     dict[str, list] = {}
+_FILL_HOUR:       Optional[str] = None
+_FILL_HOUR_COUNT: dict[str, int] = {}
+_FILL_STARTED_AT: Optional[float] = None
+_FILL_HOUR_PARTIAL: bool = True
+
+
+def load_fill_archive() -> dict:
+    if os.path.exists(FILL_RATE_FILE):
+        try:
+            with open(FILL_RATE_FILE) as f:
+                data = json.load(f)
+            markets = data.get("markets")
+            if isinstance(markets, dict):
+                return markets
+        except Exception as e:
+            print(f"⚠️  Could not read fill-rate archive: {e} — starting empty")
+    return {}
+
+
+def save_fill_archive(markets: dict):
+    try:
+        tmp = FILL_RATE_FILE + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump({"markets": markets}, f)
+        os.replace(tmp, FILL_RATE_FILE)   # atomic; a crash mid-write can't truncate the archive
+    except Exception as e:
+        print(f"⚠️  Could not write fill-rate archive: {e}")
+
+
+def _prune_fill_events(now_epoch: float):
+    """Drop event timestamps older than the trailing hour, in place."""
+    cutoff = now_epoch - flr.HOUR_MINUTES * 60
+    for market, stamps in _FILL_EVENTS.items():
+        if stamps and stamps[0] < cutoff:
+            _FILL_EVENTS[market] = [t for t in stamps if t >= cutoff]
+
+
+def fill_rate_snapshot(symbol: str, archive: dict) -> Optional[dict]:
+    """
+    Build D2's per-market view: the trailing-hour event count, the self-baseline
+    over prior CLOSED hours, and whether the trailing window is actually full.
+
+    Returns None only when the sampler has never completed a poll. `archive` is
+    passed in rather than re-read from disk per pair — run_cycle loads it once.
+
+    The in-progress hour is deliberately excluded from the baseline: it is a
+    partial count, and letting it into its own baseline would drag the reference
+    toward the very number being judged.
+    """
+    if _FILL_STARTED_AT is None:
+        return None
+
+    # Read the trailing-hour list as the sampler last pruned it (every poll, so
+    # at most one interval stale) rather than re-pruning here — this runs once
+    # per pair per cycle and must not mutate state the loop owns.
+    events_1h = len(_FILL_EVENTS.get(symbol, []))
+    baseline, buckets = flr.baseline_from_history(
+        archive.get(symbol, []), FILL_RATE_BASELINE_BUCKETS)
+
+    return {
+        "events_1h":       events_1h,
+        "baseline":        baseline,
+        "baseline_hours":  buckets,
+        # A full trailing hour of observation has to have elapsed since the
+        # sampler started, or the count is structurally short regardless of how
+        # the market is behaving.
+        "window_complete": (time.monotonic() - _FILL_STARTED_AT) >= flr.HOUR_MINUTES * 60,
+    }
+
+
+async def ticker_fill_loop(session: aiohttp.ClientSession):
+    """
+    Standalone 5s task — independent of the main 60s cycle, like depth_walk_loop.
+    One batched /markets/tickers call per tick; a market whose 24h rolling `vol`
+    INCREASED since the previous tick is recorded as one fill event.
+
+    Only increases count. `vol` is a 24h rolling window, so it also falls as old
+    trades age out — treating any change as a fill would roughly double the count
+    on quiet markets, where the decay is the dominant source of movement.
+
+    Comparison is on Decimal parsed from the raw string, not float: these are
+    high-precision decimal strings (btcngn quotes 8+ decimals on a ~0.65 figure),
+    and a small real increase can round-trip to an equal pair of floats. A market
+    whose value won't parse is skipped for that tick and re-baselined on the next,
+    so one malformed field can't wedge the market permanently.
+
+    Like depth_walk_loop, EVERY step is inside the outer guard — the hour roll
+    and the archive write included. An exception escaping this coroutine would
+    end the task silently, and the only symptom would be D2 going quiet while the
+    monitor logged on happily. supervise() at the call site is the second half of
+    that protection.
+    """
+    global _FILL_HOUR, _FILL_STARTED_AT, _FILL_HOUR_PARTIAL
+
+    archive = load_fill_archive()
+    _FILL_HOUR = flr.floor_to_hour(ngt_now()).isoformat()
+    # The hour in progress when this loop starts was, by definition, not watched
+    # from its beginning — the process may have started 59 minutes into it. Its
+    # count is therefore an undercount of unknown size, and writing it as though
+    # it were a full hour would drag every affected market's baseline down and,
+    # worse, do so in the direction that SUPPRESSES D2 (a lower baseline makes the
+    # next real collapse look proportionally smaller). One discarded hour per
+    # restart is a much cheaper price than a baseline quietly biased by deploys.
+    _FILL_HOUR_PARTIAL = True
+
+    # Fixed-rate schedule on the monotonic clock, for the same reason
+    # depth_walk_loop uses one: sleeping the interval AFTER the work makes the
+    # real period "interval + however long the poll took", which silently thins
+    # the sample rate whenever the main cycle blocks the event loop in pandas.
+    next_tick = time.monotonic()
+
+    while True:
+        try:
+            try:
+                tickers = await fetch_quidax_tickers(session)
+                now = time.time()
+
+                for market, blob in tickers.items():
+                    raw_vol = blob.get("vol")
+                    if raw_vol is None:
+                        continue
+                    prev = _FILL_LAST_VOL.get(market)
+                    _FILL_LAST_VOL[market] = raw_vol
+                    if prev is None or prev == raw_vol:
+                        continue            # first sighting, or nothing traded
+                    try:
+                        if Decimal(raw_vol) <= Decimal(prev):
+                            continue        # 24h window sliding, not a fill
+                    except (InvalidOperation, ValueError):
+                        continue            # unparseable — re-baselined next tick
+                    _FILL_EVENTS.setdefault(market, []).append(now)
+                    _FILL_HOUR_COUNT[market] = _FILL_HOUR_COUNT.get(market, 0) + 1
+
+                _prune_fill_events(now)
+                if _FILL_STARTED_AT is None:
+                    # Set only after a poll actually succeeded, so the trailing
+                    # window can't be declared complete off the back of an hour
+                    # of failed requests.
+                    _FILL_STARTED_AT = time.monotonic()
+            except Exception as e:
+                print(f"⚠️  Fill-rate fetch error: {e}")
+
+            # ── Roll the hour bucket once the NGT hour turns ────────────────
+            current_hour = flr.floor_to_hour(ngt_now()).isoformat()
+            if current_hour != _FILL_HOUR and _FILL_HOUR_PARTIAL:
+                # First roll after startup: discard rather than persist. See the
+                # _FILL_HOUR_PARTIAL comment at the top of this function.
+                print(f"  [D2] fill-rate hour {_FILL_HOUR} discarded — "
+                      f"process started mid-hour, count is not a full hour")
+                _FILL_HOUR_COUNT.clear()
+                _FILL_HOUR = current_hour
+                _FILL_HOUR_PARTIAL = False
+            elif current_hour != _FILL_HOUR:
+                # A point is written for EVERY market in scope, not just the ones
+                # that traded — an hour with no fills is the observation D2 cares
+                # most about, and it only exists if a zero is recorded for it.
+                #
+                # Scope is the union of three sets, and all three are load-bearing:
+                #   • configured pairs — so a market that has NEVER filled still
+                #     accumulates history. Without this it never enters the archive
+                #     at all, so it has no baseline, so classify_deviation's
+                #     zero-baseline branch can never fire — on precisely the market
+                #     that branch exists for (one already dead when monitoring
+                #     started). Seeding from PAIRS is what makes that case reachable.
+                #   • markets already in the archive — so one that goes quiet keeps
+                #     recording zeros instead of simply ceasing to contribute
+                #     points, which would freeze its baseline at the pre-outage
+                #     value and hide the outage behind stale history.
+                #   • markets that traded this hour — the ordinary case.
+                # Deliberately NOT every market the ticker returns: that is 110
+                # markets against 45 configured, and D2 only ever judges the
+                # configured ones, so the rest would be pure archive growth.
+                in_scope = (set(archive)
+                            | set(_FILL_HOUR_COUNT)
+                            | {sym for sym, _ in PAIRS})
+                for market in in_scope:
+                    archive[market] = flr.prune_points(
+                        flr.merge_points(archive.get(market, []),
+                                         [{"ts": _FILL_HOUR,
+                                           "events": _FILL_HOUR_COUNT.get(market, 0)}]),
+                        FILL_RATE_RETENTION_DAYS)
+                save_fill_archive(archive)
+                active = sum(1 for c in _FILL_HOUR_COUNT.values() if c)
+                print(f"  [D2] fill-rate hour {_FILL_HOUR} closed — "
+                      f"{active} markets with fills, {len(archive)} tracked")
+                _FILL_HOUR_COUNT.clear()
+                _FILL_HOUR = current_hour
+
+        except asyncio.CancelledError:
+            raise                       # shutdown, not an error to swallow
+        except Exception as e:
+            print(f"⚠️  Fill-rate loop error (continuing): {e}")
+
+        interval = FILL_RATE_POLL_INTERVAL_SECONDS
+        if not interval or interval < 0.1:
+            interval = 0.1
+        next_tick += interval
+        delay = next_tick - time.monotonic()
+        if delay < 0:
+            # Fell behind — resync to the next whole tick rather than firing a
+            # burst of catch-up polls at the exchange.
+            skipped = int(-delay // interval) + 1
+            next_tick += skipped * interval
+            delay = next_tick - time.monotonic()
+        await asyncio.sleep(max(0.0, delay))
+
+
 # ── USDTNGN hourly volume archive ─────────────────────────────────────────────
 # One point per closed NGT hour: {"ts": iso, "volume": base_volume}. Kept sorted
 # ascending by ts and unique per hour, so api.py can merge it with a live fetch
@@ -2494,6 +2932,7 @@ async def process_pair(
     layer_hist_root: dict,
     depth_hist_root: dict,
     ref_metrics: Optional[dict] = None,
+    fill_snapshot: Optional[dict] = None,
 ) -> Optional[dict]:
     """
     Fetches depth + kline (B4) + kline-volume (D1, its own independent call — see
@@ -2712,9 +3151,20 @@ async def process_pair(
                 baseline, bucket_count = update_volume_baseline(symbol, window_info["quote_volume"], vol_hist_root)
             issues += get_recent_spikes(window_info, symbol, baseline, bucket_count)
 
-            # Fold once more after D1 in case a dedupe is ever needed (D1 currently
-            # only emits 0 or 1 tuple, but this keeps the invariant "issues is deduped
-            # before status/tier/firing" holding regardless of future edits).
+            # ── D2 — Fill rate deviation ────────────────────────────────────
+            # Reads the out-of-cycle sampler's snapshot rather than this pair's
+            # own fetch (ticker_fill_loop owns the feed); run_cycle resolves it
+            # per pair and passes it in, so process_pair stays a pure function of
+            # its arguments. The metrics it returns are merged whether or not it
+            # fires — a passing market showing "41 events/h vs 38 typical" is the
+            # evidence that makes a later alert legible.
+            d2_issues, d2_metrics = check_fill_rate_deviation(symbol, fill_snapshot)
+            issues += d2_issues
+            metrics.update(d2_metrics)
+
+            # Fold once more after D1/D2 in case a dedupe is ever needed (each
+            # currently emits 0 or 1 tuple, but this keeps the invariant "issues is
+            # deduped before status/tier/firing" holding regardless of future edits).
             issues = dedupe_actionable(issues)
 
             # Thresholds each check judged against. Carried on the row rather than
@@ -3190,7 +3640,12 @@ async def run_cycle(shared_state: dict, session: aiohttp.ClientSession, cycle_nu
         ref_issues_by_asset[asset] = issues
         ref_metrics_by_asset[asset] = asset_metrics
 
-    # ── Step 3: per-pair checks (A-series, B1, B4, D1) ──────────────────────────
+    # ── Step 3: per-pair checks (A-series, B1, B4, D1, D2) ─────────────────────
+    # D2's archive is read ONCE here rather than per pair: it is a single file
+    # holding every market's hourly series, and re-reading it 45 times a cycle
+    # would be 45 identical disk reads for one answer. The in-memory trailing-hour
+    # counts come from ticker_fill_loop's own state via fill_rate_snapshot.
+    fill_archive = load_fill_archive()
     tasks = []
     for sym, tgt in PAIRS:
         base, quote = split_symbol(sym)
@@ -3204,6 +3659,7 @@ async def run_cycle(shared_state: dict, session: aiohttp.ClientSession, cycle_nu
             vol_hist_root=vol_hist_root,
             layer_hist_root=layer_hist_root,
             depth_hist_root=depth_hist_root,
+            fill_snapshot=fill_rate_snapshot(sym, fill_archive),
         ))
     raw_results = await asyncio.gather(*tasks)
     results = [r for r in raw_results if r is not None]
@@ -3485,10 +3941,73 @@ async def run_cycle(shared_state: dict, session: aiohttp.ClientSession, cycle_nu
 # ENTRY POINT
 # ══════════════════════════════════════════════════════════════════════════════
 
+# Timestamp of the most recent manual request this process has already acted on.
+# Compared as a STRING, not a parsed datetime: the API writes it and the monitor
+# reads it back verbatim, so equality is the only question, and string comparison
+# can't disagree with itself about timezone handling. Seeded at startup from
+# whatever is already on disk so a request left over from a previous run (or
+# written while the process was down) does not fire a surprise cycle on boot.
+_last_served_cycle_request: Optional[str] = None
+
+
+def read_cycle_request() -> Optional[str]:
+    """Return the requested_at stamp from the request file, or None."""
+    if not os.path.exists(CYCLE_REQUEST_FILE):
+        return None
+    try:
+        with open(CYCLE_REQUEST_FILE) as f:
+            return (json.load(f) or {}).get("requested_at")
+    except Exception:
+        # A torn or malformed file is not worth logging every second — the next
+        # write repairs it, and treating it as "no request" is the safe reading.
+        return None
+
+
+async def sleep_until_next_cycle(total_seconds: float,
+                                 poll_seconds: float = 1.0) -> bool:
+    """
+    Sleep for total_seconds, but wake early if the dashboard asks for a cycle.
+
+    Returns True if a manual request cut the sleep short, False if it ran to term.
+
+    Polls a file rather than awaiting an event because the requester is a
+    different PROCESS (see CYCLE_REQUEST_FILE). A 1s poll is a rounding error
+    against a 60s cycle, and it bounds the operator's wait at ~1s rather than the
+    up-to-60s they would otherwise sit through — which is the entire point of the
+    button.
+
+    Deliberately does NOT clear the request file: this process only ever reads
+    within /app/data files that api.py owns, and one-way ownership is what keeps
+    the two free of write races. Suppression is handled by remembering the stamp
+    already served, so a stale file can fire at most one extra cycle even if the
+    API never rewrites it.
+    """
+    global _last_served_cycle_request
+
+    deadline = time.monotonic() + total_seconds
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return False
+        await asyncio.sleep(min(poll_seconds, remaining))
+
+        requested = read_cycle_request()
+        if requested and requested != _last_served_cycle_request:
+            _last_served_cycle_request = requested
+            return True
+
+
 async def main(run_once: bool = False):
+    global _last_served_cycle_request
     os.makedirs(DATA_DIR, exist_ok=True)
     shared_state = load_state()
     cycle_num    = 0
+
+    # Treat any request already on disk as served. Without this, a request written
+    # just before a restart (or one left behind by a crash) would be read as new on
+    # the first sleep and fire an unasked-for cycle straight after boot — when the
+    # monitor has just run cycle 1 anyway.
+    _last_served_cycle_request = read_cycle_request()
 
     # Pool sizing. process_pair gathers THREE requests per pair (depth, kline,
     # kline-volume) inside the MAX_CONCURRENT_PAIRS semaphore, so the cycle puts
@@ -3530,6 +4049,16 @@ async def main(run_once: bool = False):
         volume_task = supervise(lambda: kline_volume_loop(session),
                                 "USDTNGN volume archive")
 
+        # D2 fill-rate sampler — independent 5s task over ONE batched tickers
+        # call. Supervised for the strongest version of the reason above: an
+        # hour this loop fails to observe is gone for good. There is no trades
+        # endpoint and no historical fill feed to backfill from, so unlike the
+        # volume archive it cannot repair its own holes on the next pass.
+        fill_rate_task = supervise(lambda: ticker_fill_loop(session),
+                                   "fill-rate sampler")
+        print(f"🚀 Starting fill-rate sampler — {FILL_RATE_POLL_INTERVAL_SECONDS}s poll, "
+              f"all markets in one call, {len(DELISTED_MARKETS)} delisted excluded from D2")
+
         while True:
             cycle_num += 1
             print(f"\n{'═'*50}\n  Cycle {cycle_num}  —  {ngt_now().strftime('%Y-%m-%d %H:%M:%S')} NGT\n{'═'*50}")
@@ -3539,7 +4068,9 @@ async def main(run_once: bool = False):
                 print(f"⚠️  Cycle {cycle_num} top-level error: {e}")
 
             print(f"💤 Sleeping {CYCLE_SLEEP_SECONDS}s until next cycle…")
-            await asyncio.sleep(CYCLE_SLEEP_SECONDS)
+            triggered = await sleep_until_next_cycle(CYCLE_SLEEP_SECONDS)
+            if triggered:
+                print("⚡ Manual cycle requested from the dashboard — starting now")
 
 
 if __name__ == "__main__":

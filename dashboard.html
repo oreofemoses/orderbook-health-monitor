@@ -180,6 +180,47 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
 .btn:hover { background: var(--border); color: var(--text-primary); }
 .btn-accent { background: var(--accent); color: #fff; border-color: var(--accent); }
 .btn-accent:hover { background: #6d28d9; color: #fff; }
+.btn:disabled { opacity: .6; cursor: not-allowed; }
+.btn:disabled:hover { background: var(--bg-base); color: var(--text-secondary); }
+
+/* ── Refresh feedback ────────────────────────────────────────────────────────
+   The Refresh button used to give no signal at all: it re-fetched and re-rendered,
+   but with cached data and a sub-second round-trip the table often redrew
+   identically, so a click was indistinguishable from a dead button. Two cues fix
+   that — a spinning icon on the button itself, and the page-top bar below.       */
+.spin { animation: spin 0.8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* Page-top progress bar. Fixed to the viewport rather than placed in the header
+   so it can't shift layout when it appears — a refresh control that nudges the
+   page down as it runs is worse than no indicator. */
+#refresh-progress {
+  position: fixed; top: 0; left: 0; right: 0; height: 3px;
+  background: transparent; z-index: 9999; pointer-events: none;
+  opacity: 0; transition: opacity .25s;
+}
+#refresh-progress.active { opacity: 1; }
+#refresh-progress .bar {
+  height: 100%; width: 0%;
+  background: linear-gradient(90deg, var(--accent-mid), var(--accent));
+  /* Eased so the bar decelerates toward each checkpoint. A linear fill reads as
+     a countdown and looks stalled whenever a phase runs long; this reads as
+     progress even when the wait is genuinely open-ended. */
+  transition: width .4s cubic-bezier(.25,.8,.25,1);
+  box-shadow: 0 0 8px var(--accent-mid);
+}
+#refresh-progress.error .bar {
+  background: #ef4444; box-shadow: 0 0 8px rgba(239,68,68,.6);
+}
+
+/* Short-lived status line next to the button — says which phase is running, so a
+   long wait is explained rather than just slow. */
+.refresh-note {
+  font-size: 11px; color: var(--text-secondary);
+  white-space: nowrap; opacity: 0; transition: opacity .2s;
+}
+.refresh-note.show { opacity: 1; }
+.refresh-note.err { color: var(--red-text, #ef4444); }
 
 .content { padding: 24px; flex: 1; }
 
@@ -834,11 +875,17 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
       <button class="btn" id="theme-toggle" onclick="toggleTheme()" title="Toggle dark mode" aria-label="Toggle dark mode">
         <i class="ti ti-moon" id="theme-icon"></i>
       </button>
-      <button class="btn" onclick="fetchAndRender()">
-        <i class="ti ti-refresh"></i> Refresh
+      <span class="refresh-note" id="refresh-note"></span>
+      <button class="btn" id="refresh-btn" onclick="refreshNow()"
+              title="Reload the dashboard and ask the monitor to run a cycle now">
+        <i class="ti ti-refresh" id="refresh-icon"></i> <span id="refresh-label">Refresh</span>
       </button>
     </div>
   </header>
+
+  <!-- Refresh progress. Fixed-position, outside .content, so showing it can never
+       reflow the page. Driven by refreshNow(). -->
+  <div id="refresh-progress"><div class="bar" id="refresh-bar"></div></div>
 
   <div class="content">
     <!-- Error banner -->
@@ -1636,6 +1683,41 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
         </div>
       </div>
 
+      <!-- Fill rate (D2) -->
+      <div class="config-section">
+        <div class="config-section-title">
+          <i class="ti ti-activity-heartbeat" style="font-size:14px"></i>
+          Fill rate (D2)
+        </div>
+        <div class="config-grid">
+          <div class="config-field">
+            <label>Poll interval (seconds)</label>
+            <input type="number" id="cfg-fill-rate-poll-interval" min="5" step="1" />
+            <span class="hint">One batched call covers every market. 5s is the floor — Quidax only rebuilds its ticker about that often, so polling faster re-reads the same snapshot and resolves nothing extra.</span>
+          </div>
+          <div class="config-field">
+            <label>Baseline window (hours)</label>
+            <input type="number" id="cfg-fill-rate-baseline-buckets" min="2" step="1" />
+            <span class="hint">How many prior CLOSED hours to average for this market's own fill-rate baseline.</span>
+          </div>
+          <div class="config-field">
+            <label>Minimum baseline (hours)</label>
+            <input type="number" id="cfg-fill-rate-min-buckets" min="1" step="1" />
+            <span class="hint">D2 stays silent until this many closed hours exist for the market.</span>
+          </div>
+          <div class="config-field">
+            <label>Minimum baseline (events/hour)</label>
+            <input type="number" id="cfg-fill-rate-min-events" min="0" step="1" />
+            <span class="hint">Below this rate a market is too thin for a ratio test — noise on an hourly count is roughly its square root, so a healthy quiet market would trip the ratio by chance. Reported, never alerted.</span>
+          </div>
+          <div class="config-field">
+            <label>Fill ratio threshold</label>
+            <input type="number" id="cfg-fill-rate-ratio-threshold" min="0" max="1" step="0.05" />
+            <span class="hint">D2 fires when the trailing hour's fill events drop below this fraction of the market's own baseline. CRITICAL only on a complete stop.</span>
+          </div>
+        </div>
+      </div>
+
       <!-- Depth-walk (G1) -->
       <div class="config-section">
         <div class="config-section-title">
@@ -2039,6 +2121,153 @@ async function fetchAndRender() {
     document.getElementById("error-text").textContent =
       `Cannot reach ${API_BASE}/api/status — ${err.message}. Is uvicorn running?`;
     document.getElementById("sidebar-status-text").textContent = "Offline";
+  }
+}
+
+// ── Refresh button ───────────────────────────────────────────────────────────
+// Two things happen on a click, and the progress bar exists to distinguish them:
+//   1. the page reloads what the API already has            — fast, ~200ms
+//   2. the MONITOR is asked to run a fresh cycle            — slow, ~45-60s
+// Step 2 is what makes the numbers actually new; step 1 only redraws whatever the
+// last cycle left in latest.csv. Doing just step 1 (the old behaviour) is why the
+// button felt dead — with an unchanged table there was nothing to see.
+//
+// The monitor is a SEPARATE PROCESS, so there is no return value to await: the API
+// writes a request file, the monitor picks it up within ~1s, and completion is
+// detected here by watching summary.last_updated advance past what we started with.
+let refreshInFlight = false;
+
+function setProgress(pct, { error = false } = {}) {
+  const wrap = document.getElementById("refresh-progress");
+  const bar  = document.getElementById("refresh-bar");
+  if (!wrap || !bar) return;
+  wrap.classList.add("active");
+  wrap.classList.toggle("error", error);
+  bar.style.width = `${pct}%`;
+}
+
+function endProgress({ error = false } = {}) {
+  const wrap = document.getElementById("refresh-progress");
+  const bar  = document.getElementById("refresh-bar");
+  if (!wrap || !bar) return;
+  setProgress(100, { error });
+  // Let the bar visibly reach 100% before fading, then reset width only once it
+  // is invisible — snapping back to 0% while still on screen looks like a failure.
+  setTimeout(() => {
+    wrap.classList.remove("active");
+    setTimeout(() => { bar.style.width = "0%"; wrap.classList.remove("error"); }, 300);
+  }, 350);
+}
+
+function setRefreshNote(text, { error = false } = {}) {
+  const el = document.getElementById("refresh-note");
+  if (!el) return;
+  el.textContent = text || "";
+  el.classList.toggle("show", !!text);
+  el.classList.toggle("err", error);
+}
+
+function setRefreshBusy(busy, label) {
+  const btn  = document.getElementById("refresh-btn");
+  const icon = document.getElementById("refresh-icon");
+  const lbl  = document.getElementById("refresh-label");
+  if (btn)  btn.disabled = busy;          // also blocks the double-click that would 429
+  if (icon) icon.classList.toggle("spin", busy);
+  if (lbl)  lbl.textContent = label || (busy ? "Refreshing…" : "Refresh");
+}
+
+/** Current cycle timestamp per the API, or null. Used as the before/after marker. */
+async function getLastUpdated() {
+  try {
+    const res = await fetch(`${API_BASE}/api/status`);
+    if (!res.ok) return null;
+    return ((await res.json()).summary || {}).last_updated || null;
+  } catch { return null; }
+}
+
+async function refreshNow() {
+  if (refreshInFlight) return;            // guard against Enter-key repeat
+  refreshInFlight = true;
+  setRefreshBusy(true, "Refreshing…");
+  setProgress(8);
+
+  try {
+    // ── Phase 1: redraw from what the API already has ──────────────────────
+    setRefreshNote("Reloading…");
+    const before = ((lastData || {}).summary || {}).last_updated || await getLastUpdated();
+    await fetchAndRender();
+    setProgress(30);
+
+    // ── Phase 2: ask the monitor for a fresh cycle ─────────────────────────
+    let req;
+    try {
+      req = await fetch(`${API_BASE}/api/request-cycle`, { method: "POST" });
+    } catch {
+      // API unreachable. Phase 1 already surfaced the error banner, so just stop
+      // cleanly rather than stacking a second message on top of it.
+      setRefreshNote("Offline", { error: true });
+      endProgress({ error: true });
+      return;
+    }
+
+    if (req.status === 429) {
+      // Someone just requested one. The data is already reloaded, so this is a
+      // normal outcome worth naming, not a failure.
+      const body = await req.json().catch(() => ({}));
+      setRefreshNote(`Cycle already queued (${body.retry_after_seconds ?? "~20"}s)`);
+      endProgress();
+      return;
+    }
+    if (!req.ok) { setRefreshNote("Reloaded"); endProgress(); return; }
+
+    const body = await req.json().catch(() => ({}));
+    if (body.monitor_stale) {
+      // Nothing is polling the request file — waiting would just burn the timeout.
+      setRefreshNote("Reloaded — monitor not running", { error: true });
+      endProgress({ error: true });
+      return;
+    }
+
+    // ── Phase 3: wait for the cycle to land ────────────────────────────────
+    // A cycle is ~45-60s, so the bar creeps 30→90% on a timer while we poll.
+    // It is honest about being an estimate: it never reaches 100% on the timer
+    // alone, only when the new timestamp actually arrives.
+    setRefreshNote("Running cycle…");
+    let pct = 30;
+    const creep = setInterval(() => {
+      pct = Math.min(90, pct + 1.5);
+      setProgress(pct);
+    }, 900);
+
+    const deadline = Date.now() + 90000;   // generous: a slow cycle ran 46s in testing
+    let landed = false;
+    try {
+      while (Date.now() < deadline) {
+        await new Promise(r => setTimeout(r, 2000));
+        const now = await getLastUpdated();
+        if (now && now !== before) { landed = true; break; }
+      }
+    } finally {
+      clearInterval(creep);
+    }
+
+    if (landed) {
+      setRefreshNote("Cycle complete");
+      await fetchAndRender();
+      endProgress();
+    } else {
+      setRefreshNote("Cycle did not finish in time", { error: true });
+      endProgress({ error: true });
+    }
+  } catch (err) {
+    setRefreshNote("Refresh failed", { error: true });
+    endProgress({ error: true });
+  } finally {
+    refreshInFlight = false;
+    setRefreshBusy(false);
+    // Clear the note after a beat so it reads as transient status, not a
+    // permanent label stuck next to the button.
+    setTimeout(() => setRefreshNote(""), 4000);
   }
 }
 
@@ -2507,6 +2736,37 @@ function renderDetailPanel(p) {
             + "The floor stops a normally-tiny pair firing on a ratio with no economic meaning. "
             + "Dashboard-only — never sends Telegram: a spike is context, not an incident.",
       naDesc: "Monitor-only pair — no volume floor defined",
+    },
+    {
+      id: "D2", name: "Fill Rate Deviation", alertId: "D2",
+      severity: activeIssues["D2"] === "CRITICAL" ? "CRITICAL"
+              : activeIssues["D2"] === "HIGH" ? "HIGH" : "MEDIUM",
+      // "na" covers the three states where D2 deliberately has no verdict:
+      // a delisted market, a baseline still warming, and a market too thin for
+      // a ratio test to carry signal. Each gets its own explanation below rather
+      // than a bare dash — an unexplained blank next to a healthy-looking book is
+      // exactly the thing this check exists to stop happening.
+      test: () => (p.fill_rate_status === "delisted"
+                   || p.fill_rate_status === "warming"
+                   || p.fill_rate_status === "too_thin"
+                   || nOrNull(p.fill_events_1h) === null) ? "na"
+                : activeIssues["D2"] === "CRITICAL" ? "crit"
+                : activeIssues["D2"] ? "warn" : "pass",
+      desc: `${fmtQty(p.fill_events_1h)} fill events in the last hour vs `
+            + `${fmtQty(p.fill_baseline_hourly, 1)} typical for this market`
+            + (nOrNull(p.fill_ratio) !== null ? ` — ratio ${fmtQty(p.fill_ratio, 2)}` : "")
+            + ` (${fmtQty(p.fill_baseline_hours)}h baseline)`,
+      note: `The only check that tells a QUOTED book from a TRADED one — every A-series `
+            + `check reads the book, and a book can look perfect while nothing crosses it. `
+            + `Fires below ${fmtQty(p.fill_rate_threshold ?? 0.35, 2)}× this market's own `
+            + `baseline; CRITICAL only when the hour is a complete stop. An "event" is a ~5s `
+            + `window containing at least one fill, NOT a trade count — Quidax has no public `
+            + `trades endpoint, so fills are inferred from its ticker's 24h volume ticking up.`,
+      naDesc: p.fill_rate_status === "delisted"
+              ? "Asset delisted — still quoted, never trades. Excluded by config so it can't alert forever"
+              : p.fill_rate_status === "too_thin"
+              ? "Too few fills/hour for a ratio test to mean anything — reported, never alerted"
+              : "Fill-rate baseline still building — needs a full trailing hour plus closed-hour history",
     },
     {
       id: "F1", name: "Cross-Pair Arbitrage Gap", alertId: "F1",
@@ -4182,6 +4442,7 @@ function populateConfigFields(cfg) {
   const lc = cfg.layer_churn || {};
   const vs = cfg.volume_spike || {};
   const dw = cfg.depth_walk || {};
+  const fr = cfg.fill_rate || {};
 
   const set = (id, val) => {
     const el = document.getElementById(id);
@@ -4223,6 +4484,12 @@ function populateConfigFields(cfg) {
   set("cfg-layer-churn-top-pct",          lc.top_pct);
   set("cfg-layer-churn-baseline-buckets", lc.baseline_buckets);
   set("cfg-layer-churn-ratio-threshold",  lc.ratio_threshold);
+
+  set("cfg-fill-rate-poll-interval",    fr.poll_interval_seconds);
+  set("cfg-fill-rate-baseline-buckets", fr.baseline_buckets);
+  set("cfg-fill-rate-min-buckets",      fr.min_baseline_buckets);
+  set("cfg-fill-rate-min-events",       fr.min_baseline_events);
+  set("cfg-fill-rate-ratio-threshold",  fr.ratio_threshold);
 
   set("cfg-depth-walk-weight",                dw.weight_usdt);
   set("cfg-depth-walk-mid-weight",            dw.mid_weight_usdt);
@@ -4403,6 +4670,13 @@ function buildConfigPayload() {
       top_pct:          num("cfg-layer-churn-top-pct"),
       baseline_buckets: num("cfg-layer-churn-baseline-buckets"),
       ratio_threshold:  num("cfg-layer-churn-ratio-threshold"),
+    },
+    fill_rate: {
+      poll_interval_seconds: num("cfg-fill-rate-poll-interval"),
+      baseline_buckets:      num("cfg-fill-rate-baseline-buckets"),
+      min_baseline_buckets:  num("cfg-fill-rate-min-buckets"),
+      min_baseline_events:   num("cfg-fill-rate-min-events"),
+      ratio_threshold:       num("cfg-fill-rate-ratio-threshold"),
     },
     depth_walk: {
       weight_usdt:              num("cfg-depth-walk-weight"),

@@ -11,6 +11,8 @@ Endpoints:
     GET /api/history         → daily log CSV as JSON; optional ?date=YYYY-MM-DD (defaults to today)
     GET /api/alert-analysis  → range analytics over the daily logs; ?start=&end=&gap_cycles=
     GET /api/alert-log       → daily-log detections for a range, filtered by tier/market/issue
+    GET /api/fill-rate       → D2 hourly fill-event series + self-baseline per market
+    POST /api/request-cycle  → ask the monitor to start a cycle now (file signal; throttled)
     GET /api/diagnostics     → which writer last wrote what, and how long ago
     GET /api/state           → raw health_state.json (anomaly timers, cooldowns)
     GET /api/pairs           → configured pair symbols + targets from health_state
@@ -39,6 +41,10 @@ from defaults import (default_config, merge_config, UPTIME_FIXED_STEP_NGN,
 # module (no side effects, no async), shared with debug.py so the OCHLV field
 # convention and NGT hour bucketing stay identical across both processes.
 import kline_volume as klv
+# D2 fill-rate helpers — import-only like kline_volume, shared with debug.py so
+# the hourly bucketing and the baseline maths are computed identically in both
+# processes. api.py only ever READS the archive; debug.py's sampler owns writing it.
+import fill_rate as flr
 
 
 def _sanitize(obj):
@@ -69,6 +75,17 @@ CONFIG_FILE = DATA_DIR / "monitor_config.json"
 # suspend written here mid-cycle. Same api-writes / monitor-reads direction as
 # monitor_config.json, so there's no cross-process write race.
 SUSPENSIONS_FILE = DATA_DIR / "suspensions.json"
+# Manual cycle request — this process WRITES it, debug.py only reads it, the same
+# one-way direction as monitor_config.json and suspensions.json. The monitor polls
+# it once a second during its inter-cycle sleep and starts immediately when the
+# stamp changes. Separate file rather than a key in health_state.json because the
+# monitor rewrites that wholesale each cycle and would clobber a mid-cycle request.
+CYCLE_REQUEST_FILE = DATA_DIR / "cycle_request.json"
+# Shortest gap between two accepted manual requests. A cycle is ~46s of wall time
+# and roughly 135 upstream requests (45 pairs x 3 fetches), so an un-throttled
+# button is a way to hammer the exchange by holding down a key. Comfortably under
+# the 60s default cycle so the button still feels useful between natural cycles.
+CYCLE_REQUEST_MIN_INTERVAL_SECONDS = 20
 # Per-(pair, issue) acknowledgements — {symbol: {issue_id: ISO acked_at (NGT)}}.
 # This process owns writing it (the checkbox on each check row); the monitor only
 # reads it, at its fire gate.
@@ -89,6 +106,11 @@ DEPTH_WALK_CONDENSED_FILE = DATA_DIR / "usdtngn_slippage_hourly.json"
 # hours come from the live call, so an absent file just means "no deep history".
 VOLUME_SYMBOL       = "usdtngn"
 VOLUME_ARCHIVE_FILE = DATA_DIR / "usdtngn_volume_hourly.json"
+# D2 fill-rate archive (written by debug.py's ticker_fill_loop). Unlike the
+# volume archive above there is NO live fallback for missing hours: fills are
+# inferred from a ticker poll and no endpoint reports them historically, so an
+# absent file means no data at all rather than "no deep history".
+FILL_RATE_FILE = DATA_DIR / "fill_rate_hourly.json"
 STATIC_DIR  = Path(".")          # dashboard.html lives next to api.py
 NIGERIAN_TZ = timezone(timedelta(hours=1))
 
@@ -1544,6 +1566,149 @@ def get_usdtngn_slippage_raw():
     return JSONResponse(_sanitize(raw))
 
 
+@app.post("/api/request-cycle")
+def post_request_cycle():
+    """
+    Ask the monitor to start a cycle now instead of finishing its sleep.
+
+    Writes a timestamp the monitor polls for once a second (see CYCLE_REQUEST_FILE
+    — the two are separate processes sharing only the data volume, so a file is
+    the channel). Returns immediately; it does NOT wait for the cycle, which takes
+    roughly 45-60s. Callers detect completion by watching `summary.last_updated`
+    on /api/status advance.
+
+    Throttled to one accepted request per CYCLE_REQUEST_MIN_INTERVAL_SECONDS,
+    returning 429 with `retry_after_seconds` otherwise. The button is one click
+    away from ~135 upstream requests, so the throttle is what stops a held-down
+    key turning into sustained load on the exchange.
+
+    A 202 does not guarantee a cycle runs: if the monitor process is down, nothing
+    is polling the file. The response carries `monitor_stale` so the caller can say
+    so rather than spinning until it times out.
+    """
+    now = ngt_now()
+
+    existing = None
+    if CYCLE_REQUEST_FILE.exists():
+        try:
+            with open(CYCLE_REQUEST_FILE) as f:
+                existing = (json.load(f) or {}).get("requested_at")
+        except Exception:
+            existing = None   # unreadable: treat as no prior request
+
+    if existing:
+        try:
+            age = (now - datetime.fromisoformat(existing)).total_seconds()
+            if 0 <= age < CYCLE_REQUEST_MIN_INTERVAL_SECONDS:
+                retry_after = int(CYCLE_REQUEST_MIN_INTERVAL_SECONDS - age) + 1
+                return JSONResponse(status_code=429, content={
+                    "status": "throttled",
+                    "detail": (f"A cycle was already requested {int(age)}s ago — "
+                               f"wait {retry_after}s"),
+                    "retry_after_seconds": retry_after,
+                })
+        except (ValueError, TypeError):
+            pass   # unparseable stamp: fall through and overwrite it
+
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    payload = {"requested_at": now.isoformat()}
+    tmp = CYCLE_REQUEST_FILE.with_suffix(".tmp")
+    with open(tmp, "w") as f:
+        json.dump(payload, f, indent=2)
+    os.replace(tmp, CYCLE_REQUEST_FILE)   # atomic — the monitor polls this every 1s
+
+    # Tell the caller whether anything is actually listening, so the UI can fail
+    # fast with a real reason instead of waiting out its timeout.
+    stale = True
+    try:
+        stale = bool(summary_stats(parse_latest_csv()).get("monitor_stale", True))
+    except Exception:
+        pass   # can't tell — report stale, the conservative answer for the UI
+
+    return JSONResponse(status_code=202, content={
+        "status":        "requested",
+        "requested_at":  payload["requested_at"],
+        "monitor_stale": stale,
+        "detail": ("Monitor appears stale — the request was recorded but nothing "
+                   "may be polling for it" if stale
+                   else "Monitor will start a cycle within ~1s"),
+    })
+
+
+@app.get("/api/fill-rate")
+def get_fill_rate(market: Optional[str] = None, hours: int = 24):
+    """
+    D2 fill-rate series — per market, one point per CLOSED NGT hour, plus the
+    self-baseline each market is judged against.
+
+    ?market=btcngn  → that market only (404 if it has no history yet)
+    ?hours=N        → trim each series to its most recent N hours (default 24)
+
+    An "events" value is NOT a trade count. It is the number of ~5s polling
+    windows in that hour during which the market's 24h rolling volume increased,
+    i.e. a floor on trade count — Quidax refreshes its ticker about every 5s, so
+    several fills inside one window read as one event. fill_rate.py documents why
+    there is no way to do better (no public trades endpoint exists). Label it as
+    "fill events", never "trades", wherever this is rendered.
+    """
+    archive = (_load_json_file(FILL_RATE_FILE, {}) or {}).get("markets", {})
+    if not isinstance(archive, dict):
+        archive = {}
+
+    cfg       = load_config()
+    fr        = cfg.get("fill_rate", {}) or {}
+    delisted  = {str(m).lower() for m in (cfg.get("delisted_markets", []) or [])}
+    buckets   = int(fr.get("baseline_buckets", 24))
+    min_ev    = float(fr.get("min_baseline_events", 8.0))
+    min_bk    = int(fr.get("min_baseline_buckets", 6))
+
+    if market:
+        key = market.lower()
+        if key not in archive:
+            raise HTTPException(status_code=404,
+                                detail=f"No fill-rate history for '{market}' yet")
+        wanted = {key: archive[key]}
+    else:
+        wanted = archive
+
+    out = {}
+    for sym, points in wanted.items():
+        points = points or []
+        # The baseline is computed over the FULL retained window the monitor
+        # would use, then the returned series is trimmed for display. Trimming
+        # first would hand the dashboard a different baseline than the one D2
+        # actually fired against, which is the kind of mismatch that makes an
+        # operator distrust the alert rather than the chart.
+        baseline, n = flr.baseline_from_history(points, buckets)
+        series = points[-hours:] if hours > 0 else points
+        out[sym] = {
+            "series":          series,
+            "baseline_hourly": (round(baseline, 2) if baseline is not None else None),
+            "baseline_hours":  n,
+            # Why this market is or isn't eligible to alert, so the dashboard can
+            # explain a blank instead of just showing one.
+            "status": ("delisted" if sym in delisted
+                       else "warming" if n < min_bk
+                       else "too_thin" if (baseline or 0) < min_ev
+                       else "active"),
+        }
+
+    return JSONResponse(_sanitize({
+        "markets": out,
+        "config": {
+            "poll_interval_seconds": fr.get("poll_interval_seconds"),
+            "baseline_buckets":      buckets,
+            "min_baseline_buckets":  min_bk,
+            "min_baseline_events":   min_ev,
+            "ratio_threshold":       fr.get("ratio_threshold"),
+        },
+        # Stated in the payload rather than left to the reader, for the same
+        # reason the docstring leads with it.
+        "note": ("events = ~5s polling windows containing at least one fill, "
+                 "not trade counts"),
+    }))
+
+
 @app.get("/api/usdtngn-slippage/history")
 def get_usdtngn_slippage_history(start: Optional[str] = None,
                                    end:   Optional[str] = None):
@@ -1892,7 +2057,55 @@ async def post_config(request: Request):
                         raise HTTPException(status_code=400,
                             detail=f"depth_walk.uptime.{k} must be a non-negative number")
 
-    for section in ("timing", "orderbook", "pricing", "kline", "layer_churn", "depth_walk"):
+    # fill_rate (D2). Most of its keys are plain non-negative numbers and ride the
+    # loop below, but three carry constraints the generic check can't express:
+    # a zero baseline window is meaningless, a ratio threshold outside 0..1 can
+    # never fire (or always fires), and a poll interval below the exchange's own
+    # ~5s ticker refresh only adds load without resolving anything extra. The
+    # monitor clamps the interval defensively too (see apply_config) — this
+    # rejects it at the edge so an operator gets told rather than silently
+    # overridden.
+    if "fill_rate" in body and isinstance(body["fill_rate"], dict):
+        fr = body["fill_rate"]
+        for k in ("baseline_buckets", "min_baseline_buckets", "condensed_retention_days"):
+            if k in fr and fr[k] is not None:
+                v = fr[k]
+                if not isinstance(v, (int, float)) or isinstance(v, bool) or v <= 0:
+                    raise HTTPException(status_code=400,
+                        detail=f"fill_rate.{k} must be a positive number")
+        rt = fr.get("ratio_threshold")
+        if rt is not None:
+            if not isinstance(rt, (int, float)) or isinstance(rt, bool) or not (0 < rt <= 1):
+                raise HTTPException(status_code=400,
+                    detail="fill_rate.ratio_threshold must be between 0 and 1")
+        pi = fr.get("poll_interval_seconds")
+        if pi is not None:
+            if not isinstance(pi, (int, float)) or isinstance(pi, bool):
+                raise HTTPException(status_code=400,
+                    detail="fill_rate.poll_interval_seconds must be a number")
+            if pi < flr.SERVER_TICKER_REFRESH_SECONDS:
+                raise HTTPException(status_code=400,
+                    detail=(f"fill_rate.poll_interval_seconds must be at least "
+                            f"{flr.SERVER_TICKER_REFRESH_SECONDS:g} — Quidax only refreshes "
+                            f"its ticker about that often, so polling faster re-reads an "
+                            f"unchanged snapshot"))
+
+    # delisted_markets is a top-level LIST of symbols, not a section — it can't go
+    # through the numbers-only loop below. It exists because nothing in the API
+    # reports listing status (is_visible tracks NGN-pair UI visibility, not
+    # listing: usdtngn and btcngn are both false while delisted algousdt is true),
+    # so the list is necessarily hand-maintained.
+    if "delisted_markets" in body:
+        dm = body["delisted_markets"]
+        if not isinstance(dm, list):
+            raise HTTPException(status_code=400, detail="delisted_markets must be a list")
+        for sym in dm:
+            if not isinstance(sym, str) or not sym.strip():
+                raise HTTPException(status_code=400,
+                    detail=f"Invalid delisted market symbol: {sym!r}")
+
+    for section in ("timing", "orderbook", "pricing", "kline", "layer_churn",
+                    "depth_walk", "fill_rate"):
         if section in body and isinstance(body[section], dict):
             for k, v in body[section].items():
                 if section == "pricing" and k == "source_divergence_overrides":

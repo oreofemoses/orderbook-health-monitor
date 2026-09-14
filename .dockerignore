@@ -34,6 +34,7 @@ data/
 !debug.py
 !defaults.py
 !kline_volume.py
+!fill_rate.py
 !dashboard.html
 !favicon.ico
 !start.sh
