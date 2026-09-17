@@ -59,9 +59,10 @@ Alert scope (see OHM spec doc for full definitions):
                                  the id moved, so one row answers "can I trust this
                                  price comparison" from both ends
   B4 Circuit Breaker Proximity — implemented, reference-free (uses Quidax's own k-line window)
-  D2 Fill Rate Deviation      — implemented, ALL markets. TIER 3 AT EVERY SEVERITY
-                                 while on trial (dashboard-only, never Telegram).
-                                 Own 5s polling task
+  D2 Fill Rate Deviation      — implemented, ALL markets. Fires on a collapse OR
+                                 a surge past +/-pct_change_threshold. TIER 3 AT
+                                 EVERY SEVERITY while on trial (dashboard-only,
+                                 never Telegram). Own 5s polling task
                                  (ticker_fill_loop), separate from the main cycle and
                                  from G1's. Fires when a market's observed fill rate
                                  collapses against THIS market's own hourly baseline —
@@ -90,6 +91,16 @@ Alert scope (see OHM spec doc for full definitions):
                                  OWN k-line fetch (fetch_kline_volume, default 60min candles /
                                  240min lookback) — decoupled from B4's kline fetch since
                                  debug.py v3.1. No external 24h data used.)
+                                 TIER 2 as of the 2026-09 retier, reversing the
+                                 2026-08-27 demotion to dashboard-only: a market
+                                 trading far harder than usual is the actionable
+                                 direction, and nothing could page on it while D1
+                                 was Tier 3. Its label also carries D2's fill-rate
+                                 figures for the same pair (see
+                                 _fill_context_clause) — D2 is Tier 3, so D1 is
+                                 the only route by which fill data reaches
+                                 Telegram. See defaults.py above TIER1_IDS for the
+                                 full history and the known-open noise risk.
   E1 Quidax API Failure       — implemented (unchanged: per-pair + outage-ratio detection)
   E2 Reference Feed Disconnect — implemented (MEXC/KuCoin batched call failure)
   F1 Cross-Pair Arbitrage Gap — implemented (triangulates via pairs already being fetched)
@@ -137,9 +148,9 @@ NOTE on alert tiering & cooldowns:
     A2-CRITICAL (one-sided book), A6 (CRITICAL/HIGH), B1 (CRITICAL/HIGH),
     B4-CRITICAL, E1, E2, G2-CRITICAL
   Tier 2 — fire only after N consecutive cycles of the same issue, then 15-min cooldown:
-    A2-HIGH (spread + shallow book), B2, B4-HIGH, G2-HIGH — N = TIER2_CONFIRM_CYCLES (3)
+    A1, A2-HIGH (spread + shallow book), B2, B4-HIGH, D1, G2-HIGH — N = TIER2_CONFIRM_CYCLES (3)
   Tier 3 — dashboard flag only, never fire Telegram:
-    A1, A4, A5, D1, D2 (at EVERY severity, while on trial — see defaults.py
+    A4, A5, D2 (at EVERY severity, while on trial — see defaults.py
     TIER3_IDS for the split to restore), F1, A6-MEDIUM (monitor-only zero-baseline
     case — see check_layer_churn_stall), B1-MEDIUM (peer-flat reference — see
     resolve_trusted_price)
@@ -154,9 +165,24 @@ NOTE on alert tiering & cooldowns:
   NOTE: B2 is Tier 2, not Tier 1. Disagreeing sources are already handled in-line
   by resolve_trusted_price dropping the outlier, so a single-cycle divergence
   needs no operator; a divergence that survives three consecutive cycles means
-  the reference feed itself is degrading and is worth sending. D1 stays
-  dashboard-only — it is context, not an incident. See the reasoning block above
-  TIER1_IDS in defaults.py.
+  the reference feed itself is degrading and is worth sending.
+
+  NOTE: A1 is Tier 2 as of the 2026-09 retier, up from dashboard-only. A crossed
+  book that the maker corrects clears in a cycle or two and never reaches the
+  third confirming cycle, so Tier 2 costs nothing for the transient case the
+  Tier-3 demotion was aimed at; what confirms is a book still crossed three
+  cycles later, which is the bot failing to correct it. Confirmation also absorbs
+  the snapshot-artifact cross (bid and ask sampled microseconds apart) that would
+  have made Tier 1 untenable. A1 emits only CRITICAL, so TIER2_IDS tiers it
+  outright — there is no severity split.
+
+  NOTE: D1 is Tier 2 again as of the 2026-09 retier. It was demoted to Tier 3 on
+  2026-08-27 as "context, not an incident", which held for the quiet direction
+  but not the loud one — D1 only ever fires upward, and a burst on an otherwise
+  dormant market went unalerted as a result. Its per-episode delivery cap
+  (volume_spike.max_fires) is LIVE again; it was inert while D1 was Tier 3. See
+  the reasoning block above TIER1_IDS in defaults.py for the full history,
+  including the baseline's time-of-day blindness that is knowingly still open.
 
   Consecutive counters and cooldown timestamps are persisted in health_state.json
   under each pair's "_alert" sub-key so they survive restarts. Counters reset to 0
@@ -364,7 +390,7 @@ def apply_config():
     global UPTIME_REFERENCE_PRICE, UPTIME_WEIGHT_USDT, UPTIME_BAND_PCT
     global FILL_RATE_POLL_INTERVAL_SECONDS, FILL_RATE_BASELINE_BUCKETS
     global FILL_RATE_MIN_BASELINE_BUCKETS, FILL_RATE_MIN_BASELINE_EVENTS
-    global FILL_RATE_RATIO_THRESHOLD, FILL_RATE_RETENTION_DAYS, DELISTED_MARKETS
+    global FILL_RATE_PCT_CHANGE_THRESHOLD, FILL_RATE_RETENTION_DAYS, DELISTED_MARKETS
 
     cfg = _load_config_from_disk()
 
@@ -494,7 +520,11 @@ def apply_config():
     FILL_RATE_BASELINE_BUCKETS      = int(fr.get("baseline_buckets", 24))
     FILL_RATE_MIN_BASELINE_BUCKETS  = int(fr.get("min_baseline_buckets", 6))
     FILL_RATE_MIN_BASELINE_EVENTS   = float(fr.get("min_baseline_events", 8.0))
-    FILL_RATE_RATIO_THRESHOLD       = float(fr.get("ratio_threshold", 0.35))
+    # A stored config predating the two-sided rework carries `ratio_threshold`
+    # instead; defaults.merge_config rewrites it on the way in, so by here the
+    # key is always the current one. Migrating there rather than in this function
+    # is what keeps the monitor and the API reading a stored config identically.
+    FILL_RATE_PCT_CHANGE_THRESHOLD  = float(fr.get("pct_change_threshold", 65.0))
     FILL_RATE_RETENTION_DAYS        = float(fr.get("condensed_retention_days", 30))
     # Delisted assets — D2 skips these entirely. Not inferable from the API; see
     # the defaults.py comment on why is_visible can't stand in for it.
@@ -554,7 +584,7 @@ FILL_RATE_POLL_INTERVAL_SECONDS:     float = 5
 FILL_RATE_BASELINE_BUCKETS:          int   = 24
 FILL_RATE_MIN_BASELINE_BUCKETS:      int   = 6
 FILL_RATE_MIN_BASELINE_EVENTS:       float = 8.0
-FILL_RATE_RATIO_THRESHOLD:           float = 0.35
+FILL_RATE_PCT_CHANGE_THRESHOLD:      float = 65.0
 FILL_RATE_RETENTION_DAYS:            float = 30
 DELISTED_MARKETS:                    set   = set()
 apply_config()  # populate from disk immediately
@@ -1196,9 +1226,10 @@ def check_layer_churn_stall(churn_score: Optional[float], baseline: Optional[flo
 
 def check_fill_rate_deviation(symbol: str, fill_snapshot: Optional[dict]) -> tuple[list, dict]:
     """
-    D2 — fires when a market's fill rate collapses relative to THIS market's own
-    typical rate. Returns (issues, metrics); metrics are reported whether or not
-    the check fires, same convention as every other check in this module.
+    D2 — fires when a market's fill rate DEVIATES from THIS market's own typical
+    rate, in either direction: a collapse or a surge past the same percentage
+    threshold. Returns (issues, metrics); metrics are reported whether or not the
+    check fires, same convention as every other check in this module.
 
     What D2 actually adds to the taxonomy: it is the ONLY check that can tell a
     quoted book from a traded one. Every A-series check reads the book, and a
@@ -1206,7 +1237,10 @@ def check_fill_rate_deviation(symbol: str, fill_snapshot: Optional[dict]) -> tup
     all seven delisted pairs were still quoting ~25 levels a side with zero fills
     in five hours, and every structural check passed them. A maker that has
     stopped hedging, a stuck matching engine, a market that has silently died:
-    all of them present as a healthy book.
+    all of them present as a healthy book. A surge is the same instrument pointed
+    the other way — a maker dumping inventory, a stale quote being picked off, or
+    news the operator has not seen yet all show up as a book that is suddenly
+    trading several times harder than it ever normally does.
 
     The data comes from ticker_fill_loop (a global 5s task), not from this
     pair's own fetch — so unlike the other checks here, D2 reads a snapshot
@@ -1217,8 +1251,9 @@ def check_fill_rate_deviation(symbol: str, fill_snapshot: Optional[dict]) -> tup
         "fill_events_1h":        None,
         "fill_baseline_hourly":  None,
         "fill_baseline_hours":   0,
-        "fill_ratio":            None,
-        "fill_rate_threshold":   FILL_RATE_RATIO_THRESHOLD,
+        "fill_pct_change":       None,
+        "fill_direction":        None,
+        "fill_pct_threshold":    FILL_RATE_PCT_CHANGE_THRESHOLD,
         "fill_rate_status":      "warming",
     }
 
@@ -1240,8 +1275,9 @@ def check_fill_rate_deviation(symbol: str, fill_snapshot: Optional[dict]) -> tup
     metrics["fill_events_1h"]       = current
     metrics["fill_baseline_hourly"] = (round(baseline, 2) if baseline is not None else None)
     metrics["fill_baseline_hours"]  = buckets
-    if baseline:
-        metrics["fill_ratio"] = round((current or 0) / baseline, 3)
+    change = flr.pct_change(current, baseline)
+    if change is not None:
+        metrics["fill_pct_change"] = round(change, 1)
 
     if not fill_snapshot.get("window_complete"):
         # The trailing-hour count is still filling up after a restart. Comparing
@@ -1255,20 +1291,22 @@ def check_fill_rate_deviation(symbol: str, fill_snapshot: Optional[dict]) -> tup
         current, baseline, buckets,
         min_buckets=FILL_RATE_MIN_BASELINE_BUCKETS,
         min_baseline_events=FILL_RATE_MIN_BASELINE_EVENTS,
-        ratio_threshold=FILL_RATE_RATIO_THRESHOLD,
+        pct_change_threshold=FILL_RATE_PCT_CHANGE_THRESHOLD,
     )
 
     if buckets < FILL_RATE_MIN_BASELINE_BUCKETS:
         metrics["fill_rate_status"] = "warming"
     elif baseline is not None and 0 < baseline < FILL_RATE_MIN_BASELINE_EVENTS:
-        # Reported but never alerted — too thin for a ratio test to carry signal.
+        # Reported but never alerted — too thin for a change test to carry signal,
+        # and a symmetric test gives that noise two ways to fire instead of one.
         metrics["fill_rate_status"] = "too_thin"
     else:
         metrics["fill_rate_status"] = "alert" if verdict else "ok"
 
     if verdict is None:
         return [], metrics
-    severity, reason = verdict
+    severity, direction, reason = verdict
+    metrics["fill_direction"] = direction
     return [("D2", severity, reason)], metrics
 
 
@@ -1796,8 +1834,53 @@ def update_volume_baseline(symbol: str, current_volume: float, vol_hist_root: di
     return baseline, len(prior_buckets)
 
 
+def _fill_context_clause(fill_metrics: Optional[dict]) -> str:
+    """
+    Render D2's per-market fill figures as a short clause for D1's alert label,
+    or "" when there is nothing trustworthy to say.
+
+    D2 is Tier 3 and D1 is Tier 2, so this clause is the ONLY route by which
+    fill-rate data reaches Telegram. It adds no trigger and changes no routing —
+    it exists because the two checks measure different halves of the same event
+    and an operator reading a volume spike immediately wants the other half. D1
+    measures VALUE (quote volume over the k-line window); D2 measures FREQUENCY
+    (~5s windows containing at least one fill, over the trailing hour). One whale
+    trade is a large spike at ~1 event; two hundred small trades are the same
+    naira figure at a hundred times the event count. Which of those happened
+    changes what the operator does next, and nothing else in the message says.
+
+    Every status D2 defines is handled explicitly rather than falling through to
+    a formatted None: "warming" (sampler under an hour old, or fewer than
+    min_baseline_buckets closed hours) and "delisted" say nothing, because a
+    number with no baseline behind it reads as evidence when it is not.
+    """
+    if not fill_metrics:
+        return ""
+    status = fill_metrics.get("fill_rate_status")
+    events = fill_metrics.get("fill_events_1h")
+    if status in (None, "warming", "delisted") or events is None:
+        return ""
+
+    baseline = fill_metrics.get("fill_baseline_hourly")
+    if baseline is None:
+        return ""
+
+    if status == "too_thin":
+        # Reported, never alerted on — see classify_deviation's min_baseline_events
+        # guard. Worth showing anyway: "3/h vs 2.1 typical" is exactly the context
+        # that tells an operator this pair is thin rather than broken.
+        return (f"fill rate {events}/h vs {baseline:.1f} typical "
+                f"(below the {FILL_RATE_MIN_BASELINE_EVENTS:g}/h floor, not judged)")
+
+    pct = fill_metrics.get("fill_pct_change")
+    if pct is None:
+        return f"fill rate {events}/h vs {baseline:.1f} typical"
+    return f"fill rate {events}/h vs {baseline:.1f} typical ({pct:+.0f}%)"
+
+
 def get_recent_spikes(window_info: Optional[dict], sym: str,
-                       baseline: Optional[float], bucket_count: int) -> list:
+                       baseline: Optional[float], bucket_count: int,
+                       fill_metrics: Optional[dict] = None) -> list:
     """
     D1 — fires when this pair's rolling-window volume is unusually large *for this
     pair*, not just large in absolute terms.
@@ -1828,6 +1911,13 @@ def get_recent_spikes(window_info: Optional[dict], sym: str,
                                      so no blind spot right after a restart)
         warmup_fallback="suppress" → no D1 until the baseline is ready
       mode="absolute" bypasses the baseline entirely and always uses the flat floor.
+
+    `fill_metrics` is D2's metrics dict for the same pair, when the caller has
+    one (process_pair runs check_fill_rate_deviation first precisely so it can
+    pass it). It never affects whether D1 fires — only what the label says. D1 is
+    Tier 2 and D2 is Tier 3, so this is the only path by which fill-rate data
+    reaches Telegram. Optional and defaulted so the function stays callable with
+    its original four arguments.
     """
     threshold = get_threshold(sym)
     if threshold is None or window_info is None:
@@ -1857,9 +1947,10 @@ def get_recent_spikes(window_info: Optional[dict], sym: str,
 
     # Label mirrors the anomaly-alert phrasing style: a short first-line
     # summary sufficient to identify the check + the pair-specific context
-    # ("3x baseline over 6 windows, floor $5,000" etc). This is what appears
-    # both in the consolidated Telegram message and in the daily log's Issues
-    # column, so it needs to stand on its own.
+    # ("3x baseline over 6 windows, floor $5,000" etc). This is what appears in
+    # the consolidated Telegram message, so it needs to stand on its own. (It
+    # does NOT reach the daily log — update_daily_log writes the "D1:HIGH" id
+    # severity string built in process_pair, never the label.)
     window_label = window_info.get("window", "")
     candle_count = window_info.get("candle_count", 0)
     if trigger == "baseline_relative":
@@ -1878,6 +1969,13 @@ def get_recent_spikes(window_info: Optional[dict], sym: str,
 
     label = (f"Volume spike: {window_label} ({candle_count} candles) — "
              f"{cur}{vol:,.2f} ({context})")
+
+    # D2's view of the same event, when it has one worth stating. D1 is the only
+    # id of the pair that reaches Telegram, so this is where the frequency half
+    # of the picture gets attached — see _fill_context_clause.
+    fill_clause = _fill_context_clause(fill_metrics)
+    if fill_clause:
+        label += f" | {fill_clause}"
     return [("D1", "HIGH", label)]
 
 
@@ -3136,6 +3234,24 @@ async def process_pair(
             # ── Fold duplicate ids (A2 x2, B3 x2) BEFORE any tier/firing logic ──
             issues = dedupe_actionable(issues)
 
+            # ── D2 — Fill rate deviation ────────────────────────────────────
+            # Reads the out-of-cycle sampler's snapshot rather than this pair's
+            # own fetch (ticker_fill_loop owns the feed); run_cycle resolves it
+            # per pair and passes it in, so process_pair stays a pure function of
+            # its arguments. The metrics it returns are merged whether or not it
+            # fires — a passing market showing "41 events/h vs 38 typical" is the
+            # evidence that makes a later alert legible.
+            #
+            # Runs BEFORE D1 purely so its metrics can be handed to
+            # get_recent_spikes below: D1 is Tier 2 and D2 is Tier 3, so D1's
+            # label is the only route by which fill-rate data reaches Telegram at
+            # all. The two checks are otherwise independent — this one needs only
+            # `symbol` and `fill_snapshot` — and the ordering of `issues` does not
+            # matter because dedupe_actionable normalises it below.
+            d2_issues, d2_metrics = check_fill_rate_deviation(symbol, fill_snapshot)
+            issues += d2_issues
+            metrics.update(d2_metrics)
+
             # ── D1 — Volume spike, with Quidax's own longer-term baseline as context ──
             # kline_vol_raw is D1's own independent fetch (fetch_kline_volume), not
             # the B4 kline_raw above — this is the point of the D1/B4 decoupling.
@@ -3149,18 +3265,8 @@ async def process_pair(
             baseline, bucket_count = (None, 0)
             if window_info:
                 baseline, bucket_count = update_volume_baseline(symbol, window_info["quote_volume"], vol_hist_root)
-            issues += get_recent_spikes(window_info, symbol, baseline, bucket_count)
-
-            # ── D2 — Fill rate deviation ────────────────────────────────────
-            # Reads the out-of-cycle sampler's snapshot rather than this pair's
-            # own fetch (ticker_fill_loop owns the feed); run_cycle resolves it
-            # per pair and passes it in, so process_pair stays a pure function of
-            # its arguments. The metrics it returns are merged whether or not it
-            # fires — a passing market showing "41 events/h vs 38 typical" is the
-            # evidence that makes a later alert legible.
-            d2_issues, d2_metrics = check_fill_rate_deviation(symbol, fill_snapshot)
-            issues += d2_issues
-            metrics.update(d2_metrics)
+            issues += get_recent_spikes(window_info, symbol, baseline, bucket_count,
+                                        fill_metrics=d2_metrics)
 
             # Fold once more after D1/D2 in case a dedupe is ever needed (each
             # currently emits 0 or 1 tuple, but this keeps the invariant "issues is
@@ -3307,9 +3413,13 @@ assert not _missing_acks, f"ACKABLE_ISSUE_IDS is missing {sorted(_missing_acks)}
 # keeps re-appearing): fire on detection, one final fire after the cooldown, then
 # silent-but-dashboard-visible until the window clears and the episode re-arms.
 # The cap value is a per-issue config global; _episode_fire_cap() maps id → value.
-# Both G2 (k-line wick window) and D1 (volume window) qualify — though D1 is Tier 3
-# as of the retiering, so its cap is inert until D1 ever pages again. Kept because
-# the cap is a property of the window, not of the tier.
+# Both G2 (k-line wick window) and D1 (volume window) qualify. D1's cap was inert
+# while D1 sat at Tier 3 (a Tier-3 id returns from should_fire_telegram before
+# reaching the cap check) and is LIVE again as of the 2026-09 retier to Tier 2 —
+# it is now the main thing standing between a 4-hour volume window and one
+# Telegram per cooldown for that window's entire life. The cap was kept through
+# the Tier-3 period precisely because it is a property of the window, not of the
+# tier.
 _EPISODE_CAPPED_IDS = {"G2", "D1"}
 
 

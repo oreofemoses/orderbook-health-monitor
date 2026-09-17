@@ -1700,7 +1700,7 @@ def get_fill_rate(market: Optional[str] = None, hours: int = 24):
             "baseline_buckets":      buckets,
             "min_baseline_buckets":  min_bk,
             "min_baseline_events":   min_ev,
-            "ratio_threshold":       fr.get("ratio_threshold"),
+            "pct_change_threshold":  fr.get("pct_change_threshold"),
         },
         # Stated in the payload rather than left to the reader, for the same
         # reason the docstring leads with it.
@@ -2059,8 +2059,9 @@ async def post_config(request: Request):
 
     # fill_rate (D2). Most of its keys are plain non-negative numbers and ride the
     # loop below, but three carry constraints the generic check can't express:
-    # a zero baseline window is meaningless, a ratio threshold outside 0..1 can
-    # never fire (or always fires), and a poll interval below the exchange's own
+    # a zero baseline window is meaningless, a percentage-change threshold must
+    # be positive (it is applied as +/- around the baseline, so a zero or negative
+    # one fires on everything), and a poll interval below the exchange's own
     # ~5s ticker refresh only adds load without resolving anything extra. The
     # monitor clamps the interval defensively too (see apply_config) — this
     # rejects it at the edge so an operator gets told rather than silently
@@ -2073,11 +2074,22 @@ async def post_config(request: Request):
                 if not isinstance(v, (int, float)) or isinstance(v, bool) or v <= 0:
                     raise HTTPException(status_code=400,
                         detail=f"fill_rate.{k} must be a positive number")
-        rt = fr.get("ratio_threshold")
-        if rt is not None:
-            if not isinstance(rt, (int, float)) or isinstance(rt, bool) or not (0 < rt <= 1):
+        pct = fr.get("pct_change_threshold")
+        if pct is not None:
+            if not isinstance(pct, (int, float)) or isinstance(pct, bool) or pct <= 0:
                 raise HTTPException(status_code=400,
-                    detail="fill_rate.ratio_threshold must be between 0 and 1")
+                    detail="fill_rate.pct_change_threshold must be a positive number "
+                           "of percent (it is applied as +/- around the baseline)")
+            # Above 100 the DROP side can never fire — a count cannot fall more
+            # than 100% below its baseline — leaving a surge-only check. That is a
+            # legitimate thing to configure but never an accident worth guessing
+            # at, so it is refused rather than silently half-disabling D2.
+            if pct > 100:
+                raise HTTPException(status_code=400,
+                    detail="fill_rate.pct_change_threshold must be at most 100 — a "
+                           "fill count cannot drop more than 100% below its baseline, "
+                           "so a higher threshold would silently disable the collapse "
+                           "side of D2 and leave only surge detection")
         pi = fr.get("poll_interval_seconds")
         if pi is not None:
             if not isinstance(pi, (int, float)) or isinstance(pi, bool):

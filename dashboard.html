@@ -1708,12 +1708,12 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
           <div class="config-field">
             <label>Minimum baseline (events/hour)</label>
             <input type="number" id="cfg-fill-rate-min-events" min="0" step="1" />
-            <span class="hint">Below this rate a market is too thin for a ratio test — noise on an hourly count is roughly its square root, so a healthy quiet market would trip the ratio by chance. Reported, never alerted.</span>
+            <span class="hint">Below this rate a market is too thin for a change test — noise on an hourly count is roughly its square root, so a healthy quiet market would trip the threshold by chance, in both directions. Reported, never alerted.</span>
           </div>
           <div class="config-field">
-            <label>Fill ratio threshold</label>
-            <input type="number" id="cfg-fill-rate-ratio-threshold" min="0" max="1" step="0.05" />
-            <span class="hint">D2 fires when the trailing hour's fill events drop below this fraction of the market's own baseline. CRITICAL only on a complete stop.</span>
+            <label>Deviation threshold (% from baseline)</label>
+            <input type="number" id="cfg-fill-rate-pct-threshold" min="1" max="100" step="5" />
+            <span class="hint">D2 fires when the trailing hour's fill events differ from the market's own baseline by more than this many percent, in EITHER direction — a collapse or a surge. CRITICAL only on a complete stop. Capped at 100: a count cannot fall further than that, so a higher value would leave surge detection only.</span>
           </div>
         </div>
       </div>
@@ -2409,10 +2409,11 @@ function renderPairs(pairs) {
   // standard issue tuple (see get_recent_spikes) and set alert_tier like every
   // other id, so no separate d1_spike gate is needed here.
   //
-  // Note that A1 and D1 are both Tier 3 as of the 2026-08 retiering: a pair whose
-  // ONLY issue is a crossed book or a volume spike now lands here as a flag, so
-  // it appears under "Show all" rather than in the default list. B2 was retiered
-  // with them but to Tier 2, so a source disagreement stays in the default list.
+  // A1 and D1 were both demoted to Tier 3 in the 2026-08 retiering and both were
+  // promoted back to Tier 2 in 2026-09, so a pair whose only issue is a crossed
+  // book or a volume spike is once again in the DEFAULT list rather than behind
+  // "Show all". B2 was retiered alongside them but to Tier 2 throughout, so a
+  // source disagreement has always stayed in the default list.
   const visible = showAll
     ? pairs
     : pairs.filter(p => (p.alert_tier === 1 || p.alert_tier === 2));
@@ -2544,7 +2545,10 @@ function renderDetailPanel(p) {
             + (nOrNull(p.best_ask) !== null && nOrNull(p.best_bid) !== null
                ? ` — gap ${fmtPrice(Number(p.best_ask) - Number(p.best_bid))}` : ""),
       note: "Fires when best bid ≥ best ask: someone is bidding at or above the offer. "
-            + "Dashboard-only — never sends Telegram, since the correction is the maker's own quoting.",
+            + "Sends to Telegram after 3 consecutive cycles, then a 15-minute cooldown. "
+            + "A cross the maker corrects clears long before the third cycle, so what "
+            + "confirms is a book still crossed minutes later — the maker not correcting "
+            + "it — or, until then, a standing self-arbitrage anyone can lift.",
     },
     {
       id: "A2-Spread", name: "Spread Widening", alertId: "A2",
@@ -2734,7 +2738,11 @@ function renderDetailPanel(p) {
             + (p.d1_context ? ` — ${p.d1_context}` : ""),
       note: "Needs BOTH: ≥3× this pair's own rolling baseline AND above its absolute floor. "
             + "The floor stops a normally-tiny pair firing on a ratio with no economic meaning. "
-            + "Dashboard-only — never sends Telegram: a spike is context, not an incident.",
+            + "Sends to Telegram after 3 consecutive cycles, then a 15-minute cooldown, "
+            + "capped at 2 deliveries per episode — a market trading far harder than usual "
+            + "is actionable, so this alert is worth waking up for. The alert also carries "
+            + "this pair's fill rate (see Fill Rate Deviation below) so you can tell one "
+            + "large fill from many small ones.",
       naDesc: "Monitor-only pair — no volume floor defined",
     },
     {
@@ -2743,7 +2751,7 @@ function renderDetailPanel(p) {
               : activeIssues["D2"] === "HIGH" ? "HIGH" : "MEDIUM",
       // "na" covers the three states where D2 deliberately has no verdict:
       // a delisted market, a baseline still warming, and a market too thin for
-      // a ratio test to carry signal. Each gets its own explanation below rather
+      // a change test to carry signal. Each gets its own explanation below rather
       // than a bare dash — an unexplained blank next to a healthy-looking book is
       // exactly the thing this check exists to stop happening.
       test: () => (p.fill_rate_status === "delisted"
@@ -2752,20 +2760,29 @@ function renderDetailPanel(p) {
                    || nOrNull(p.fill_events_1h) === null) ? "na"
                 : activeIssues["D2"] === "CRITICAL" ? "crit"
                 : activeIssues["D2"] ? "warn" : "pass",
+      // The signed percentage is the figure the verdict was actually made on, so
+      // it is what gets rendered — a ratio told the operator nothing about which
+      // direction the deviation ran in, and now it can run either way.
       desc: `${fmtQty(p.fill_events_1h)} fill events in the last hour vs `
             + `${fmtQty(p.fill_baseline_hourly, 1)} typical for this market`
-            + (nOrNull(p.fill_ratio) !== null ? ` — ratio ${fmtQty(p.fill_ratio, 2)}` : "")
+            + (nOrNull(p.fill_pct_change) !== null
+                 ? ` — ${fmtPct(p.fill_pct_change, 0, true)}`
+                   + (p.fill_direction ? ` ${p.fill_direction}` : "")
+                 : "")
             + ` (${fmtQty(p.fill_baseline_hours)}h baseline)`,
       note: `The only check that tells a QUOTED book from a TRADED one — every A-series `
             + `check reads the book, and a book can look perfect while nothing crosses it. `
-            + `Fires below ${fmtQty(p.fill_rate_threshold ?? 0.35, 2)}× this market's own `
-            + `baseline; CRITICAL only when the hour is a complete stop. An "event" is a ~5s `
+            + `Fires when the hour deviates more than ±${fmtQty(p.fill_pct_threshold ?? 65, 0)}% `
+            + `from this market's own baseline, IN EITHER DIRECTION — a collapse means it has `
+            + `stopped trading, a surge means something is suddenly hitting it much harder than `
+            + `usual. CRITICAL only when the hour is a complete stop; a surge tops out at HIGH, `
+            + `since a market filling hard is still unambiguously trading. An "event" is a ~5s `
             + `window containing at least one fill, NOT a trade count — Quidax has no public `
             + `trades endpoint, so fills are inferred from its ticker's 24h volume ticking up.`,
       naDesc: p.fill_rate_status === "delisted"
               ? "Asset delisted — still quoted, never trades. Excluded by config so it can't alert forever"
               : p.fill_rate_status === "too_thin"
-              ? "Too few fills/hour for a ratio test to mean anything — reported, never alerted"
+              ? "Too few fills/hour for a change test to mean anything in either direction — reported, never alerted"
               : "Fill-rate baseline still building — needs a full trailing hour plus closed-hour history",
     },
     {
@@ -4489,7 +4506,7 @@ function populateConfigFields(cfg) {
   set("cfg-fill-rate-baseline-buckets", fr.baseline_buckets);
   set("cfg-fill-rate-min-buckets",      fr.min_baseline_buckets);
   set("cfg-fill-rate-min-events",       fr.min_baseline_events);
-  set("cfg-fill-rate-ratio-threshold",  fr.ratio_threshold);
+  set("cfg-fill-rate-pct-threshold",    fr.pct_change_threshold);
 
   set("cfg-depth-walk-weight",                dw.weight_usdt);
   set("cfg-depth-walk-mid-weight",            dw.mid_weight_usdt);
@@ -4676,7 +4693,7 @@ function buildConfigPayload() {
       baseline_buckets:      num("cfg-fill-rate-baseline-buckets"),
       min_baseline_buckets:  num("cfg-fill-rate-min-buckets"),
       min_baseline_events:   num("cfg-fill-rate-min-events"),
-      ratio_threshold:       num("cfg-fill-rate-ratio-threshold"),
+      pct_change_threshold:  num("cfg-fill-rate-pct-threshold"),
     },
     depth_walk: {
       weight_usdt:              num("cfg-depth-walk-weight"),

@@ -110,8 +110,8 @@ Every check emits `(alert_id, severity, label)` tuples. Delivery is decided by a
 | Tier | Behaviour | Alert IDs |
 |---|---|---|
 | **1** | Fire on first occurrence; then 15-min cooldown per (pair, alert_id) | A2-CRITICAL, A6 (non-monitor-only), B1 (non-quiet-reference), B4-CRITICAL, G2-CRITICAL, E1, E2 |
-| **2** | Fire only after N consecutive cycles of the same issue (default N=3), then 15-min cooldown | A2-HIGH, B2, B4-HIGH, G2-HIGH |
-| **3** | Dashboard visibility only — never fires external alert | A1, A4, A5, D1, F1, and MEDIUM variants of A6/B1 |
+| **2** | Fire only after N consecutive cycles of the same issue (default N=3), then 15-min cooldown | A1, A2-HIGH, B2, B4-HIGH, D1, G2-HIGH |
+| **3** | Dashboard visibility only — never fires external alert | A4, A5, D2 (all severities, on trial), F1, and MEDIUM variants of A6/B1 |
 
 Subtleties in classification:
 
@@ -119,7 +119,8 @@ Subtleties in classification:
 - **A2 is severity-split too:** CRITICAL is the one-sided book merged in from the retired A3 and is Tier 1; HIGH (spread widening, shallow book) is Tier 2.
 - **A6 and B1 have MEDIUM variants that route to Tier 3.** These are "visible but silent" cases — an A6 on a monitor-only pair with no bot target, or a B1 stale-reference-unchanged where the peer source is also flat (quiet market, not a dead feed). Both ids are otherwise Tier 1, so the MEDIUM rule is deliberately tested *before* `TIER1_IDS` in `classify_tier`.
 - **B2 confirms before it sends.** Two reference sources disagreeing is a data-quality fact that `resolve_trusted_price` already acts on by dropping the outlier, so no single cycle of it needs an operator. Three consecutive cycles of it is a degrading reference feed, which does — hence Tier 2 rather than Tier 1 or dashboard-only.
-- **D1 is dashboard-only.** A volume spike is context rather than an incident, and it was the noisiest id when it paged.
+- **D1 confirms before it sends.** Promoted back to Tier 2 in 2026-09 after a 2026-08-27 demotion to dashboard-only. The demotion's reasoning — a volume spike is context, not an incident — holds for a market trading *less* than usual, but D1 only fires *upward*, and a market suddenly trading far harder than normal is the actionable case. A burst on an otherwise dormant market went unalerted while D1 was Tier 3. The quiet direction still never pages; it lives in D2.
+- **D2 is dashboard-only at every severity while on trial.** It is the newest id and the only one whose baseline is built from data the monitor collects itself, so its false-positive rate is unmeasured. `defaults.py` carries the severity split to restore when promoting it. Its per-pair figures still reach Telegram — as a clause on D1's label, since the two checks measure the value and frequency halves of the same event.
 - **A3 and B3 are retired.** A3 merged into A2 (severity-split) and B3 into B1, both in the 2026-08 review. `RETIRED_TIERS` in `defaults.py` keeps them classifying at their original tiers so historical log rows read back correctly.
 
 ### Delivery flow per issue
@@ -180,7 +181,7 @@ if best_bid >= best_ask:
     fire ("A1", "CRITICAL", ...)
 ```
 
-**Tier:** 3 (dashboard-only). A crossed book is unambiguous — there is no threshold to argue with and no confirmation to wait for — but correcting it is the LM bot's own quoting job, not an operator's. It stays CRITICAL on the dashboard and never reaches Telegram.
+**Tier:** 2 (confirms over 3 consecutive cycles, then a 15-min cooldown), as of the 2026-09 retier; dashboard-only before that. The Tier-3 argument was that correcting a cross is the LM bot's quoting job rather than an operator's — which holds only if the bot does correct it, and three confirming cycles is precisely that test. A self-corrected cross is gone before the third cycle, so confirmation is free; what survives is a book still crossed minutes later, plus immunity to the momentary cross that is only a snapshot artifact of the two sides being sampled microseconds apart. A1 emits a single severity (CRITICAL), so `TIER2_IDS` tiers it outright with no severity split.
 
 **State needed:** none.
 
@@ -530,7 +531,7 @@ else:
 
 **Mode = `absolute`:** bypass the baseline entirely, use only the floor. Provided as an escape hatch for fast rollback without redeploy.
 
-**Tier:** 3 (dashboard-only). A volume spike is context rather than an incident — nothing is broken and no operator action follows from it — and it was the noisiest id when it paged. `volume_spike.max_fires` still caps deliveries per episode and stays in place for a future retier, but nothing reaches Telegram while D1 is Tier 3. **State needed:** per-pair rolling volume buckets + last-bucket timestamp.
+**Tier:** 2 (confirms over 3 consecutive cycles, then a 15-min cooldown), as of the 2026-09 retier. `volume_spike.max_fires` caps deliveries at 2 per episode and is live again — it was inert throughout the Tier-3 period, since a Tier-3 id returns from `should_fire_telegram` before the cap is consulted. Known-open risk: the baseline averages six lookback windows, i.e. the last 24h across all times of day, so on a pair with concentrated trading hours the peak window is structurally several times the daily mean. Shipping the retier and measuring real delivery volume was the deliberate call; `spike_ratio`, then `max_fires`, then a time-of-day-aware baseline are the levers. **State needed:** per-pair rolling volume buckets + last-bucket timestamp.
 
 ```mermaid
 flowchart TD

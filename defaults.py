@@ -82,10 +82,25 @@ ACKABLE_ISSUE_IDS = frozenset({
 #
 # The memberships have been retuned twice; the reasons matter more than the
 # memberships themselves:
-#   A1 -> Tier 3. A crossed book is unambiguous and still shows CRITICAL on the
-#         dashboard, but it is the LM bot's own quoting to correct, not something
-#         an operator acts on at 3am. Note that TIER3_IDS is tested FIRST in
-#         classify_tier, so this silences A1 at every severity.
+#   A1 -> Tier 2, reversing its own demotion to Tier 3 for the same reason D1's
+#         was reversed: the demotion answered "should this page instantly?" when
+#         the question was "should this page at all?".
+#         The Tier-3 argument was that a crossed book is the LM bot's own quoting
+#         to correct, not something an operator acts on at 3am. That argument
+#         depends on the bot actually correcting it — and if it does, the cross
+#         clears within a cycle or two and a three-cycle confirmation NEVER FIRES.
+#         Tier 2 is silent for precisely the transient case the demotion was
+#         protecting against. What survives three consecutive cycles is a book
+#         that is crossed and STAYING crossed, i.e. the bot is not correcting it,
+#         which is the state the check exists to find.
+#         A standing cross is also directly extractive in a way B1's drift is not
+#         — anyone can lift the ask and hit the bid — and B1 pages on sight.
+#         Confirmation buys a second thing for free: a momentary cross can be a
+#         snapshot artifact when the two sides of the book are captured
+#         microseconds apart. Tier 1 would page on those, Tier 3 ignores
+#         everything, Tier 2 filters exactly them.
+#         A1 emits only CRITICAL (one site, in process_pair), so there is no
+#         severity split to consider — TIER2_IDS decides it outright.
 #   B1 -> Tier 1. A quoted price that has drifted from the trusted reference is
 #         the incident an operator actually acts on, and it costs money for every
 #         cycle it stands — holding it for three confirmations delayed the one
@@ -99,10 +114,31 @@ ACKABLE_ISSUE_IDS = frozenset({
 #         someone before B1 starts pricing off whichever side survived.
 #         Confirmation is what keeps it quiet: a one-cycle blip on either
 #         exchange never leaves the dashboard.
-#   D1 -> Tier 3. A volume spike is context rather than an incident — nothing is
-#         broken and there is no operator action it implies. It was the noisiest
-#         id at Tier 1, and three-cycle confirmation only made it a slower kind of
-#         noise, so it is now dashboard-only.
+#   D1 -> Tier 2, REVERSING the 2026-08-27 demotion to Tier 3. This id has now
+#         been retiered twice and both reasons matter, so both are kept.
+#         The demotion's reasoning was that a volume spike is "context rather
+#         than an incident". That is true of the quiet direction and false of the
+#         loud one, and the taxonomy had no way to say so: D1 only ever fires
+#         upward. A market suddenly trading far harder than it normally does IS
+#         the actionable case — a maker dumping inventory, a stale quote being
+#         picked off, news nobody has seen yet — and demoting it optimised for a
+#         quiet channel at the cost of the one direction an operator acts on. A
+#         burst on an otherwise dormant market went unalerted as a direct result.
+#         The quiet direction stays dashboard-only, but it lives in D2, not here.
+#
+#         WHAT IS STILL UNFIXED, deliberately: D1 was already Tier 2 before the
+#         demotion and was noisy there too ("a slower kind of noise"). The likely
+#         cause is not the tier but the baseline — update_volume_baseline averages
+#         six lookback_minutes buckets, i.e. the last 24h across ALL times of day,
+#         so on a pair whose trading concentrates in business hours the peak
+#         window is structurally several times the daily mean and D1 fires every
+#         day on a healthy market. Three-cycle confirmation cannot filter a signal
+#         that is genuinely present for hours, which is exactly what was observed.
+#         Shipping the retier first and measuring real delivery volume was the
+#         explicit call. If it proves noisy the levers are, cheapest first:
+#         volume_spike.spike_ratio (3.0, exposed in the config drawer),
+#         volume_spike.max_fires (2, the per-episode cap — inert at Tier 3, LIVE
+#         again as of this retier), then a time-of-day-aware baseline.
 #
 # A3 and B3 are absent because they no longer exist as live ids — the 2026-08
 # review merged A3 into A2 (an empty side is the extreme of a shallow book) and
@@ -110,11 +146,14 @@ ACKABLE_ISSUE_IDS = frozenset({
 # separate incident). Both survive in RETIRED_TIERS below so historical log rows
 # still classify the way they did when they were written.
 TIER1_IDS = frozenset({"A6", "B1"})
-# B2 is the only id this set actually decides: A2 is severity-split, so
+# A1, B2 and D1 are the ids this set actually decides: A2 is severity-split, so
 # classify_tier answers for it before this set is ever consulted, and it is kept
 # here only as documentation of where "needs confirming" ids live. B4-HIGH and
-# G2-HIGH likewise land in Tier 2 through their own severity splits.
-TIER2_IDS = frozenset({"A2", "B2"})
+# G2-HIGH likewise land in Tier 2 through their own severity splits. A1 and D1
+# have no severity split at all — each emits a single hardcoded severity
+# (CRITICAL and HIGH respectively) — so this set is the only thing that tiers
+# them, and a confirmation counter is their only noise control.
+TIER2_IDS = frozenset({"A1", "A2", "B2", "D1"})
 #   D2 -> Tier 3 AT EVERY SEVERITY, deliberately, while the check is on trial.
 #         It is the newest id and the only one whose baseline is built from data
 #         this system collects itself rather than fetches, so its false-positive
@@ -133,7 +172,7 @@ TIER2_IDS = frozenset({"A2", "B2"})
 #         placed next to the A2/B4/G2 branches. MEDIUM must stay Tier 3 in that
 #         split: it is the shallow end of the deviation, where Poisson noise on an
 #         hourly count is still a plausible explanation.
-TIER3_IDS = frozenset({"A1", "A4", "A5", "D1", "D2", "F1"})
+TIER3_IDS = frozenset({"A4", "A5", "D2", "F1"})
 
 
 # Ids that no longer fire, mapped to how they used to classify. Existing daily
@@ -323,11 +362,16 @@ DEFAULT_CONFIG: dict = {
         "poll_interval_seconds":    5,
         "baseline_buckets":         24,   # prior CLOSED hours averaged for the self-baseline
         "min_baseline_buckets":     6,    # refuse to judge until this many closed hours exist
-        # Below this many events/hour a market is too thin for a ratio test to
-        # mean anything (Poisson noise swamps it) — reported, never alerted.
-        # See classify_deviation's docstring for the arithmetic.
+        # Below this many events/hour a market is too thin for a change test to
+        # mean anything (Poisson noise swamps it, in BOTH directions) —
+        # reported, never alerted. See classify_deviation's docstring.
         "min_baseline_events":      8.0,
-        "ratio_threshold":          0.35, # fires when the trailing hour drops below this fraction
+        # D2 fires when the trailing hour's event count differs from this
+        # market's own baseline by more than this many percent, IN EITHER
+        # DIRECTION — a collapse and a surge are both worth knowing about, and a
+        # one-sided ratio test could only ever see the collapse. 65% on the down
+        # side is exactly the old 0.35 ratio threshold this replaces.
+        "pct_change_threshold":     65.0,
         "condensed_retention_days": 30,
     },
     # Markets that no longer trade because the ASSET WAS DELISTED, not because
@@ -449,6 +493,40 @@ def default_config() -> dict:
     return copy.deepcopy(DEFAULT_CONFIG)
 
 
+def _migrate_stored(stored: dict) -> dict:
+    """
+    Rewrite retired keys in a stored/partial config into their current form,
+    without mutating the caller's dict. Applied by merge_config BEFORE the merge,
+    which is the only point both the monitor and the API pass through — doing it
+    in either process alone would let the two disagree about what a stored config
+    means, and the dashboard would then display a threshold the monitor is not
+    using.
+
+    fill_rate.ratio_threshold -> fill_rate.pct_change_threshold
+        D2 was a one-sided ratio test until the two-sided rework; a config written
+        before it still carries the old key. Left alone it would be ignored, and an
+        operator who had TUNED it would silently get the default back on the next
+        deploy. A ratio r fired at a drop of (1 - r) x 100 percent, so the
+        conversion is exact: 0.35 -> 65.0. The new key wins when both are present,
+        and the old one is dropped so it cannot be written back out on the next
+        save and linger forever.
+    """
+    fr = stored.get("fill_rate")
+    if not isinstance(fr, dict) or "ratio_threshold" not in fr:
+        return stored
+
+    stored = dict(stored)
+    fr = dict(fr)
+    ratio = fr.pop("ratio_threshold")
+    if fr.get("pct_change_threshold") is None:
+        try:
+            fr["pct_change_threshold"] = (1.0 - float(ratio)) * 100.0
+        except (TypeError, ValueError):
+            pass  # unusable stored value — fall through to the default
+    stored["fill_rate"] = fr
+    return stored
+
+
 def merge_config(stored: dict, base: dict | None = None) -> dict:
     """
     Deep-merge a stored/partial config dict over a fresh copy of `base`
@@ -459,13 +537,15 @@ def merge_config(stored: dict, base: dict | None = None) -> dict:
       - any other dict section is shallow-updated key-by-key onto the base, so a
         partial section (e.g. only one pricing knob) keeps the rest of that section.
       - any non-dict / unknown top-level key is replaced wholesale.
+      - retired keys are rewritten first (see _migrate_stored), so a config saved
+        by an older build keeps meaning what its author intended.
 
     `base` lets the same helper serve two cases with identical semantics:
       - loading from disk:   merge_config(stored)                 # over defaults
       - saving an edit (API): merge_config(body, base=current)    # over current
     """
     merged = copy.deepcopy(DEFAULT_CONFIG if base is None else base)
-    for section, values in stored.items():
+    for section, values in _migrate_stored(stored).items():
         if section == "pairs":
             merged["pairs"] = values
         elif isinstance(values, dict) and section in merged:

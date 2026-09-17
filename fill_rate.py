@@ -117,35 +117,80 @@ def baseline_from_history(points: list, max_buckets: int) -> tuple[float | None,
     return sum(p["events"] for p in window) / len(window), len(window)
 
 
+def pct_change(current: int | None, baseline: float | None) -> float | None:
+    """
+    Signed percentage change of a trailing-hour count against the baseline.
+    None when the comparison is undefined (no count yet, or a zero baseline —
+    every market is infinitely above zero, so the number would carry no
+    information). Shared with the monitor's metrics and the dashboard so the
+    figure an operator reads is the same one the verdict below was made on.
+    """
+    if current is None or baseline is None or baseline <= 0:
+        return None
+    return (current - baseline) / baseline * 100.0
+
+
 def classify_deviation(current: int | None, baseline: float | None,
                        bucket_count: int, min_buckets: int,
                        min_baseline_events: float,
-                       ratio_threshold: float) -> tuple[str, str] | None:
+                       pct_change_threshold: float) -> tuple[str, str, str] | None:
     """
     The D2 decision, kept pure so it is testable without a network or a clock.
 
-    Returns (severity, reason) or None. `current` is the trailing-60-minute event
-    count; `baseline` the mean over prior closed hours. Comparing a full trailing
-    hour against a mean of full hours keeps the two sides the same shape — an
-    in-progress partial hour would read as a collapse for 59 minutes out of 60.
+    Returns (severity, direction, reason) or None. `current` is the trailing-60-
+    minute event count; `baseline` the mean over prior closed hours. Comparing a
+    full trailing hour against a mean of full hours keeps the two sides the same
+    shape — an in-progress partial hour would read as a collapse for 59 minutes
+    out of 60.
 
-    THE min_baseline_events GUARD IS THE LOAD-BEARING PART. Fill arrivals are
-    Poisson-ish, so the noise on a count of n is about sqrt(n). On a market
-    baselining at 40 events/hr that is +/-6 — a ratio test at 0.35 is nowhere
-    near it. On a market baselining at 2/hr the same noise is +/-1.4, i.e. a
-    perfectly healthy market routinely prints ratios under 0.35 by chance alone.
-    Without this floor D2 would fire forever on exactly the thin markets an
-    operator can do least about. Markets below the floor are still reported (the
-    dashboard shows their rate) but never alerted on.
+    ──────────────── Why absolute percentage change, not a ratio ──────────────
+    A ratio test is one-sided by construction: it can only fire on the way down,
+    because the interesting region (0..threshold) lies below 1 and everything
+    above 1 is a single undifferentiated "fine". But a fill rate that SURGES is
+    a signal too — a maker that has started dumping inventory, a mispriced quote
+    getting picked off, a market reacting to news the operator has not seen yet.
+    Measuring |percentage change from baseline| makes the check symmetric: one
+    threshold, both directions, and the number an operator reads ("+180%") is
+    the same number the verdict was made on.
+
+    The drop side is a pure re-parameterisation of the ratio test it replaces —
+    a 0.35 ratio threshold IS a -65% change threshold, and the HIGH rung below
+    lands on exactly the same counts the old `ratio < threshold / 2` did.
+
+    ─────────────────────── Why the two rungs differ ──────────────────────────
+    The second rung is NOT mirrored, deliberately. A drop is bounded at -100%,
+    so its HIGH rung is placed halfway between the threshold and that floor;
+    with a 65% threshold that is -82.5%, which is precisely where the old ratio
+    test put it. A surge has no ceiling, so halfway-to-the-limit is meaningless
+    and its HIGH rung sits at twice the threshold instead (+130%). Mirroring the
+    drop's arithmetic onto the surge side would put HIGH at +82.5%, barely above
+    the MEDIUM line, and collapse the two rungs into one.
+
+    CRITICAL stays exclusive to the drop side. It means a complete stop — zero
+    fills in the hour — which is the one state that says the market is
+    definitively not trading. There is no upper-side equivalent: a market
+    filling ten times its usual rate is still, unambiguously, trading.
+
+    THE min_baseline_events GUARD IS THE LOAD-BEARING PART, and it now matters
+    MORE than it did under the ratio test. Fill arrivals are Poisson-ish, so the
+    noise on a count of n is about sqrt(n). On a market baselining at 40
+    events/hr that is +/-6 — a +/-65% test is nowhere near it. On a market
+    baselining at 2/hr the same noise is +/-1.4, i.e. a perfectly healthy market
+    routinely prints both -65% AND +65% by chance alone; the symmetric test
+    gives that noise two ways to fire instead of one. Without this floor D2
+    would alert forever on exactly the thin markets an operator can do least
+    about. Markets below the floor are still reported (the dashboard shows their
+    rate) but never alerted on.
     """
     if current is None or baseline is None or bucket_count < min_buckets:
         return None
 
     if baseline <= 0:
-        # No fills across the ENTIRE baseline window. Ratio-vs-baseline can never
-        # catch this — the baseline converged to the outage, so the outage looks
-        # normal. Identical failure mode to A6's zero-churn case, handled the
-        # same explicit way rather than silently passing through.
+        # No fills across the ENTIRE baseline window. A change-from-baseline test
+        # can never catch this — the baseline converged to the outage, so the
+        # outage looks normal, and the percentage is undefined besides. Identical
+        # failure mode to A6's zero-churn case, handled the same explicit way
+        # rather than silently passing through.
         #
         # Callers MUST exclude delisted markets before reaching here or this
         # fires permanently on them: a delisted pair keeps a full, healthy-looking
@@ -155,23 +200,40 @@ def classify_deviation(current: int | None, baseline: float | None,
         # That indistinguishability is the whole point of the check and also
         # exactly why the exclusion list cannot be inferred from the API.
         if current <= 0:
-            return ("CRITICAL",
+            return ("CRITICAL", "collapse",
                     f"No fills observed across the entire {bucket_count}-hour "
                     f"baseline window — market may already have been dead when "
                     f"monitoring started; no active period available to compare "
                     f"against")
-        return None  # baseline 0 but filling now — market just woke up, fine
-
-    if baseline < min_baseline_events:
-        return None  # too thin for a ratio to mean anything — see docstring
-
-    ratio = current / baseline
-    if ratio >= ratio_threshold:
+        # Baseline 0 but filling now — the market just woke up. Formally this is
+        # an infinite surge, and reporting it as one would fire on every market
+        # coming back from a quiet night. Waking up is the good outcome.
         return None
 
-    severity = "CRITICAL" if current == 0 else (
-        "HIGH" if ratio < ratio_threshold / 2 else "MEDIUM")
-    return (severity,
-            f"Fill rate {current} events/h vs {baseline:.1f} typical for this "
-            f"market (ratio {ratio:.2f}, fires below {ratio_threshold:.2f}, "
-            f"{bucket_count}-hour baseline)")
+    if baseline < min_baseline_events:
+        return None  # too thin for a change test to mean anything — see docstring
+
+    change = pct_change(current, baseline)
+    # Strictly beyond, not at — every comparison below is exclusive, which is what
+    # makes the drop side land on exactly the counts the old ratio test did (it
+    # fired on `ratio < threshold`, never on equality). Only reachable on exact
+    # coincidences, but "the drop side is unchanged" is either true or it isn't.
+    if change is None or abs(change) <= pct_change_threshold:
+        return None
+
+    if change < 0:
+        # HIGH at the midpoint between the threshold and the -100% floor, which
+        # reproduces the old ratio test's `ratio < threshold / 2` rung exactly.
+        high_cut = -(100.0 + pct_change_threshold) / 2.0
+        severity = "CRITICAL" if current == 0 else (
+            "HIGH" if change < high_cut else "MEDIUM")
+        direction, verb = "collapse", "collapsed"
+    else:
+        # Unbounded above, so twice the threshold rather than halfway to a limit.
+        severity  = "HIGH" if change > 2.0 * pct_change_threshold else "MEDIUM"
+        direction, verb = "surge", "surged"
+
+    return (severity, direction,
+            f"Fill rate {verb} — {current} events/h vs {baseline:.1f} typical "
+            f"for this market ({change:+.0f}%, fires past "
+            f"±{pct_change_threshold:.0f}%, {bucket_count}-hour baseline)")

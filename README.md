@@ -203,6 +203,15 @@ or equal to the best ask. Someone is offering to buy at or above the price
 someone else is selling at, which should be instantly arbitraged away; if it
 persists, the matching engine or the market-maker's quoting is broken.
 
+A1 is **Tier 2** — it confirms over three consecutive cycles. That word
+*persists* is the whole reason: a cross the maker corrects is gone within a cycle
+or two and never reaches the third, so confirmation costs nothing for the
+transient case, while what does confirm is a book still crossed three minutes
+later. It also absorbs the snapshot artifact — a momentary cross that only exists
+because the two sides of the book were captured microseconds apart — which is
+what would have made Tier 1 untenable. A1 was dashboard-only between the 2026-08
+and 2026-09 retiers; see *Why A1 confirms rather than flags or pages* below.
+
 **A2 — Spread widening (HIGH).** Only for pairs with a configured target spread.
 The check compares the live spread % against that target as a *relative* deviation:
 `diff = (spread − target) / target × 100`. It flags when the spread is more than
@@ -388,11 +397,19 @@ wipes `health_state.json` doesn't create a blind spot. Setting it to `"suppress"
 trades that for silence during warm-up instead. Setting `mode: "absolute"`
 bypasses the baseline permanently.
 
+**D1 is Tier 2** — it confirms over three consecutive cycles, then takes the
+standard 15-minute cooldown, and is capped at two deliveries per episode. Its
+Telegram label also carries this pair's fill rate from D2 when D2 has a judgement
+worth stating; a `warming` or `delisted` market contributes nothing rather than a
+number with no baseline behind it. See *Why D1 was promoted back to Tier 2* under
+"What actually reaches Telegram".
+
 ### D2 — Fill rate deviation (MEDIUM/HIGH/CRITICAL)
 
-The only check that distinguishes a **quoted** book from a **traded** one. Every
-A-series check reads the order book, and a book can look flawless while nothing
-ever crosses it. Verified 2026-09-14: all seven delisted pairs were still quoting
+The only check that distinguishes a **quoted** book from a **traded** one, and
+the only one that watches *how hard* it is being traded. Every A-series check
+reads the order book, and a book can look flawless while nothing ever crosses
+it. Verified 2026-09-14: all seven delisted pairs were still quoting
 ~25 levels a side, passed every structural check, and had not filled in five
 hours. A maker that has stopped hedging, a stuck matching engine, or a market
 that has quietly died all present the same way — as a healthy book.
@@ -430,9 +447,49 @@ Two measurement details that matter:
 D2 compares each market's trailing-hour event count against **its own** mean over
 prior closed hours — a self-baseline like A4 and A6, because measured rates span
 an order of magnitude across the pair list (usdtngn ~92 events/hr, aaveusdt ~10)
-and no fixed cutoff serves both ends. It fires below `ratio_threshold` (0.35) of
-that baseline, at CRITICAL (complete stop), HIGH (partial collapse) or MEDIUM
-(shallow dip).
+and no fixed cutoff serves both ends.
+
+**It fires on the absolute percentage change from that baseline, in either
+direction** — past `pct_change_threshold` (65%). A ratio test is one-sided by
+construction: the interesting region sits below 1 and everything above it is a
+single undifferentiated "fine". But a fill rate that *surges* is a signal too — a
+maker dumping inventory, a stale quote being picked off, or news the operator has
+not seen yet all present as a market suddenly trading far harder than it ever
+normally does.
+
+The drop side is a pure re-parameterisation of the ratio test it replaced: a 0.35
+ratio threshold *is* a −65% change threshold, and the HIGH rung lands on exactly
+the same counts. A stored `monitor_config.json` carrying the old
+`ratio_threshold` is converted on load ((1 − r) × 100), so a tuned value survives
+the switch instead of silently reverting to the default.
+
+| Change from baseline | Severity |
+| --- | --- |
+| zero fills in the hour | CRITICAL |
+| beyond −82.5% | HIGH |
+| −65% to −82.5% | MEDIUM |
+| +65% to +130% | MEDIUM |
+| beyond +130% | HIGH |
+
+Every comparison is strictly *beyond* the bound, never at it — which is what makes
+the drop side land on exactly the counts the old ratio test did (it fired on
+`ratio < threshold`, never on equality).
+
+**The two rungs are deliberately not mirrored.** A drop is bounded at −100%, so
+its HIGH rung sits halfway between the threshold and that floor (−82.5%, exactly
+where the old ratio test put it). A surge has no ceiling, so halfway-to-the-limit
+is meaningless and its HIGH rung sits at twice the threshold instead. Mirroring
+the drop's arithmetic upward would put HIGH at +82.5%, barely above the MEDIUM
+line, collapsing the two rungs into one.
+
+**CRITICAL stays exclusive to the collapse side.** It means a complete stop,
+which is the one state that says the market is definitively not trading. There is
+no upper-side equivalent — a market filling ten times its usual rate is still,
+unambiguously, trading.
+
+`pct_change_threshold` is capped at 100 by the config endpoint: a count cannot
+fall more than 100% below its baseline, so a higher value would silently disable
+the collapse side and leave a surge-only check.
 
 **D2 is Tier 3 — dashboard only, no Telegram — at every severity while the check
 is on trial.** It is the newest id and the only one whose baseline is built from
@@ -442,10 +499,12 @@ severity split to restore when promoting it.
 
 Three guards keep it quiet when it has nothing to say:
 
-- **`min_baseline_events` (8/hr).** Fill arrivals are Poisson-ish, so noise on a
-  count of *n* is about √n. At a baseline of 40/hr that's ±6 and a 0.35 ratio test
-  is nowhere near it; at 2/hr it's ±1.4, and a perfectly healthy market trips 0.35
-  by chance alone. Markets below the floor are reported, never alerted.
+- **`min_baseline_events` (8/hr)** — and it matters *more* under a two-sided test
+  than it did under the ratio. Fill arrivals are Poisson-ish, so noise on a count
+  of *n* is about √n. At a baseline of 40/hr that's ±6 and a ±65% test is nowhere
+  near it; at 2/hr it's ±1.4, and a perfectly healthy market trips both −65% *and*
+  +65% by chance alone — the symmetric test gives that noise two ways to fire
+  instead of one. Markets below the floor are reported, never alerted.
 - **`min_baseline_buckets` (6).** No verdict until six closed hours exist.
 - **The startup hour is discarded.** A process starting 59 minutes into an hour
   would otherwise persist that partial count as a full one, biasing the baseline
@@ -599,8 +658,8 @@ The dashboard shows every issue found. Telegram is gated much more tightly.
 | Tier | Behaviour | Issues |
 |---|---|---|
 | 1 | Fires immediately on first detection | A2-CRITICAL, A6, B1, B4-CRITICAL, G2-CRITICAL, E1, E2 |
-| 2 | Must repeat 3 consecutive cycles first | A2-HIGH, B2, B4-HIGH, G2-HIGH |
-| 3 | Dashboard flag only, never Telegram | A1, A4, A5, D1, F1, A6-MEDIUM, B1-MEDIUM |
+| 2 | Must repeat 3 consecutive cycles first | A1, A2-HIGH, B2, B4-HIGH, D1, G2-HIGH |
+| 3 | Dashboard flag only, never Telegram | A4, A5, F1, A6-MEDIUM, B1-MEDIUM |
 
 The MEDIUM variants of A6 and B1 exist *specifically* to land in Tier 3 — they're
 the "visible but probably benign" cases (a monitor-only pair with a frozen book;
@@ -614,8 +673,44 @@ immediately. Two reference sources merely disagreeing does not:
 one-cycle blip on either exchange needs nobody. A divergence that holds for three
 consecutive cycles is a different thing — the reference feed itself is degrading,
 and B1 is about to price off whichever side survived — so B2 sends at Tier 2.
-D1 stays dashboard-only: a volume spike is context, not an incident, and it was
-the noisiest id when it paged.
+
+**Why A1 confirms rather than flags or pages.** A1 was demoted to Tier 3 in the
+2026-08 review on the grounds that a crossed book is the LM bot's own quoting to
+correct, not something an operator acts on at 3am. That argument depends on the
+bot actually correcting it, and a three-cycle confirmation is exactly the test of
+whether it did. The demotion answered "should this page instantly?" when the
+question was "should this page at all?" — Tier 2 is silent for the self-correcting
+case and sends only when the correction hasn't happened. A standing cross is also
+directly extractive in a way B1's drift is not: anyone can lift the ask and hit
+the bid, and B1 pages on sight.
+
+**Why D1 was promoted back to Tier 2.** D1 sat at Tier 2, was demoted to Tier 3 on
+2026-08-27 as "context, not an incident", and was promoted back in 2026-09. The
+demotion's reasoning holds for a market trading *less* than usual — nothing is
+broken, nobody acts at 3am — but D1 only ever fires *upward*, and a market
+suddenly trading far harder than it normally does is precisely the actionable
+case: a maker dumping inventory, a stale quote being picked off, news nobody has
+seen yet. Demoting it optimised for a quiet channel at the cost of the one
+direction an operator acts on, and a burst on an otherwise dormant market went
+unalerted as a result. The quiet direction still never pages — it lives in D2.
+
+D1's alert now also carries that pair's **fill rate** from D2. The two checks
+measure different halves of one event: D1 measures value (quote volume over the
+k-line window), D2 measures frequency (fill events over the trailing hour). One
+whale trade is a large spike at ~1 event; two hundred small trades are the same
+naira figure at a hundred times the event count. D2 is Tier 3, so D1's label is
+the only route by which fill data reaches Telegram.
+
+One thing is knowingly still open: D1 was noisy at Tier 2 before, and the cause is
+most likely the baseline rather than the tier. `update_volume_baseline` averages
+six lookback windows — the last 24 hours across *all* times of day — so on a pair
+whose trading concentrates in business hours the peak window is structurally
+several times the daily mean, and no amount of confirmation filters a signal
+that is genuinely present for hours. Shipping the retier and measuring real
+delivery volume was the deliberate call. The levers if it proves noisy, cheapest
+first: `volume_spike.spike_ratio` (3.0, in the config drawer),
+`volume_spike.max_fires` (2, the per-episode cap — inert at Tier 3, live again
+now), then a time-of-day-aware baseline.
 
 **A3 and B3 are retired ids.** A3 merged into A2 and B3 into B1 in the 2026-08
 review. They still classify at their original tiers (`RETIRED_TIERS` in
@@ -642,10 +737,15 @@ burn the cooldown; the alert simply retries next cycle instead of going dark for
 rolling window* and therefore re-detect every single cycle for hours. Without a
 cap they'd re-fire once per cooldown for the entire life of the window. So each
 gets a cap of 2 confirmed deliveries per "episode" — an unbroken run of cycles in
-which the issue keeps appearing. Fire on detection, one more after the cooldown,
-then dashboard-visible but silent until the window finally clears and the episode
-re-arms. A HIGH→CRITICAL escalation on the same lingering candle does *not* break
-through the cap.
+which the issue keeps appearing. Fire once the issue has earned its send, one more
+after the cooldown, then dashboard-visible but silent until the window finally
+clears and the episode re-arms. A HIGH→CRITICAL escalation on the same lingering
+candle does *not* break through the cap.
+
+D1's cap was inert for as long as D1 was Tier 3 — a Tier-3 id returns from
+`should_fire_telegram` before the cap is ever consulted — and is live again since
+the promotion. It is now the main thing standing between a 4-hour volume window
+and one Telegram per cooldown for that window's whole life.
 
 **Deduping.** Two checks legitimately emit the same ID in one cycle: A2 (spread
 widening + shallow book) and B1 (MEXC stale + KuCoin stale, plus the price
