@@ -45,6 +45,10 @@ import kline_volume as klv
 # the hourly bucketing and the baseline maths are computed identically in both
 # processes. api.py only ever READS the archive; debug.py's sampler owns writing it.
 import fill_rate as flr
+# Robust, time-of-day-aware baselines for D1 and D2 — same import-only
+# contract, and shared for the same reason as the two above: the baseline
+# the dashboard reports must be the one the monitor's verdict was made on.
+import baseline as bsl
 
 
 def _sanitize(obj):
@@ -111,6 +115,11 @@ VOLUME_ARCHIVE_FILE = DATA_DIR / "usdtngn_volume_hourly.json"
 # inferred from a ticker poll and no endpoint reports them historically, so an
 # absent file means no data at all rather than "no deep history".
 FILL_RATE_FILE = DATA_DIR / "fill_rate_hourly.json"
+# D1 per-pair hourly volume archive (written by debug.py's pair_volume_loop).
+# Distinct from VOLUME_ARCHIVE_FILE above in scope and units — every configured
+# pair, carrying base volume, close and quote volume together — and read here
+# only so the dashboard can explain the baseline D1 judged against.
+PAIR_VOLUME_FILE = DATA_DIR / "pair_volume_hourly.json"
 STATIC_DIR  = Path(".")          # dashboard.html lives next to api.py
 NIGERIAN_TZ = timezone(timedelta(hours=1))
 
@@ -183,6 +192,7 @@ def parse_latest_csv() -> list[dict]:
                 "ask_layers", "bid_layers", "trusted_ref",
                 "layer_churn_pct", "layer_churn_baseline_pct",
                 "d1_window_volume", "d1_threshold",
+                "d1_baseline", "d1_baseline_samples",
                 # A1 / A2
                 "best_ask", "best_bid", "spread_diff_pp",
                 "min_orderbook_layers", "dws_threshold", "min_abs_spread_diff_pct",
@@ -1661,6 +1671,10 @@ def get_fill_rate(market: Optional[str] = None, hours: int = 24):
     buckets   = int(fr.get("baseline_buckets", 24))
     min_ev    = float(fr.get("min_baseline_events", 8.0))
     min_bk    = int(fr.get("min_baseline_buckets", 6))
+    model     = str(fr.get("baseline_model", bsl.MODEL_SEASONAL))
+    b_days    = float(fr.get("baseline_days", 30))
+    min_slot  = int(fr.get("min_slot_samples", 8))
+    now       = datetime.now(NIGERIAN_TZ)
 
     if market:
         key = market.lower()
@@ -1679,16 +1693,32 @@ def get_fill_rate(market: Optional[str] = None, hours: int = 24):
         # first would hand the dashboard a different baseline than the one D2
         # actually fired against, which is the kind of mismatch that makes an
         # operator distrust the alert rather than the chart.
-        baseline, n = flr.baseline_from_history(points, buckets)
+        baseline, n, method, mad = flr.resolve_baseline(
+            points, now, baseline_days=b_days, min_slot_samples=min_slot,
+            min_buckets=min_bk, max_buckets=buckets, model=model)
+        # The gate moves with the rung: `n` counts hours under the legacy mean
+        # and days-at-this-hour under a slot median. Same reasoning as
+        # debug.py's _d2_min_samples, and it has to agree with it — this endpoint
+        # reporting "active" while the monitor still calls the market "warming"
+        # is precisely the drift that sharing resolve_baseline prevents.
+        need = min_slot if method != "legacy_mean" else min_bk
         series = points[-hours:] if hours > 0 else points
         out[sym] = {
             "series":          series,
             "baseline_hourly": (round(baseline, 2) if baseline is not None else None),
             "baseline_hours":  n,
+            "baseline_method": method,
+            # Reported here and nowhere else for now: MAD is what a future robust
+            # z-score would divide by, and watching it against real markets is how
+            # that gets calibrated before anything fires on it. None when it
+            # computes to zero — see baseline.mad.
+            "baseline_mad":    (round(mad, 2) if mad is not None else None),
+            "baseline_note":   flr.describe_baseline(
+                method, n, bsl.slot_key(bsl.last_closed_hour(now))),
             # Why this market is or isn't eligible to alert, so the dashboard can
             # explain a blank instead of just showing one.
             "status": ("delisted" if sym in delisted
-                       else "warming" if n < min_bk
+                       else "warming" if n < need
                        else "too_thin" if (baseline or 0) < min_ev
                        else "active"),
         }
@@ -1701,6 +1731,9 @@ def get_fill_rate(market: Optional[str] = None, hours: int = 24):
             "min_baseline_buckets":  min_bk,
             "min_baseline_events":   min_ev,
             "pct_change_threshold":  fr.get("pct_change_threshold"),
+            "baseline_model":        model,
+            "baseline_days":         b_days,
+            "min_slot_samples":      min_slot,
         },
         # Stated in the payload rather than left to the reader, for the same
         # reason the docstring leads with it.
@@ -1994,6 +2027,11 @@ async def post_config(request: Request):
         if "warmup_fallback" in vs and vs["warmup_fallback"] not in ("absolute", "suppress"):
             raise HTTPException(status_code=400,
                 detail="volume_spike.warmup_fallback must be 'absolute' or 'suppress'")
+        if "baseline_model" in vs and vs["baseline_model"] not in bsl.VALID_MODELS:
+            raise HTTPException(status_code=400,
+                detail="volume_spike.baseline_model must be 'seasonal_median' or "
+                       "'flat_mean' ('flat_mean' restores the pre-seasonal "
+                       "mean-of-baseline_buckets behaviour)")
         for k in ("spike_ratio", "min_baseline_buckets"):
             if k in vs:
                 v = vs[k]
@@ -2007,12 +2045,36 @@ async def post_config(request: Request):
         # independent of kline.* (B4-only). Must be strictly positive: a 0-minute
         # candle/lookback or a 0-bucket baseline is meaningless, unlike spike_ratio/
         # min_baseline_buckets above which tolerate 0.
-        for k in ("candle_minutes", "lookback_minutes", "baseline_buckets"):
+        for k in ("candle_minutes", "lookback_minutes", "baseline_buckets",
+                  "baseline_days", "min_slot_samples"):
             if k in vs:
                 v = vs[k]
                 if not isinstance(v, (int, float)) or isinstance(v, bool) or v <= 0:
                     raise HTTPException(status_code=400,
                         detail=f"volume_spike.{k} must be a positive number")
+        # The seasonal baseline reads an HOURLY archive, so D1's window has to be
+        # expressible in whole hours or the two sides of its comparison are not
+        # the same shape. The monitor degrades to the legacy mean rather than
+        # comparing mismatched windows, but silently getting a weaker baseline
+        # because of an unrelated edit is exactly the kind of surprise this
+        # validator exists to prevent — so say it at the edge instead.
+        _cm = vs.get("candle_minutes")
+        _lb = vs.get("lookback_minutes")
+        if vs.get("baseline_model", bsl.MODEL_SEASONAL) == bsl.MODEL_SEASONAL:
+            if _cm is not None and _cm != 60:
+                raise HTTPException(status_code=400,
+                    detail="volume_spike.candle_minutes must be 60 while "
+                           "baseline_model is 'seasonal_median' — the per-pair "
+                           "volume archive the seasonal baseline reads is hourly. "
+                           "Set baseline_model to 'flat_mean' to use another "
+                           "candle size.")
+            if _lb is not None and _lb % 60 != 0:
+                raise HTTPException(status_code=400,
+                    detail="volume_spike.lookback_minutes must be a whole number "
+                           "of hours while baseline_model is 'seasonal_median', "
+                           "so the window can be rebuilt from hourly archive "
+                           "points. Set baseline_model to 'flat_mean' to use "
+                           "another window length.")
 
     # pricing.source_divergence_overrides is a per-symbol map {symbol: pct}, not a
     # scalar — it can't go through the numbers-only validator below, so validate it
@@ -2068,7 +2130,13 @@ async def post_config(request: Request):
     # overridden.
     if "fill_rate" in body and isinstance(body["fill_rate"], dict):
         fr = body["fill_rate"]
-        for k in ("baseline_buckets", "min_baseline_buckets", "condensed_retention_days"):
+        if "baseline_model" in fr and fr["baseline_model"] not in bsl.VALID_MODELS:
+            raise HTTPException(status_code=400,
+                detail="fill_rate.baseline_model must be 'seasonal_median' or "
+                       "'flat_mean' ('flat_mean' restores the pre-seasonal "
+                       "mean-of-baseline_buckets behaviour)")
+        for k in ("baseline_buckets", "min_baseline_buckets", "condensed_retention_days",
+                  "baseline_days", "min_slot_samples"):
             if k in fr and fr[k] is not None:
                 v = fr[k]
                 if not isinstance(v, (int, float)) or isinstance(v, bool) or v <= 0:
@@ -2124,6 +2192,8 @@ async def post_config(request: Request):
                     continue  # nested map, validated explicitly above
                 if section == "depth_walk" and k == "uptime":
                     continue  # nested object, validated explicitly above
+                if section == "fill_rate" and k == "baseline_model":
+                    continue  # string enum, validated explicitly above
                 if v is not None and not isinstance(v, (int, float)):
                     raise HTTPException(status_code=400,
                         detail=f"{section}.{k} must be a number")

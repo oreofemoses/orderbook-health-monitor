@@ -39,6 +39,19 @@ SPREAD_GAP_FIXED_NGN = 1.0
 # couple of MB of JSON, which the Fly volume comfortably holds.
 VOLUME_ARCHIVE_RETENTION_DAYS = 730
 
+# How long D1's PER-PAIR hourly volume archive is kept, in days. Same reasoning
+# as the line above and deliberately NOT a config knob for the same reason: the
+# k-line API can only ever serve ~12.5 days back (the 300-candle clamp), so
+# everything older exists solely here and an operator shrinking this from a
+# dashboard field would destroy data nothing can re-fetch.
+#
+# 90 rather than the 30 the baseline actually USES (volume_spike.baseline_days),
+# because the two are separable and only one of them is reversible. Widening the
+# baseline window later costs nothing if the history is already on disk; if it
+# is not, it costs two months of waiting. 45 pairs x 24 x 90 is ~97k points,
+# a few MB of JSON — the same volume already holds a 730-day series.
+PAIR_VOLUME_RETENTION_DAYS = 90
+
 # Issue ids an operator can acknowledge from the dashboard, i.e. tick to say
 # "seen it, stop paging me until it clears". Lives here rather than in either
 # process because BOTH need the same answer and for different reasons: debug.py
@@ -335,6 +348,29 @@ DEFAULT_CONFIG: dict = {
         # lookback_minutes. Default 6 * 240min = 24h, matching the old
         # 24 * 60min = 24h span from before candle/lookback were split out.
         "baseline_buckets": 6,
+        # ── The seasonal baseline (see baseline.py) ──────────────────────────
+        # These replace what baseline_buckets above measures against — it is now
+        # the FALLBACK, used only while the archive is too thin to answer, and
+        # whenever baseline_model is flipped to "flat_mean".
+        #
+        # "seasonal_median" judges this hour's window against the median of the
+        # same hour-of-day over the last baseline_days, from the per-pair hourly
+        # archive. That is the fix for the noise documented in the D1 tier note
+        # above: a 24h all-hours mean makes a healthy pair's daily peak read as a
+        # multiple of its own daily average, every single day.
+        #
+        # "flat_mean" restores the old mean-of-baseline_buckets exactly, from the
+        # config drawer, with no deploy — the rollback lever if the seasonal
+        # baseline misbehaves against real traffic.
+        "baseline_model":   "seasonal_median",  # "seasonal_median" | "flat_mean"
+        "baseline_days":    30,   # how far back the seasonal baseline looks
+        # Prior days at THIS HOUR needed before the slot median is trusted. Note
+        # the unit: these are slot-days, not hours and not windows, so this is
+        # NOT interchangeable with min_baseline_buckets above. A ~12.5-day
+        # backfill (the k-line API's hard reach) yields ~12 samples per hour
+        # slot, so 8 clears on day one for every slot while still refusing to
+        # call three readings a baseline.
+        "min_slot_samples": 8,
         # Max Telegram deliveries per D1 "episode" for a pair. A volume spike stays
         # elevated in the rolling window (lookback_minutes — 4h at the defaults) and
         # D1 re-detects it every cycle, so without a cap it re-fires once per cooldown
@@ -372,7 +408,27 @@ DEFAULT_CONFIG: dict = {
         # one-sided ratio test could only ever see the collapse. 65% on the down
         # side is exactly the old 0.35 ratio threshold this replaces.
         "pct_change_threshold":     65.0,
-        "condensed_retention_days": 30,
+        # 90 rather than 30: the baseline uses baseline_days (30), but retention
+        # is the irreversible half of that pair of numbers. A fill hour the
+        # sampler did not observe exists NOWHERE upstream — unlike volume, which
+        # the k-line API can still re-serve for ~12.5 days — so this archive is
+        # load-bearing in the strictest sense in this codebase, and holding three
+        # months of it costs a few MB.
+        "condensed_retention_days": 90,
+        # ── The seasonal baseline (see baseline.py) ──────────────────────────
+        # Same three keys, same meanings and the same rollback lever as
+        # volume_spike above; baseline_buckets stays as the fallback mean.
+        # D2 needs no new data source for this — ticker_fill_loop already writes
+        # one point per market per closed hour, including zeros, so the history
+        # the slot median wants is already on disk.
+        "baseline_model":   "seasonal_median",  # "seasonal_median" | "flat_mean"
+        "baseline_days":    30,
+        # Prior days at THIS HOUR before the slot median is trusted. Unlike D1,
+        # D2 cannot backfill anything, so this is reached by waiting: 8 slot-days
+        # is 8 days after the sampler first runs. Until then the ladder falls to
+        # the flat median and then to the existing mean, which is what D2 does
+        # today — so the trial it is currently under is not interrupted.
+        "min_slot_samples": 8,
     },
     # Markets that no longer trade because the ASSET WAS DELISTED, not because
     # anything is wrong. These keep full, healthy-looking books — all seven were

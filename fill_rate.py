@@ -117,6 +117,57 @@ def baseline_from_history(points: list, max_buckets: int) -> tuple[float | None,
     return sum(p["events"] for p in window) / len(window), len(window)
 
 
+def resolve_baseline(points: list, now, *, baseline_days: float,
+                     min_slot_samples: int, min_buckets: int,
+                     max_buckets: int,
+                     model: str) -> tuple[float | None, int, str, float | None]:
+    """
+    D2's baseline ladder: the seasonal median of this hour-of-day if the archive
+    can produce one, otherwise the mean of prior closed hours above.
+
+    Returns (value, samples, method, mad). `method` is a baseline.py rung name,
+    or "legacy_mean" for the fallback — and the unit of `samples` changes with
+    it: days-at-this-hour for a median, hours for the mean. Callers must gate on
+    the matching minimum rather than assuming one of them.
+
+    Lives here rather than in debug.py because BOTH processes need the identical
+    answer — the monitor to decide, api.py to report — and a second copy would
+    drift into the dashboard showing a baseline the alert never used. Same reason
+    classify_deviation and baseline_from_history are already shared.
+
+    Why the mean is kept at all: it is what D2 has always done, so it is also
+    what "flat_mean" rolls back to, and what covers the first week after the
+    sampler starts. D2 cannot backfill — fill events exist nowhere upstream — so
+    a slot median needs min_slot_samples DAYS of real waiting before it exists,
+    and the check has to keep working in the meantime.
+    """
+    import baseline as bsl      # local: keeps this module's import side clean
+
+    result = bsl.resolve(points, "events", now,
+                         window_hours=1,
+                         baseline_days=baseline_days,
+                         min_slot_samples=min_slot_samples,
+                         min_flat_samples=min_buckets,
+                         model=model)
+    if result.method != bsl.NONE:
+        return result.value, result.samples, result.method, result.mad
+
+    mean, buckets = baseline_from_history(points, max_buckets)
+    return mean, buckets, "legacy_mean", None
+
+
+def describe_baseline(method: str, samples: int, slot_hour: int | None = None) -> str:
+    """
+    The provenance clause for `classify_deviation(baseline_note=...)` and the
+    dashboard, so both name the same baseline the same way.
+    """
+    import baseline as bsl
+
+    if method == "legacy_mean":
+        return f"mean of {samples} prior hours"
+    return bsl.describe(bsl.BaselineResult(None, method, samples, None, slot_hour))
+
+
 def pct_change(current: int | None, baseline: float | None) -> float | None:
     """
     Signed percentage change of a trailing-hour count against the baseline.
@@ -133,15 +184,25 @@ def pct_change(current: int | None, baseline: float | None) -> float | None:
 def classify_deviation(current: int | None, baseline: float | None,
                        bucket_count: int, min_buckets: int,
                        min_baseline_events: float,
-                       pct_change_threshold: float) -> tuple[str, str, str] | None:
+                       pct_change_threshold: float,
+                       baseline_note: str = "") -> tuple[str, str, str] | None:
     """
     The D2 decision, kept pure so it is testable without a network or a clock.
 
     Returns (severity, direction, reason) or None. `current` is the trailing-60-
-    minute event count; `baseline` the mean over prior closed hours. Comparing a
-    full trailing hour against a mean of full hours keeps the two sides the same
-    shape — an in-progress partial hour would read as a collapse for 59 minutes
-    out of 60.
+    minute event count; `baseline` is what this market typically does in an hour.
+    Comparing a full trailing hour against full prior hours keeps the two sides
+    the same shape — an in-progress partial hour would read as a collapse for 59
+    minutes out of 60.
+
+    `baseline_note` is a short clause naming what the baseline actually is, from
+    baseline.describe() — "median of 21 prior days at 16:00", or "mean of 24
+    prior hours" for the fallback. It is a parameter rather than something built
+    here because this module must not know which rung of the ladder produced the
+    number. It is defaulted so the function stays callable with its original six
+    arguments, but callers should pass it: these strings go straight to Telegram,
+    and the old hardcoded "N-hour baseline" wording became an operator-facing
+    lie the moment the baseline stopped being a mean over N hours.
 
     ──────────────── Why absolute percentage change, not a ratio ──────────────
     A ratio test is one-sided by construction: it can only fire on the way down,
@@ -200,9 +261,10 @@ def classify_deviation(current: int | None, baseline: float | None,
         # That indistinguishability is the whole point of the check and also
         # exactly why the exclusion list cannot be inferred from the API.
         if current <= 0:
+            window = baseline_note or f"{bucket_count}-hour baseline window"
             return ("CRITICAL", "collapse",
-                    f"No fills observed across the entire {bucket_count}-hour "
-                    f"baseline window — market may already have been dead when "
+                    f"No fills observed across the entire baseline window "
+                    f"({window}) — market may already have been dead when "
                     f"monitoring started; no active period available to compare "
                     f"against")
         # Baseline 0 but filling now — the market just woke up. Formally this is
@@ -233,7 +295,8 @@ def classify_deviation(current: int | None, baseline: float | None,
         severity  = "HIGH" if change > 2.0 * pct_change_threshold else "MEDIUM"
         direction, verb = "surge", "surged"
 
+    provenance = baseline_note or f"{bucket_count}-hour baseline"
     return (severity, direction,
             f"Fill rate {verb} — {current} events/h vs {baseline:.1f} typical "
             f"for this market ({change:+.0f}%, fires past "
-            f"±{pct_change_threshold:.0f}%, {bucket_count}-hour baseline)")
+            f"±{pct_change_threshold:.0f}%, {provenance})")

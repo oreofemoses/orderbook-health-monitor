@@ -1653,7 +1653,25 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
           <div class="config-field">
             <label>Baseline windows</label>
             <input type="number" id="cfg-vol-baseline-buckets" min="2" step="1" />
-            <span class="hint">D1 — how many prior lookback-windows to average for "is this spike unusual for THIS pair" context. Built entirely from Quidax's own k-line history — no external data. Effective baseline span = this × lookback window.</span>
+            <span class="hint">D1 — how many prior lookback-windows to average for "is this spike unusual for THIS pair" context. Only used as the FALLBACK now, while the hourly archive is still filling and whenever baseline model is set to flat mean. Effective baseline span = this × lookback window.</span>
+          </div>
+          <div class="config-field">
+            <label>Baseline model</label>
+            <select id="cfg-vol-baseline-model">
+              <option value="seasonal_median">Seasonal median (same hour of day, robust)</option>
+              <option value="flat_mean">Flat mean (legacy, all hours pooled)</option>
+            </select>
+            <span class="hint">Seasonal compares this hour against the MEDIAN of the same hour of day over the last N days, so a market's normal daily shape stops reading as an anomaly, and one past spike no longer drags the baseline. Flat mean restores the previous all-hours average — use to roll back instantly without a redeploy.</span>
+          </div>
+          <div class="config-field">
+            <label>Baseline window (days)</label>
+            <input type="number" id="cfg-vol-baseline-days" min="1" step="1" />
+            <span class="hint">D1 — how far back the seasonal baseline looks. Backfills ~12.5 days from Quidax on first run (the k-line API reaches no further) and accumulates to the full window from there.</span>
+          </div>
+          <div class="config-field">
+            <label>Min samples per hour slot</label>
+            <input type="number" id="cfg-vol-min-slot-samples" min="2" step="1" />
+            <span class="hint">D1 — prior days at THIS hour required before the slot median is trusted. Note the unit: days, not windows, so this is not interchangeable with the trust gate above.</span>
           </div>
         </div>
       </div>
@@ -1714,6 +1732,24 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
             <label>Deviation threshold (% from baseline)</label>
             <input type="number" id="cfg-fill-rate-pct-threshold" min="1" max="100" step="5" />
             <span class="hint">D2 fires when the trailing hour's fill events differ from the market's own baseline by more than this many percent, in EITHER direction — a collapse or a surge. CRITICAL only on a complete stop. Capped at 100: a count cannot fall further than that, so a higher value would leave surge detection only.</span>
+          </div>
+          <div class="config-field">
+            <label>Baseline model</label>
+            <select id="cfg-fill-rate-baseline-model">
+              <option value="seasonal_median">Seasonal median (same hour of day, robust)</option>
+              <option value="flat_mean">Flat mean (legacy, all hours pooled)</option>
+            </select>
+            <span class="hint">Seasonal compares this hour against the MEDIAN of the same hour of day over the last N days, so a market's normal daily shape stops reading as an anomaly, and one past spike no longer drags the baseline. Flat mean restores the previous all-hours average — use to roll back instantly without a redeploy.</span>
+          </div>
+          <div class="config-field">
+            <label>Baseline window (days)</label>
+            <input type="number" id="cfg-fill-rate-baseline-days" min="1" step="1" />
+            <span class="hint">D2 — how far back the seasonal baseline looks. Unlike D1 this cannot be backfilled: fill events exist nowhere upstream, so the window fills only by waiting.</span>
+          </div>
+          <div class="config-field">
+            <label>Min samples per hour slot</label>
+            <input type="number" id="cfg-fill-rate-min-slot-samples" min="2" step="1" />
+            <span class="hint">D2 — prior days at THIS hour required before the slot median is trusted. Days, not hours, so this is a longer wait than the hours gate above, not a shorter one.</span>
           </div>
         </div>
       </div>
@@ -2733,10 +2769,20 @@ function renderDetailPanel(p) {
       id: "D1", name: "Volume Spike", alertId: "D1",
       severity: "HIGH",
       test: () => (nOrNull(p.d1_threshold) === null) ? "na" : (p.d1_spike ? "warn" : "pass"),
+      // d1_context already names the baseline and which rung produced it — it is
+      // built by debug.py's d1_context(), the SAME function that writes the
+      // Telegram label, so the two can never describe one number differently.
       desc: `${fmtCur(p.d1_window_volume, cur)} traded in the window vs `
             + `${fmtCur(p.d1_threshold, cur)} floor`
+            + (nOrNull(p.d1_baseline) !== null
+                 ? ` vs ${fmtCur(p.d1_baseline, cur)} typical`
+                 : "")
             + (p.d1_context ? ` — ${p.d1_context}` : ""),
-      note: "Needs BOTH: ≥3× this pair's own rolling baseline AND above its absolute floor. "
+      note: "Needs BOTH: ≥3× this pair's own baseline AND above its absolute floor. "
+            + "The baseline is the MEDIAN of what this pair traded in the same hour of day "
+            + "over the last 30 days, so a pair whose volume concentrates in business hours "
+            + "is no longer compared against its own all-hours average — which used to make "
+            + "its daily peak look like a spike every single day. "
             + "The floor stops a normally-tiny pair firing on a ratio with no economic meaning. "
             + "Sends to Telegram after 3 consecutive cycles, then a 15-minute cooldown, "
             + "capped at 2 deliveries per episode — a market trading far harder than usual "
@@ -2769,7 +2815,9 @@ function renderDetailPanel(p) {
                  ? ` — ${fmtPct(p.fill_pct_change, 0, true)}`
                    + (p.fill_direction ? ` ${p.fill_direction}` : "")
                  : "")
-            + ` (${fmtQty(p.fill_baseline_hours)}h baseline)`,
+            + (p.fill_baseline_method && p.fill_baseline_method !== "legacy_mean"
+                 ? ` (median of ${fmtQty(p.fill_baseline_hours)} prior days at this hour)`
+                 : ` (mean of ${fmtQty(p.fill_baseline_hours)} prior hours)`),
       note: `The only check that tells a QUOTED book from a TRADED one — every A-series `
             + `check reads the book, and a book can look perfect while nothing crosses it. `
             + `Fires when the hour deviates more than ±${fmtQty(p.fill_pct_threshold ?? 65, 0)}% `
@@ -4497,6 +4545,9 @@ function populateConfigFields(cfg) {
   set("cfg-vol-spike-candle",      vs.candle_minutes);
   set("cfg-vol-spike-lookback",    vs.lookback_minutes);
   set("cfg-vol-baseline-buckets",  vs.baseline_buckets);
+  set("cfg-vol-baseline-model",    vs.baseline_model);
+  set("cfg-vol-baseline-days",     vs.baseline_days);
+  set("cfg-vol-min-slot-samples",  vs.min_slot_samples);
 
   set("cfg-layer-churn-top-pct",          lc.top_pct);
   set("cfg-layer-churn-baseline-buckets", lc.baseline_buckets);
@@ -4507,6 +4558,9 @@ function populateConfigFields(cfg) {
   set("cfg-fill-rate-min-buckets",      fr.min_baseline_buckets);
   set("cfg-fill-rate-min-events",       fr.min_baseline_events);
   set("cfg-fill-rate-pct-threshold",    fr.pct_change_threshold);
+  set("cfg-fill-rate-baseline-model",   fr.baseline_model);
+  set("cfg-fill-rate-baseline-days",    fr.baseline_days);
+  set("cfg-fill-rate-min-slot-samples", fr.min_slot_samples);
 
   set("cfg-depth-walk-weight",                dw.weight_usdt);
   set("cfg-depth-walk-mid-weight",            dw.mid_weight_usdt);
@@ -4682,6 +4736,9 @@ function buildConfigPayload() {
       candle_minutes:       num("cfg-vol-spike-candle"),
       lookback_minutes:     num("cfg-vol-spike-lookback"),
       baseline_buckets:     num("cfg-vol-baseline-buckets"),
+      baseline_model:       (document.getElementById("cfg-vol-baseline-model") || {}).value || "seasonal_median",
+      baseline_days:        num("cfg-vol-baseline-days"),
+      min_slot_samples:     num("cfg-vol-min-slot-samples"),
     },
     layer_churn: {
       top_pct:          num("cfg-layer-churn-top-pct"),
@@ -4694,6 +4751,9 @@ function buildConfigPayload() {
       min_baseline_buckets:  num("cfg-fill-rate-min-buckets"),
       min_baseline_events:   num("cfg-fill-rate-min-events"),
       pct_change_threshold:  num("cfg-fill-rate-pct-threshold"),
+      baseline_model:        (document.getElementById("cfg-fill-rate-baseline-model") || {}).value || "seasonal_median",
+      baseline_days:         num("cfg-fill-rate-baseline-days"),
+      min_slot_samples:      num("cfg-fill-rate-min-slot-samples"),
     },
     depth_walk: {
       weight_usdt:              num("cfg-depth-walk-weight"),

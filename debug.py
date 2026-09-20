@@ -222,6 +222,7 @@ import pandas as pd
 
 from defaults import (merge_config, default_config, UPTIME_FIXED_STEP_NGN,
                       SPREAD_GAP_FIXED_NGN, VOLUME_ARCHIVE_RETENTION_DAYS,
+                      PAIR_VOLUME_RETENTION_DAYS,
                       ACKABLE_ISSUE_IDS, TIER1_IDS, TIER2_IDS, TIER3_IDS,
                       classify_tier)  # single source of truth for config
 # Pure candle-parsing/aggregation helpers, shared with api.py so the OCHLV field
@@ -233,6 +234,10 @@ import kline_volume as klv
 # with api.py so the hourly bucketing and the baseline maths can't drift between
 # the monitor and the dashboard. All fetching for D2 happens here over aiohttp.
 import fill_rate as flr
+# Robust, time-of-day-aware self-baselines for D1 and D2 — same import-only
+# contract again, and shared with api.py for the same reason: the baseline an
+# operator reads on the dashboard must be the one the verdict was made on.
+import baseline as bsl
 
 try:
     from dotenv import load_dotenv
@@ -333,6 +338,25 @@ DEPTH_WALK_CONDENSED_FILE = os.path.join(DATA_DIR, "usdtngn_slippage_hourly.json
 KLINE_VOLUME_SYMBOL = "usdtngn"
 KLINE_VOLUME_FILE   = os.path.join(DATA_DIR, "usdtngn_volume_hourly.json")
 
+# ── D1 per-pair hourly volume archive ─────────────────────────────────────────
+# {"markets": {market: [{"ts": iso_hour, "volume": base, "close": px,
+#                        "quote_volume": base * px}, ...]}}
+#
+# Distinct from KLINE_VOLUME_FILE above in both scope and units: that one is a
+# single market (usdtngn) in BASE volume for the dashboard's volume tab; this is
+# every configured pair, carrying base, close and QUOTE volume together, and it
+# exists to give D1 a baseline with a time of day attached to it.
+#
+# Why a file at all, when D1 already fetches these candles every cycle: what D1
+# kept before was six untimestamped floats in health_state.json, so it could
+# neither say what hour a reading came from nor survive a state wipe. Hours here
+# are keyed and survive both. The 300-candle wall applies as it does above — a
+# cold start recovers ~12.5 days and no more, so everything past that exists only
+# because this file accumulated it.
+#
+# Monitor writes, API reads, like every other file in this block.
+PAIR_VOLUME_FILE = os.path.join(DATA_DIR, "pair_volume_hourly.json")
+
 # ── D2 fill-rate archive ──────────────────────────────────────────────────────
 # {"markets": {market: [{"ts": iso_hour, "events": int}, ...]}} — one point per
 # CLOSED NGT hour per market, which is what D2's self-baseline averages.
@@ -364,6 +388,25 @@ def _load_config_from_disk() -> dict:
     return merge_config({})
 
 
+def _baseline_model(raw, section: str) -> str:
+    """
+    Validate a `baseline_model` config value, falling back rather than raising.
+
+    api.py rejects an unknown value at the edge so an operator editing the config
+    drawer is told. This is the second line of defence, for a config that reached
+    disk some other way — and it must NOT raise: apply_config runs at the top of
+    every cycle, so an exception here would take the whole monitor down over a
+    typo in a string field. Falling back to the seasonal default and saying so
+    once per cycle is the containable failure.
+    """
+    value = str(raw) if raw is not None else bsl.MODEL_SEASONAL
+    if value not in bsl.VALID_MODELS:
+        print(f"⚠️  {section}.baseline_model={value!r} is not one of "
+              f"{bsl.VALID_MODELS} — using {bsl.MODEL_SEASONAL}")
+        return bsl.MODEL_SEASONAL
+    return value
+
+
 def apply_config():
     """
     Load config from disk and apply every value to module-level globals.
@@ -383,6 +426,7 @@ def apply_config():
     global LAYER_CHURN_TOP_PCT, LAYER_CHURN_BASELINE_BUCKETS
     global LAYER_CHURN_RATIO_THRESHOLD
     global VOLUME_SPIKE_MODE, VOLUME_SPIKE_RATIO, VOLUME_SPIKE_MIN_BUCKETS, VOLUME_SPIKE_WARMUP_FALLBACK, D1_MAX_FIRES
+    global VOLUME_BASELINE_MODEL, VOLUME_BASELINE_DAYS, VOLUME_MIN_SLOT_SAMPLES
     global VOLUME_SPIKE_CANDLE_MINUTES, VOLUME_SPIKE_LOOKBACK_MINUTES, VOLUME_BASELINE_BUCKETS
     global DEPTH_WALK_WEIGHT_USDT, DEPTH_WALK_POLL_INTERVAL_SECONDS
     global DEPTH_WALK_RAW_RETENTION_SECONDS, DEPTH_WALK_CONDENSED_RETENTION_DAYS
@@ -391,6 +435,7 @@ def apply_config():
     global FILL_RATE_POLL_INTERVAL_SECONDS, FILL_RATE_BASELINE_BUCKETS
     global FILL_RATE_MIN_BASELINE_BUCKETS, FILL_RATE_MIN_BASELINE_EVENTS
     global FILL_RATE_PCT_CHANGE_THRESHOLD, FILL_RATE_RETENTION_DAYS, DELISTED_MARKETS
+    global FILL_RATE_BASELINE_MODEL, FILL_RATE_BASELINE_DAYS, FILL_RATE_MIN_SLOT_SAMPLES
 
     cfg = _load_config_from_disk()
 
@@ -480,6 +525,12 @@ def apply_config():
     VOLUME_SPIKE_CANDLE_MINUTES  = int(vs.get("candle_minutes", 1))
     VOLUME_SPIKE_LOOKBACK_MINUTES = int(vs.get("lookback_minutes", 60))
     VOLUME_BASELINE_BUCKETS      = int(vs.get("baseline_buckets", 24))
+    # D1's seasonal baseline (baseline.py). VOLUME_BASELINE_BUCKETS above is now
+    # the FALLBACK mean, used while the per-pair archive is too thin to answer
+    # and whenever the model is flipped back to "flat_mean".
+    VOLUME_BASELINE_MODEL        = _baseline_model(vs.get("baseline_model"), "volume_spike")
+    VOLUME_BASELINE_DAYS         = float(vs.get("baseline_days", 30))
+    VOLUME_MIN_SLOT_SAMPLES      = int(vs.get("min_slot_samples", 8))
 
     # G1 — depth-walk slippage tracker (USDTNGN only, independent 5s task)
     dw = cfg.get("depth_walk", {})
@@ -526,6 +577,11 @@ def apply_config():
     # is what keeps the monitor and the API reading a stored config identically.
     FILL_RATE_PCT_CHANGE_THRESHOLD  = float(fr.get("pct_change_threshold", 65.0))
     FILL_RATE_RETENTION_DAYS        = float(fr.get("condensed_retention_days", 30))
+    # D2's seasonal baseline (baseline.py). As with D1, FILL_RATE_BASELINE_BUCKETS
+    # above becomes the fallback mean rather than the primary statistic.
+    FILL_RATE_BASELINE_MODEL        = _baseline_model(fr.get("baseline_model"), "fill_rate")
+    FILL_RATE_BASELINE_DAYS         = float(fr.get("baseline_days", 30))
+    FILL_RATE_MIN_SLOT_SAMPLES      = int(fr.get("min_slot_samples", 8))
     # Delisted assets — D2 skips these entirely. Not inferable from the API; see
     # the defaults.py comment on why is_visible can't stand in for it.
     DELISTED_MARKETS = {str(m).lower() for m in cfg.get("delisted_markets", [])}
@@ -572,6 +628,9 @@ D1_MAX_FIRES:                int   = 2
 VOLUME_SPIKE_CANDLE_MINUTES:  int   = 1
 VOLUME_SPIKE_LOOKBACK_MINUTES: int  = 60
 VOLUME_BASELINE_BUCKETS:      int   = 24
+VOLUME_BASELINE_MODEL:        str   = bsl.MODEL_SEASONAL
+VOLUME_BASELINE_DAYS:         float = 30.0
+VOLUME_MIN_SLOT_SAMPLES:      int   = 8
 DEPTH_WALK_WEIGHT_USDT:              float = 100_000
 DEPTH_WALK_MID_WEIGHT_USDT:          float = 1_000
 DEPTH_WALK_POLL_INTERVAL_SECONDS:    float = 5
@@ -586,6 +645,9 @@ FILL_RATE_MIN_BASELINE_BUCKETS:      int   = 6
 FILL_RATE_MIN_BASELINE_EVENTS:       float = 8.0
 FILL_RATE_PCT_CHANGE_THRESHOLD:      float = 65.0
 FILL_RATE_RETENTION_DAYS:            float = 30
+FILL_RATE_BASELINE_MODEL:            str   = bsl.MODEL_SEASONAL
+FILL_RATE_BASELINE_DAYS:             float = 30.0
+FILL_RATE_MIN_SLOT_SAMPLES:          int   = 8
 DELISTED_MARKETS:                    set   = set()
 apply_config()  # populate from disk immediately
 
@@ -607,6 +669,19 @@ VOLUME_TOPUP_HOURS          = 6    # hours re-fetched each pass; the overlap let
                                     # get filled in on the next
 VOLUME_TOPUP_DELAY_SECONDS  = 120  # wait this long after the hour boundary before
                                     # topping up, so the just-closed candle exists
+
+# D1 per-pair volume archive (pair_volume_loop). Same job as the two above, for
+# the other archive.
+PAIR_VOLUME_TOPUP_HOURS         = 6    # same self-repairing overlap as VOLUME_TOPUP_HOURS
+PAIR_VOLUME_TOPUP_DELAY_SECONDS = 180  # deliberately NOT 120: kline_volume_loop already
+                                        # wakes at boundary+120s, and both sweeping the
+                                        # k-line endpoint on the same second every hour
+                                        # is a self-inflicted burst for no reason
+PAIR_VOLUME_CONCURRENCY         = 4    # pairs fetched at once. The sweep has a whole
+                                        # hour of budget and the 5s pollers do not, so
+                                        # this stays low on purpose — see
+                                        # BACKGROUND_CONNECTIONS on why the pool cap
+                                        # alone would not protect them
 
 DEPTH_MIN_HISTORY_BUCKETS       = 5   # A4 cold-start gate — min prior depth readings
                                        # before the self-baseline is trusted. Same
@@ -691,13 +766,20 @@ FETCH_RETRY_BACKOFF = 1.5   # seconds, doubles each retry
 # and G2 share it) and kline-volume (D1's own). Named because the connection
 # pool has to be sized against it — see the TCPConnector in main().
 FETCHES_PER_PAIR = 3
-# Spare connections held back for the three background loops — the depth-walk
-# poller, the volume archive and the D2 fill-rate sampler — so none of them is
-# ever queued behind a full cycle. Raised from 5 when the fill-rate sampler was
-# added: it polls every 5s like the depth walker, and the two of them sharing
-# headroom sized for one would reintroduce exactly the queueing that the
-# reserved pool exists to prevent.
-BACKGROUND_CONNECTIONS = 8
+# Spare connections held back for the four background loops — the depth-walk
+# poller, the USDTNGN volume archive, the D2 fill-rate sampler and the per-pair
+# volume archive — so none of them is ever queued behind a full cycle. Raised
+# from 5 when the fill-rate sampler was added: it polls every 5s like the depth
+# walker, and the two of them sharing headroom sized for one would reintroduce
+# exactly the queueing that the reserved pool exists to prevent.
+#
+# Raised again from 8 for the per-pair archive, which is the only one that ever
+# wants more than one connection at a time: it sweeps every configured pair on
+# the hour. Note that TCPConnector(limit=...) is a global cap, not a per-loop
+# reservation, so this number alone does not protect the 5s pollers — the
+# archive loop bounds itself with PAIR_VOLUME_CONCURRENCY below, and that is
+# what actually keeps it from monopolising the pool for the length of a sweep.
+BACKGROUND_CONNECTIONS = 12
 
 
 async def _request_json(session: aiohttp.ClientSession, url: str, timeout: int = 10) -> dict | list:
@@ -1224,6 +1306,21 @@ def check_layer_churn_stall(churn_score: Optional[float], baseline: Optional[flo
     return []
 
 
+def _d2_min_samples(method: str) -> int:
+    """
+    How much evidence D2 needs before it will judge, per baseline rung.
+
+    Mirrors _d1_min_samples and exists for the same reason: the two rungs count
+    in different units. min_baseline_buckets is six CLOSED HOURS — about six
+    hours of waiting. min_slot_samples is six days at the same hour — about six
+    DAYS. Swapping one for the other either lets D2 judge on almost no evidence
+    or silences it for a week, and neither failure announces itself.
+    """
+    if method in (bsl.SEASONAL, bsl.FLAT_MEDIAN, bsl.SPARSE):
+        return FILL_RATE_MIN_SLOT_SAMPLES
+    return FILL_RATE_MIN_BASELINE_BUCKETS
+
+
 def check_fill_rate_deviation(symbol: str, fill_snapshot: Optional[dict]) -> tuple[list, dict]:
     """
     D2 — fires when a market's fill rate DEVIATES from THIS market's own typical
@@ -1255,6 +1352,10 @@ def check_fill_rate_deviation(symbol: str, fill_snapshot: Optional[dict]) -> tup
         "fill_direction":        None,
         "fill_pct_threshold":    FILL_RATE_PCT_CHANGE_THRESHOLD,
         "fill_rate_status":      "warming",
+        # Which rung of the baseline ladder produced the figure above, so the
+        # dashboard and the Telegram clause can both name it rather than
+        # presenting a bare number as if every baseline were the same kind.
+        "fill_baseline_method":  None,
     }
 
     if symbol in DELISTED_MARKETS:
@@ -1272,9 +1373,14 @@ def check_fill_rate_deviation(symbol: str, fill_snapshot: Optional[dict]) -> tup
     baseline = fill_snapshot.get("baseline")
     buckets  = fill_snapshot.get("baseline_hours", 0)
 
+    method   = fill_snapshot.get("baseline_method", "legacy_mean")
+    note     = flr.describe_baseline(method, buckets,
+                                     bsl.slot_key(bsl.last_closed_hour(ngt_now())))
+
     metrics["fill_events_1h"]       = current
     metrics["fill_baseline_hourly"] = (round(baseline, 2) if baseline is not None else None)
     metrics["fill_baseline_hours"]  = buckets
+    metrics["fill_baseline_method"] = method
     change = flr.pct_change(current, baseline)
     if change is not None:
         metrics["fill_pct_change"] = round(change, 1)
@@ -1287,14 +1393,21 @@ def check_fill_rate_deviation(symbol: str, fill_snapshot: Optional[dict]) -> tup
         metrics["fill_rate_status"] = "warming"
         return [], metrics
 
+    # The minimum is chosen by rung, not read from one constant: `buckets` counts
+    # HOURS under the legacy mean and DAYS-AT-THIS-HOUR under a slot median, and
+    # six of one is a far weaker claim than six of the other. Reusing
+    # min_baseline_buckets for both is the exact mistake min_slot_samples exists
+    # to prevent.
+    min_samples = _d2_min_samples(method)
     verdict = flr.classify_deviation(
         current, baseline, buckets,
-        min_buckets=FILL_RATE_MIN_BASELINE_BUCKETS,
+        min_buckets=min_samples,
         min_baseline_events=FILL_RATE_MIN_BASELINE_EVENTS,
         pct_change_threshold=FILL_RATE_PCT_CHANGE_THRESHOLD,
+        baseline_note=note,
     )
 
-    if buckets < FILL_RATE_MIN_BASELINE_BUCKETS:
+    if buckets < min_samples:
         metrics["fill_rate_status"] = "warming"
     elif baseline is not None and 0 < baseline < FILL_RATE_MIN_BASELINE_EVENTS:
         # Reported but never alerted — too thin for a change test to carry signal,
@@ -1772,6 +1885,7 @@ def compute_window_volume(candles: list, sym: str) -> Optional[dict]:
     currency = get_currency_symbol(sym)
     total_quote_volume, candle_count = 0.0, 0
     window_start = window_end = None
+    latest_dt = latest_close = None
 
     for candle in candles:
         try:
@@ -1787,6 +1901,13 @@ def compute_window_volume(candles: list, sym: str) -> Optional[dict]:
             candle_dt = datetime.fromtimestamp(int(ts) / 1000, tz=NIGERIAN_TZ)
             total_quote_volume += float(volume) * float(c)
             candle_count += 1
+            # Newest candle's close, carried out for the seasonal baseline to
+            # re-quote with (see resolve_volume_baseline). Taken from the live
+            # fetch rather than the archive so the price is current to this
+            # cycle, and tracked by candle time rather than by loop order
+            # because the k-line response is ordered newest-first.
+            if latest_dt is None or candle_dt > latest_dt:
+                latest_dt, latest_close = candle_dt, float(c)
             if window_start is None or candle_dt < window_start:
                 window_start = candle_dt
             if window_end is None or candle_dt > window_end:
@@ -1800,7 +1921,8 @@ def compute_window_volume(candles: list, sym: str) -> Optional[dict]:
     window_label = (f"{window_start.strftime('%H:%M')}–{window_end.strftime('%H:%M')}"
                      if window_start and window_end else f"last {VOLUME_SPIKE_LOOKBACK_MINUTES} min")
     return {"window": window_label, "candle_count": candle_count,
-            "quote_volume": total_quote_volume, "currency": currency}
+            "quote_volume": total_quote_volume, "currency": currency,
+            "close": latest_close}
 
 
 def update_volume_baseline(symbol: str, current_volume: float, vol_hist_root: dict) -> tuple[Optional[float], int]:
@@ -1832,6 +1954,82 @@ def update_volume_baseline(symbol: str, current_volume: float, vol_hist_root: di
         pair_hist["last_bucket_ts"] = now.isoformat()
 
     return baseline, len(prior_buckets)
+
+
+# Config shapes already warned about, so a misaligned window is reported once
+# rather than once per pair per cycle (45 lines a minute, which would bury it).
+_VOLUME_ALIGN_WARNED: set = set()
+
+
+def resolve_volume_baseline(symbol: str, archive: dict,
+                            window_info: Optional[dict],
+                            now: datetime) -> bsl.BaselineResult:
+    """
+    D1's seasonal baseline: what this pair's rolling window typically totals at
+    THIS hour of day, in quote currency, from the per-pair hourly archive.
+
+    Returns a BaselineResult whose `value` is already re-quoted and therefore
+    directly comparable with window_info["quote_volume"]. method=NONE means the
+    archive cannot answer and the caller must fall back to update_volume_baseline
+    above — which is why that function is still called every cycle.
+
+    ─────────────────── Why the baseline is taken over BASE volume ────────────
+    D1 compares quote volume (naira/USDT), because that is what its floors are
+    denominated in. But a median spanning 30 days of quote volume also spans 30
+    days of PRICE: if the naira moves 40% against an asset at flat real trading
+    activity, the median sits ~40% below today's figure and D1 turns
+    trigger-happy on a rally and blind on a selloff. At the old 24-hour baseline
+    that was negligible; over 30 days, in a devaluing-currency environment, it is
+    not.
+
+    So the median is taken over base volume — which carries no price — and
+    multiplied by the current close. Within a single 4-hour window the closes are
+    near enough that close * sum(volume) and sum(volume * close) agree; across 30
+    days they are not, and that difference is exactly the drift being removed.
+
+    ─────────────────── Why the window alignment is checked ───────────────────
+    The archive is hourly by definition. D1's window is not: candle_minutes and
+    lookback_minutes are both live-editable from the config drawer and validated
+    only as positive. At candle_minutes=5, or lookback_minutes=90, the live
+    measurement and the archived samples are no longer the same shape, and
+    comparing them would produce a confident, wrong number. Degrade to the
+    legacy mean instead and say so — silently comparing mismatched windows is
+    the failure mode that costs an operator's trust in the whole check.
+    """
+    if window_info is None:
+        return bsl.BaselineResult(None, bsl.NONE, 0, None, None)
+
+    if (VOLUME_SPIKE_CANDLE_MINUTES != klv.HOUR_MINUTES
+            or VOLUME_SPIKE_LOOKBACK_MINUTES % klv.HOUR_MINUTES != 0):
+        shape = (VOLUME_SPIKE_CANDLE_MINUTES, VOLUME_SPIKE_LOOKBACK_MINUTES)
+        if shape not in _VOLUME_ALIGN_WARNED:
+            _VOLUME_ALIGN_WARNED.add(shape)
+            print(f"⚠️  [D1] volume_spike candle_minutes={shape[0]} / "
+                  f"lookback_minutes={shape[1]} cannot align to the hourly "
+                  f"archive — seasonal baseline disabled, falling back to the "
+                  f"{VOLUME_BASELINE_BUCKETS}-bucket mean")
+        return bsl.BaselineResult(None, bsl.NONE, 0, None, None)
+
+    close = window_info.get("close")
+    if not close or close <= 0:
+        return bsl.BaselineResult(None, bsl.NONE, 0, None, None)
+
+    result = bsl.resolve(
+        archive.get(symbol, []), "volume", now,
+        window_hours=VOLUME_SPIKE_LOOKBACK_MINUTES // klv.HOUR_MINUTES,
+        baseline_days=VOLUME_BASELINE_DAYS,
+        min_slot_samples=VOLUME_MIN_SLOT_SAMPLES,
+        min_flat_samples=VOLUME_SPIKE_MIN_BUCKETS,
+        model=VOLUME_BASELINE_MODEL,
+    )
+    if result.value is None:
+        return result
+    # Re-quote the base-volume median (and its MAD, which is in the same units)
+    # so everything the caller sees is already in quote currency.
+    return result._replace(
+        value=result.value * close,
+        mad=(result.mad * close) if result.mad is not None else None,
+    )
 
 
 def _fill_context_clause(fill_metrics: Optional[dict]) -> str:
@@ -1878,9 +2076,88 @@ def _fill_context_clause(fill_metrics: Optional[dict]) -> str:
     return f"fill rate {events}/h vs {baseline:.1f} typical ({pct:+.0f}%)"
 
 
+def d1_baseline_view(seasonal: bsl.BaselineResult,
+                     legacy_baseline: Optional[float],
+                     legacy_buckets: int) -> tuple:
+    """
+    Pick the rung D1 actually judges against, and report which one it is.
+
+    Returns (value, method, samples, mad, slot_hour). The ladder in one place:
+    the seasonal median if the archive could produce one, otherwise the legacy
+    mean-of-buckets that D1 has always used, otherwise nothing.
+
+    SPARSE is passed straight through rather than being demoted to the legacy
+    mean, and that is the point of having the state at all. A market that trades
+    in fewer than half its hours has a slot median of exactly zero; the mean
+    would paper over that with some small positive number and D1 would go on
+    quietly comparing against a figure built from a handful of non-zero hours.
+    Saying "this market is too sparse to have a typical volume" is the honest
+    answer, and the absolute floor still protects the pair either way.
+    """
+    if seasonal.method != bsl.NONE:
+        return (seasonal.value, seasonal.method, seasonal.samples,
+                seasonal.mad, seasonal.slot)
+    return legacy_baseline, "legacy_mean", legacy_buckets, None, None
+
+
+def d1_context(sym: str, window_info: Optional[dict], threshold: Optional[float],
+               value: Optional[float], method: str, samples: int,
+               slot: Optional[int] = None) -> str:
+    """
+    The one-line "how does this compare" clause for D1, used BOTH in the alert
+    label and in the dashboard's D1 detail field.
+
+    This exists as a function because it used to exist as two near-identical
+    copies — one inside get_recent_spikes for the Telegram label, one inside
+    process_pair for the row — with the same three branches and the same
+    phrasing duplicated in both. Every change to D1's baseline had to be made
+    twice or the alert text and the dashboard text would disagree about the same
+    number, which is the precise failure this codebase pays so much attention to
+    avoiding elsewhere.
+    """
+    cur = get_currency_symbol(sym)
+    floor_txt = f"floor {cur}{threshold:,.0f}" if threshold is not None else "no floor"
+
+    if window_info is None or value is None or value <= 0:
+        if method == bsl.SPARSE:
+            return (f"{bsl.describe(bsl.BaselineResult(value, method, samples, None, slot))} "
+                    f"— judged on the absolute floor alone ({floor_txt})")
+        return f"baseline building… ({floor_txt})"
+
+    ratio = window_info["quote_volume"] / value
+    trusted = (VOLUME_SPIKE_MODE == "baseline_relative"
+               and samples >= _d1_min_samples(method))
+    provenance = bsl.describe(bsl.BaselineResult(value, method, samples, None, slot)) \
+        if method != "legacy_mean" else f"mean of {samples} prior windows"
+
+    if trusted:
+        return (f"≈{ratio:.1f}x the typical {VOLUME_SPIKE_LOOKBACK_MINUTES}min volume "
+                f"for this hour (≥{VOLUME_SPIKE_RATIO:g}x baseline, {provenance}, "
+                f"{floor_txt})")
+    return (f"≈{ratio:.1f}x typical ({provenance}) — baseline warming, "
+            f"absolute floor active ({floor_txt})")
+
+
+def _d1_min_samples(method: str) -> int:
+    """
+    How much evidence each rung needs before D1 will trigger on a ratio.
+
+    The two are NOT the same number and must not share a constant. The legacy
+    gate counts 4h windows; the seasonal one counts DAYS AT THIS HOUR. Reusing
+    min_baseline_buckets (4) for the slot median would mean "four days is a
+    baseline", which is a far weaker claim than "four overlapping windows" was
+    meant to be — the whole reason min_slot_samples exists separately.
+    """
+    if method in (bsl.SEASONAL, bsl.FLAT_MEDIAN):
+        return VOLUME_MIN_SLOT_SAMPLES
+    return VOLUME_SPIKE_MIN_BUCKETS
+
+
 def get_recent_spikes(window_info: Optional[dict], sym: str,
                        baseline: Optional[float], bucket_count: int,
-                       fill_metrics: Optional[dict] = None) -> list:
+                       fill_metrics: Optional[dict] = None,
+                       method: str = "legacy_mean",
+                       slot: Optional[int] = None) -> list:
     """
     D1 — fires when this pair's rolling-window volume is unusually large *for this
     pair*, not just large in absolute terms.
@@ -1926,21 +2203,27 @@ def get_recent_spikes(window_info: Optional[dict], sym: str,
     vol = window_info["quote_volume"]
     cur = get_currency_symbol(sym)
 
+    # `bucket_count` is counted in whatever unit `method` measures — 4h windows
+    # for the legacy mean, days-at-this-hour for a slot median — so the gate has
+    # to be chosen by method rather than read from one constant. See
+    # _d1_min_samples.
     baseline_trusted = (
         VOLUME_SPIKE_MODE == "baseline_relative"
         and baseline is not None and baseline > 0
-        and bucket_count >= VOLUME_SPIKE_MIN_BUCKETS
+        and bucket_count >= _d1_min_samples(method)
     )
 
     if baseline_trusted:
         fired = vol >= VOLUME_SPIKE_RATIO * baseline and vol >= threshold
-        trigger = "baseline_relative"
     else:
-        # absolute mode, or baseline-relative still warming up
+        # Absolute mode, baseline-relative still warming up, or a market too
+        # sparse to have a median at all (baseline == 0, method == SPARSE). The
+        # last of those is not a warm-up state and will never resolve, but it
+        # lands here for the same reason: there is no trustworthy ratio to take,
+        # and the floor is the honest thing to judge on.
         if VOLUME_SPIKE_MODE == "baseline_relative" and VOLUME_SPIKE_WARMUP_FALLBACK == "suppress":
             return []                   # deliberate warm-up blind spot
         fired = vol >= threshold
-        trigger = "absolute"
 
     if not fired:
         return []
@@ -1953,19 +2236,9 @@ def get_recent_spikes(window_info: Optional[dict], sym: str,
     # severity string built in process_pair, never the label.)
     window_label = window_info.get("window", "")
     candle_count = window_info.get("candle_count", 0)
-    if trigger == "baseline_relative":
-        ratio = vol / baseline
-        context = (f"≈{ratio:.1f}x the typical {VOLUME_SPIKE_LOOKBACK_MINUTES}min volume "
-                   f"(≥{VOLUME_SPIKE_RATIO:g}x baseline over {bucket_count} windows, "
-                   f"floor {cur}{threshold:,.0f})")
-    elif baseline and bucket_count >= 2:
-        ratio = vol / baseline
-        context = (f"≈{ratio:.1f}x typical — fired on absolute floor "
-                   f"{cur}{threshold:,.0f} (baseline warming, "
-                   f"{bucket_count}/{VOLUME_SPIKE_MIN_BUCKETS} buckets)")
-    else:
-        context = (f"fired on absolute floor {cur}{threshold:,.0f} "
-                   f"— baseline still building, no per-pair context yet")
+    # Single source for this clause — process_pair renders the same one onto the
+    # dashboard row. See d1_context on why it is not built inline here any more.
+    context = d1_context(sym, window_info, threshold, baseline, method, bucket_count, slot)
 
     label = (f"Volume spike: {window_label} ({candle_count} candles) — "
              f"{cur}{vol:,.2f} ({context})")
@@ -2584,13 +2857,20 @@ def fill_rate_snapshot(symbol: str, archive: dict) -> Optional[dict]:
     # at most one interval stale) rather than re-pruning here — this runs once
     # per pair per cycle and must not mutate state the loop owns.
     events_1h = len(_FILL_EVENTS.get(symbol, []))
-    baseline, buckets = flr.baseline_from_history(
-        archive.get(symbol, []), FILL_RATE_BASELINE_BUCKETS)
+    baseline, buckets, method, mad = flr.resolve_baseline(
+        archive.get(symbol, []), ngt_now(),
+        baseline_days=FILL_RATE_BASELINE_DAYS,
+        min_slot_samples=FILL_RATE_MIN_SLOT_SAMPLES,
+        min_buckets=FILL_RATE_MIN_BASELINE_BUCKETS,
+        max_buckets=FILL_RATE_BASELINE_BUCKETS,
+        model=FILL_RATE_BASELINE_MODEL)
 
     return {
         "events_1h":       events_1h,
         "baseline":        baseline,
         "baseline_hours":  buckets,
+        "baseline_method": method,
+        "baseline_mad":    mad,
         # A full trailing hour of observation has to have elapsed since the
         # sampler started, or the count is structurally short regardless of how
         # the market is behaving.
@@ -2868,6 +3148,165 @@ async def kline_volume_loop(session: aiohttp.ClientSession):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# D1 PER-PAIR HOURLY VOLUME ARCHIVE
+# ══════════════════════════════════════════════════════════════════════════════
+# Feeds D1's seasonal baseline. Separate from the USDTNGN archive above in scope
+# (every configured pair) and in units (base, close and quote volume together) —
+# see PAIR_VOLUME_FILE for why those are not the same file.
+
+def load_pair_volume_archive() -> dict:
+    """{market: [point, ...]} from disk, or {} if absent/unreadable."""
+    if os.path.exists(PAIR_VOLUME_FILE):
+        try:
+            with open(PAIR_VOLUME_FILE) as f:
+                data = json.load(f)
+            markets = data.get("markets")
+            if isinstance(markets, dict):
+                return markets
+        except Exception as e:
+            print(f"⚠️  Could not read pair volume archive: {e} — starting empty")
+    return {}
+
+
+def save_pair_volume_archive(markets: dict):
+    """
+    Atomic write, deliberately — tmp file then os.replace, the same way
+    save_fill_archive does it and NOT the way save_volume_archive does.
+
+    This archive is ~45x the size of the USDTNGN one and holds hours that are
+    unrecoverable once they age past the k-line endpoint's 300-candle reach. A
+    crash midway through a plain truncating write would take those with it. Also
+    no indent= — at ~97k points the whitespace is most of the file.
+    """
+    try:
+        os.makedirs(DATA_DIR, exist_ok=True)
+        tmp = PAIR_VOLUME_FILE + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump({"markets": markets}, f)
+        os.replace(tmp, PAIR_VOLUME_FILE)
+    except Exception as e:
+        print(f"⚠️  Could not write pair volume archive: {e}")
+
+
+async def _fetch_pair_volume_hours(session: aiohttp.ClientSession, symbol: str,
+                                   hours: int) -> list:
+    """
+    Fetch the last `hours` closed hourly candles for one pair and return them as
+    archive points. Raises on fetch failure — the caller decides whether that is
+    fatal for the sweep (it is not).
+
+    Deliberately does NOT touch the archive file. The sweep runs several of
+    these concurrently, so a read-modify-write in here would be exactly the
+    lost-update race the single-writer convention exists to prevent — two pairs
+    loading the same archive, each adding its own market, and the later write
+    discarding the earlier one. Merging and persisting happen once, in the
+    caller, after every fetch has landed.
+    """
+    now = ngt_now()
+    # Same alignment reasoning as _refresh_volume_archive: snap to the hour
+    # boundary, step back, subtract 1s to make the boundary candle inclusive
+    # against an exclusive lower bound.
+    current_boundary = klv.floor_to_period(now, klv.HOUR_MINUTES)
+    start_dt = current_boundary - timedelta(hours=hours)
+
+    rows = await fetch_kline_volume_hourly(
+        session, symbol,
+        limit=min(hours + 2, klv.MAX_LIMIT),
+        timestamp_s=int(start_dt.timestamp()) - 1,
+    )
+    # end_excl = current_boundary drops the in-progress hour. The API never
+    # returns it, but bounding it explicitly means a change in that behaviour
+    # cannot quietly persist a half-finished hour as though it were final — and
+    # here that matters more than for the USDTNGN series, because a short hour
+    # would enter a MEDIAN as a legitimate-looking low sample rather than being
+    # visibly wrong on a graph.
+    result = klv.aggregate_quote(rows, start_dt, current_boundary, klv.HOUR_MINUTES)
+    return result["series"]
+
+
+async def pair_volume_loop(session: aiohttp.ClientSession):
+    """
+    Maintains the per-pair hourly volume archive that D1's seasonal baseline
+    reads. Wakes once an hour, independent of the main cycle.
+
+    LOAD-BEARING for the same reason kline_volume_loop is: one k-line response
+    reaches 300 candles and no further, so ~12.5 days is all a cold start can
+    recover and every hour beyond that exists only because this loop stored it.
+    D1's old baseline kept six untimestamped floats in health_state.json, which
+    meant a state wipe cost it 16 hours of warm-up; with this file a wipe costs
+    it nothing, and even losing this file recovers 12.5 days in one sweep.
+
+    BACKFILL IS GATED PER PAIR, not on the archive being empty. The USDTNGN loop
+    can gate on whole-archive emptiness because it tracks exactly one market;
+    doing the same here would mean a pair added to `pairs` later never backfills
+    — it would accrete six hours per restart and sit on the fallback rungs
+    forever, with nothing in the logs to say why.
+
+    The sweep is bounded by PAIR_VOLUME_CONCURRENCY. It has an hour of budget
+    and the 5s pollers have five seconds, so it yields to them by construction
+    rather than by relying on pool headroom it cannot actually reserve.
+    """
+    sem = asyncio.Semaphore(PAIR_VOLUME_CONCURRENCY)
+
+    async def sweep() -> tuple[int, int, int]:
+        archive = load_pair_volume_archive()
+        symbols = [sym for sym, _ in PAIRS]
+        cold = [s for s in symbols if not archive.get(s)]
+
+        async def one(sym: str) -> tuple[str, list | None]:
+            # Cold pairs pull the full reachable window; warm ones re-fetch the
+            # trailing few hours so a candle that was not published on the last
+            # pass gets filled in before it ages past the wall.
+            hours = klv.MAX_LIMIT if not archive.get(sym) else PAIR_VOLUME_TOPUP_HOURS
+            async with sem:
+                try:
+                    return sym, await _fetch_pair_volume_hours(session, sym, hours)
+                except Exception as e:
+                    # One pair failing must not abort the sweep — the next pass
+                    # re-covers it, and the overlap means nothing is lost.
+                    print(f"⚠️  [D1] volume archive for {sym} failed: {e}")
+                    return sym, None
+
+        fetched = await asyncio.gather(*(one(s) for s in symbols))
+
+        # Single merge, single write — see _fetch_pair_volume_hours on why the
+        # fetches above must not do this themselves.
+        ok = 0
+        for sym, series in fetched:
+            if series is None:
+                continue
+            ok += 1
+            archive[sym] = flr.prune_points(
+                flr.merge_points(archive.get(sym, []), series),
+                PAIR_VOLUME_RETENTION_DAYS)
+        if ok:
+            save_pair_volume_archive(archive)
+        return ok, len(symbols), len(cold)
+
+    try:
+        ok, total, cold = await sweep()
+        print(f"🚀 Per-pair volume archive ready — {ok}/{total} pairs "
+              f"({cold} backfilled from cold)")
+    except Exception as e:
+        print(f"⚠️  Per-pair volume archive initial sweep failed: {e} — will retry next hour")
+
+    while True:
+        # Recomputed each iteration so the loop cannot drift off the hour, same
+        # as kline_volume_loop. The delay is longer than that loop's on purpose
+        # — see PAIR_VOLUME_TOPUP_DELAY_SECONDS.
+        now = ngt_now()
+        next_boundary = klv.floor_to_period(now, klv.HOUR_MINUTES) + timedelta(hours=1)
+        await asyncio.sleep(max(30.0, (next_boundary - now).total_seconds()
+                                + PAIR_VOLUME_TOPUP_DELAY_SECONDS))
+        try:
+            ok, total, cold = await sweep()
+            note = f", {cold} backfilled from cold" if cold else ""
+            print(f"  [D1] per-pair volume archive updated — {ok}/{total} pairs{note}")
+        except Exception as e:
+            print(f"⚠️  Per-pair volume archive update error: {e}")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # PERSISTENCE
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -3031,6 +3470,7 @@ async def process_pair(
     depth_hist_root: dict,
     ref_metrics: Optional[dict] = None,
     fill_snapshot: Optional[dict] = None,
+    pair_volume_archive: Optional[dict] = None,
 ) -> Optional[dict]:
     """
     Fetches depth + kline (B4) + kline-volume (D1, its own independent call — see
@@ -3262,11 +3702,21 @@ async def process_pair(
             # all treat it identically. No more parallel _spikes list, no more
             # bespoke tier calc, no more separate spike Telegram message.
             window_info = compute_window_volume(kline_vol_raw, symbol)
-            baseline, bucket_count = (None, 0)
+            legacy_baseline, legacy_buckets = (None, 0)
             if window_info:
-                baseline, bucket_count = update_volume_baseline(symbol, window_info["quote_volume"], vol_hist_root)
+                # Still recorded every cycle even when the seasonal baseline
+                # answers, so the "flat_mean" rollback lever is instant rather
+                # than needing 24h of re-warm-up, and so a wiped archive lands on
+                # a mean that is already current.
+                legacy_baseline, legacy_buckets = update_volume_baseline(
+                    symbol, window_info["quote_volume"], vol_hist_root)
+            d1_seasonal = resolve_volume_baseline(symbol, pair_volume_archive or {},
+                                                  window_info, ngt_now())
+            baseline, d1_method, bucket_count, _d1_mad, d1_slot = d1_baseline_view(
+                d1_seasonal, legacy_baseline, legacy_buckets)
             issues += get_recent_spikes(window_info, symbol, baseline, bucket_count,
-                                        fill_metrics=d2_metrics)
+                                        fill_metrics=d2_metrics, method=d1_method,
+                                        slot=d1_slot)
 
             # Fold once more after D1/D2 in case a dedupe is ever needed (each
             # currently emits 0 or 1 tuple, but this keeps the invariant "issues is
@@ -3299,32 +3749,11 @@ async def process_pair(
             # analogous to depth_bid or current_spread, kept alongside the rest of
             # the row so the dashboard doesn't have to re-derive them from `issues`.
             d1_threshold = get_threshold(symbol)
-            if has_d1:
-                # Same ref_context text that ends up in the issues label, extracted
-                # for the standalone dashboard field. Cheap to rebuild here rather
-                # than parse it back out of the label string.
-                if VOLUME_SPIKE_MODE == "baseline_relative" and baseline and bucket_count >= VOLUME_SPIKE_MIN_BUCKETS:
-                    ratio = window_info["quote_volume"] / baseline
-                    d1_context = (f"≈{ratio:.1f}x the typical {VOLUME_SPIKE_LOOKBACK_MINUTES}min volume "
-                                  f"(≥{VOLUME_SPIKE_RATIO:g}x baseline over {bucket_count} windows, "
-                                  f"floor {get_currency_symbol(symbol)}{d1_threshold:,.0f})")
-                elif baseline and bucket_count >= 2:
-                    ratio = window_info["quote_volume"] / baseline
-                    d1_context = (f"≈{ratio:.1f}x typical — fired on absolute floor "
-                                  f"{get_currency_symbol(symbol)}{d1_threshold:,.0f} (baseline warming, "
-                                  f"{bucket_count}/{VOLUME_SPIKE_MIN_BUCKETS} buckets)")
-                else:
-                    d1_context = (f"fired on absolute floor {get_currency_symbol(symbol)}{d1_threshold:,.0f} "
-                                  f"— baseline still building, no per-pair context yet")
-            elif baseline and bucket_count >= 2 and window_info:
-                ratio_txt = f"≈{window_info['quote_volume'] / baseline:.1f}x typical"
-                if VOLUME_SPIKE_MODE == "baseline_relative" and bucket_count < VOLUME_SPIKE_MIN_BUCKETS:
-                    d1_context = (f"{ratio_txt} (baseline warming "
-                                  f"{bucket_count}/{VOLUME_SPIKE_MIN_BUCKETS} — absolute floor active)")
-                else:
-                    d1_context = f"{ratio_txt} ({bucket_count}-window baseline)"
-            else:
-                d1_context = "baseline building…"
+            # The SAME clause the Telegram label carries — one function, called
+            # twice, rather than two copies of the branching that drifted apart
+            # every time D1's baseline changed. See d1_context.
+            d1_ctx = d1_context(symbol, window_info, d1_threshold,
+                                baseline, d1_method, bucket_count, d1_slot)
 
             print(f"[{symbol}] {'⚠️ ' if is_poor else '✅'} spread={curr_spread:.4f}% mid={mid_price:,.4f} "
                   f"dws={dws:.4f} layers={ask_layers}/{bid_layers} issues={len(issues)}")
@@ -3364,7 +3793,21 @@ async def process_pair(
                 "d1_window_volume": round(window_info["quote_volume"], 2) if window_info else "N/A",
                 "d1_threshold":     d1_threshold if d1_threshold is not None else "N/A",
                 "d1_currency":      get_currency_symbol(symbol),
-                "d1_context":       d1_context,
+                "d1_context":       d1_ctx,
+                # The baseline D1 actually judged against, and which rung of the
+                # ladder produced it. Carried as fields rather than left inside
+                # d1_context so the dashboard can render provenance the way A4
+                # already does with depth_baseline_value/_samples, instead of the
+                # operator having to read it out of a sentence.
+                #
+                # d1_baseline_mad is deliberately NOT here: MAD is reported
+                # through /api/fill-rate and computed for every rung, but nothing
+                # renders it yet, and a CSV column in this file is forever (see
+                # parse_latest_csv on carrying legacy columns). It goes in when
+                # something reads it.
+                "d1_baseline":         round(baseline, 2) if baseline is not None else "N/A",
+                "d1_baseline_method":  d1_method,
+                "d1_baseline_samples": bucket_count,
                 "_actionable":     issues,
             }
 
@@ -3756,6 +4199,11 @@ async def run_cycle(shared_state: dict, session: aiohttp.ClientSession, cycle_nu
     # would be 45 identical disk reads for one answer. The in-memory trailing-hour
     # counts come from ticker_fill_loop's own state via fill_rate_snapshot.
     fill_archive = load_fill_archive()
+    # D1's per-pair volume archive, read once for the same reason. It is the
+    # larger of the two files, and pair_volume_loop only rewrites it on the
+    # hour, so re-reading it per pair would be 45 identical reads of a few MB
+    # for an answer that cannot have changed between them.
+    pair_volume_archive = load_pair_volume_archive()
     tasks = []
     for sym, tgt in PAIRS:
         base, quote = split_symbol(sym)
@@ -3770,6 +4218,7 @@ async def run_cycle(shared_state: dict, session: aiohttp.ClientSession, cycle_nu
             layer_hist_root=layer_hist_root,
             depth_hist_root=depth_hist_root,
             fill_snapshot=fill_rate_snapshot(sym, fill_archive),
+            pair_volume_archive=pair_volume_archive,
         ))
     raw_results = await asyncio.gather(*tasks)
     results = [r for r in raw_results if r is not None]
@@ -4126,7 +4575,7 @@ async def main(run_once: bool = False):
     # pool a third of the size it needed: at the default 10 that is 30 requests
     # queueing through 15 slots, which throttled the main cycle AND pushed the
     # 5-second depth-walk poll behind a queue every time a cycle ran.
-    # BACKGROUND_CONNECTIONS is reserved headroom so the two background loops
+    # BACKGROUND_CONNECTIONS is reserved headroom so the four background loops
     # never have to wait on the cycle at all.
     pool_size = MAX_CONCURRENT_PAIRS * FETCHES_PER_PAIR + BACKGROUND_CONNECTIONS
     connector = aiohttp.TCPConnector(limit=pool_size)
@@ -4158,6 +4607,16 @@ async def main(run_once: bool = False):
         # nowhere else), so a silent exit is even less acceptable here.
         volume_task = supervise(lambda: kline_volume_loop(session),
                                 "USDTNGN volume archive")
+
+        # D1 per-pair hourly volume archive — also hourly, also load-bearing for
+        # the same 300-candle reason, and supervised for the same reason again.
+        # Offset from the loop above so the two are not sweeping the same
+        # endpoint on the same second every hour.
+        pair_volume_task = supervise(lambda: pair_volume_loop(session),
+                                     "per-pair volume archive")
+        print(f"🚀 Starting per-pair volume archive — {len(PAIRS)} pairs, hourly, "
+              f"{VOLUME_BASELINE_DAYS:g}d baseline window, "
+              f"{PAIR_VOLUME_RETENTION_DAYS}d retained")
 
         # D2 fill-rate sampler — independent 5s task over ONE batched tickers
         # call. Supervised for the strongest version of the reason above: an

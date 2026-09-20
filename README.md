@@ -12,6 +12,7 @@ data/
   alert_acks.json    ← api writes / monitor reads: per-(pair, issue) acks
   cycle_request.json ← api writes / monitor reads: dashboard "run a cycle now"
   fill_rate_hourly.json ← monitor writes: D2 hourly fill events per market
+  pair_volume_hourly.json ← monitor writes: D1 hourly volume per pair (base, close, quote)
 ```
 
 ## Setup
@@ -49,7 +50,7 @@ To watch it live, just keep your monitor running alongside uvicorn.
 | `POST /api/alert-acks` | set/clear one ack: `{symbol, issue_id, ack}` |
 | `GET /api/usdtngn-volume` | USDTNGN hourly base volume (USDT); `?start=&end=` (ISO date or datetime, NGT) |
 | `GET /api/usdtngn-volume/rolling` | USDTNGN trailing-window volume, `?minutes=` (default 60) |
-| `GET /api/fill-rate` | D2 hourly fill-event series + per-market baseline; `?market=&hours=` |
+| `GET /api/fill-rate` | D2 hourly fill-event series + per-market baseline, the rung that produced it and its MAD; `?market=&hours=` |
 | `POST /api/request-cycle` | ask the monitor to start a cycle now — see below |
 | `GET /health` | liveness check |
 
@@ -365,14 +366,48 @@ Quidax's candle field order is `[ts, open, close, high, low, volume]` — close
 comes *third*, not fifth as in most APIs. Unpacking it the conventional way
 multiplies volume by the candle's low instead of its close.
 
-The trigger is **relative to the pair's own history**, not an absolute number.
-The baseline is built with no extra API calls, from the window volume already
-computed each cycle — but a new baseline "bucket" is only recorded once per
-240 minutes of elapsed time, not every cycle. That matters: with a 60s cycle and
-a 4-hour window, consecutive readings overlap almost entirely, and averaging
-near-duplicates against each other would say nothing. Sampling once per window
-length gives genuinely distinct historical readings. The baseline is the mean of
-the last 6 such buckets (≈24 hours), always excluding the current reading.
+The trigger is **relative to the pair's own history at the same time of day**,
+not an absolute number and not a flat daily average.
+
+The baseline is the **median of what this pair traded in the same hour of day
+over the last 30 days**, read from a per-pair hourly archive
+(`pair_volume_hourly.json`) that a background loop tops up once an hour. On a
+cold start it backfills about 12.5 days in one sweep — the k-line endpoint
+reaches exactly 300 candles and no further — and accumulates to the full window
+from there. Because the window is four hours, each historical sample is the sum
+of four consecutive archived hours, so both sides of the comparison are the same
+shape.
+
+Two details do most of the work:
+
+- **Median, not mean.** Under a mean, one past spike pollutes the baseline for
+  the whole window — a day at the old 24-hour baseline, a month at 30 days. The
+  median is what makes the longer window safe to use at all.
+- **The median is taken over BASE volume and re-quoted at the current close.**
+  D1 compares naira (or USDT), but a median spanning 30 days of quote volume
+  also spans 30 days of *price*: a 40% currency move at flat real activity would
+  otherwise drag the baseline 40% below today's figure and leave D1
+  trigger-happy on a rally and blind on a selloff. Basing it on volume and
+  re-quoting removes that entirely.
+
+The archive stores base volume, close and quote volume together, so the choice
+of unit stays reversible — which matters because a re-backfill is impossible
+past the 300-candle wall.
+
+**What this replaces, and why.** The old baseline was the mean of the last six
+four-hour windows — the last 24 hours, *all hours of day pooled*. On a pair
+whose trading concentrates in business hours, the daily peak window is
+structurally several times the daily mean, so D1 fired on a perfectly healthy
+market every single day, and no amount of confirmation could filter a signal
+that was genuinely present for hours. Replayed over 45 days of a sharply peaked
+market with nothing abnormal in it, the old baseline produced 133 fires
+(clustered at the same three hours, every day) and the new one produced 1 — an
+injected 6× burst that both baselines caught.
+
+That mean is still there as the fallback, and is still recorded every cycle: it
+covers a pair whose archive is too thin to answer, and it is what
+`baseline_model: "flat_mean"` rolls back to from the config drawer, with no
+redeploy.
 
 D1 fires when **both** hold:
 
@@ -391,11 +426,30 @@ a ratio with no economic meaning. The floors are:
 | BTC / ETH / SOL / USDC vs USDT | $100,000 |
 | Other USDT pairs | $5,000 |
 
-Until the baseline has 4 buckets it isn't trusted, and D1 falls back to firing on
-the absolute floor alone (`warmup_fallback: "absolute"`) — so a restart that
-wipes `health_state.json` doesn't create a blind spot. Setting it to `"suppress"`
-trades that for silence during warm-up instead. Setting `mode: "absolute"`
-bypasses the baseline permanently.
+**The baseline resolves down a ladder, and reports which rung it landed on** —
+`seasonal` (the slot median), `flat_median`, `legacy_mean` (the old behaviour),
+or `sparse`. The rung is carried on the row and named in the alert, so
+"≈3.2× the typical 240min volume for this hour (median of 21 prior days at
+16:00)" is what an operator reads rather than a bare "3.2× typical".
+
+`sparse` is its own state because the median has a failure mode the mean does
+not: a market trading in fewer than half its hours has a slot median of exactly
+zero, and D1 gates on a positive baseline. Rather than silently pinning itself
+to the floor while claiming the baseline was "still building", it says the
+market trades too rarely to have a typical volume. The two CNGN pairs sit here.
+
+A slot needs 8 prior days at that hour (`min_slot_samples`) before its median is
+trusted — a figure a cold backfill clears on day one. Note the unit: days, not
+windows, so it is deliberately *not* the same number as `min_baseline_buckets`,
+which still gates the fallback mean at 4 windows. Until either is met D1 falls
+back to firing on the absolute floor alone (`warmup_fallback: "absolute"`), so a
+restart never creates a blind spot. Setting it to `"suppress"` trades that for
+silence during warm-up. Setting `mode: "absolute"` bypasses the baseline
+permanently.
+
+Because the archive is a file of its own, a wipe of `health_state.json` now
+costs D1 nothing — it used to cost 16 hours of warm-up — and even losing the
+archive recovers 12.5 days in a single sweep.
 
 **D1 is Tier 2** — it confirms over three consecutive cycles, then takes the
 standard 15-minute cooldown, and is capped at two deliveries per episode. Its
@@ -444,10 +498,23 @@ Two measurement details that matter:
   old trades age out. Treating any change as a fill roughly doubles the count on
   quiet markets, where that decay dominates.
 
-D2 compares each market's trailing-hour event count against **its own** mean over
-prior closed hours — a self-baseline like A4 and A6, because measured rates span
-an order of magnitude across the pair list (usdtngn ~92 events/hr, aaveusdt ~10)
-and no fixed cutoff serves both ends.
+D2 compares each market's trailing-hour event count against **its own** typical
+rate — a self-baseline like A4 and A6, because measured rates span an order of
+magnitude across the pair list (usdtngn ~92 events/hr, aaveusdt ~10) and no fixed
+cutoff serves both ends.
+
+Like D1, that baseline is now the **median of the same hour of day over the last
+30 days** rather than a flat mean of recent hours, and for the same reason: fill
+rates have a daily shape too, and judging a market's quiet 04:00 against its
+all-hours average manufactures a collapse every night. D2 needed no new data
+source for this — the sampler already writes one point per market per closed
+hour, zeros included, so the history was already on disk.
+
+The difference from D1 is that **D2 cannot backfill**. Fill events exist nowhere
+upstream, so its slot medians are reached only by waiting: 8 days after the
+sampler first runs. Until then it falls back to the flat median and then to the
+mean of prior closed hours, which is exactly what D2 did before — so the trial
+it is currently under is not interrupted.
 
 **It fires on the absolute percentage change from that baseline, in either
 direction** — past `pct_change_threshold` (65%). A ratio test is one-sided by
@@ -505,7 +572,13 @@ Three guards keep it quiet when it has nothing to say:
   near it; at 2/hr it's ±1.4, and a perfectly healthy market trips both −65% *and*
   +65% by chance alone — the symmetric test gives that noise two ways to fire
   instead of one. Markets below the floor are reported, never alerted.
-- **`min_baseline_buckets` (6).** No verdict until six closed hours exist.
+- **`min_baseline_buckets` (6) and `min_slot_samples` (8).** No verdict until
+  there is enough history — but the two count different things, and which one
+  applies depends on which rung the baseline landed on. `min_baseline_buckets`
+  is six closed *hours*, about six hours of waiting. `min_slot_samples` is eight
+  prior *days at the same hour*, about eight days. Swapping one for the other
+  would either let D2 judge on almost nothing or silence it for a week, and
+  neither failure announces itself.
 - **The startup hour is discarded.** A process starting 59 minutes into an hour
   would otherwise persist that partial count as a full one, biasing the baseline
   *downward* — the direction that suppresses future alerts.
@@ -701,16 +774,28 @@ whale trade is a large spike at ~1 event; two hundred small trades are the same
 naira figure at a hundred times the event count. D2 is Tier 3, so D1's label is
 the only route by which fill data reaches Telegram.
 
-One thing is knowingly still open: D1 was noisy at Tier 2 before, and the cause is
-most likely the baseline rather than the tier. `update_volume_baseline` averages
-six lookback windows — the last 24 hours across *all* times of day — so on a pair
-whose trading concentrates in business hours the peak window is structurally
-several times the daily mean, and no amount of confirmation filters a signal
-that is genuinely present for hours. Shipping the retier and measuring real
-delivery volume was the deliberate call. The levers if it proves noisy, cheapest
-first: `volume_spike.spike_ratio` (3.0, in the config drawer),
-`volume_spike.max_fires` (2, the per-episode cap — inert at Tier 3, live again
-now), then a time-of-day-aware baseline.
+**The noise that was left open when D1 was retiered has now been addressed.** The
+diagnosis was that the cause was the baseline rather than the tier:
+`update_volume_baseline` averaged six lookback windows — the last 24 hours across
+*all* times of day — so on a pair whose trading concentrates in business hours
+the peak window was structurally several times the daily mean, and no amount of
+confirmation filters a signal that is genuinely present for hours. The listed
+levers were `volume_spike.spike_ratio`, then `volume_spike.max_fires`, then a
+time-of-day-aware baseline.
+
+The third one has been taken, and the first two were deliberately left alone so
+that only one variable moved: `spike_ratio` is still 3.0 and `max_fires` still 2.
+See *D1 — Volume Spike* above for what replaced the mean. If it proves wrong in
+production, `volume_spike.baseline_model: "flat_mean"` restores the old
+behaviour exactly, from the config drawer, with no redeploy.
+
+Still open, deliberately: **MAD is computed but nothing fires on it.** Every
+baseline now carries a median absolute deviation alongside it, reported through
+`GET /api/fill-rate`. That is the number a robust z-score would divide by —
+"is 3× actually unusual *for this pair*, or is this pair simply noisy?", which a
+single global `spike_ratio` assumes away. It is reported rather than fired on so
+it can be calibrated against real markets first, the same staged approach D2
+itself is under.
 
 **A3 and B3 are retired ids.** A3 merged into A2 and B3 into B1 in the 2026-08
 review. They still classify at their original tiers (`RETIRED_TIERS` in

@@ -507,31 +507,47 @@ elif |move_pct| >= warn_level:
 Fires when a pair's rolling-window volume is unusually large **for that pair**, not just large in absolute terms.
 
 **Per-cycle computation:**
-1. `window_volume` = sum of quote-volume from the last `lookback_minutes` of 1-minute candles.
-2. Update the per-pair volume baseline: record a new bucket only once every `lookback_minutes` of real elapsed time. This matters — with a 60 s cycle and a 60 min lookback, consecutive cycles' windows overlap ~59/60. Recording every cycle would average near-identical readings against themselves.
-3. `baseline` = mean of the previous `volume_baseline_buckets` recorded windows (excluding the just-recorded one).
+1. `window_volume` = sum of quote-volume from the last `lookback_minutes` of hourly candles.
+2. Resolve the baseline from the per-pair hourly archive, down a ladder that reports which rung produced it:
+
+```
+seasonal     median of the same hour-of-day over baseline_days,   >= min_slot_samples
+             built from window_hours consecutive archived hours
+flat_median  median of the whole retained window                  >= min_baseline_buckets
+sparse       the resolved median is exactly 0
+legacy_mean  mean of the last volume_baseline_buckets windows     (the pre-2026-09 behaviour)
+```
+
+3. The median is taken over **base** volume and multiplied by the current close. A median spanning `baseline_days` of *quote* volume also spans that long of price, so a currency move would otherwise shift the baseline against flat real activity.
+4. A gap in the hourly archive **breaks** a window sample rather than shortening it — a partial sum is an undercount, and undercounts bias a baseline downward, which is the direction that makes everything look like a spike.
 
 **Firing (mode = `baseline_relative`, the default):**
 
 ```
-baseline_trusted = (baseline > 0 AND bucket_count >= min_baseline_buckets)
+min_samples     = min_slot_samples  if method is a median rung
+                  min_baseline_buckets  if method is legacy_mean
+baseline_trusted = (baseline > 0 AND samples >= min_samples)
 
 if baseline_trusted:
     fire D1 if window_volume >= spike_ratio * baseline
                 AND window_volume >= per_pair_absolute_floor
 else:
-    # warm-up phase (fresh install, or state wipe)
+    # warm-up, or a market too sparse to have a median at all
     if warmup_fallback == "absolute":
         fire D1 if window_volume >= per_pair_absolute_floor
     elif warmup_fallback == "suppress":
         no D1 fires until baseline is trusted
 ```
 
+**Unit discipline:** `samples` counts four-hour windows under `legacy_mean` and days-at-this-hour under a median, so the two minimums are separate constants and must not be substituted for each other. Six hours of evidence and six days of evidence are not the same claim.
+
+**Window alignment:** the archive is hourly by definition, so `candle_minutes` must be 60 and `lookback_minutes` a whole number of hours for the seasonal rung to apply. The API rejects other values while `baseline_model` is `seasonal_median`, and the engine degrades to `legacy_mean` rather than compare mismatched windows.
+
 **Why the absolute floor:** without it, a pair doing 3× a tiny baseline fires D1 with no economic significance. Without the baseline component, a busy pair whose normal volume already clears the flat threshold fires every single cycle. Both gates must pass.
 
 **Mode = `absolute`:** bypass the baseline entirely, use only the floor. Provided as an escape hatch for fast rollback without redeploy.
 
-**Tier:** 2 (confirms over 3 consecutive cycles, then a 15-min cooldown), as of the 2026-09 retier. `volume_spike.max_fires` caps deliveries at 2 per episode and is live again — it was inert throughout the Tier-3 period, since a Tier-3 id returns from `should_fire_telegram` before the cap is consulted. Known-open risk: the baseline averages six lookback windows, i.e. the last 24h across all times of day, so on a pair with concentrated trading hours the peak window is structurally several times the daily mean. Shipping the retier and measuring real delivery volume was the deliberate call; `spike_ratio`, then `max_fires`, then a time-of-day-aware baseline are the levers. **State needed:** per-pair rolling volume buckets + last-bucket timestamp.
+**Tier:** 2 (confirms over 3 consecutive cycles, then a 15-min cooldown), as of the 2026-09 retier. `volume_spike.max_fires` caps deliveries at 2 per episode and is live again — it was inert throughout the Tier-3 period, since a Tier-3 id returns from `should_fire_telegram` before the cap is consulted. The noise risk recorded at that retier — a 24h all-hours mean making a concentrated pair's daily peak read as a multiple of its own average, every day — was addressed by the seasonal baseline above rather than by `spike_ratio` or `max_fires`, both of which were deliberately left at their existing values so only one variable moved. `baseline_model: "flat_mean"` restores the previous behaviour from the config drawer without a redeploy. **State needed:** the per-pair hourly volume archive; the legacy rolling buckets + last-bucket timestamp are retained for the fallback rung.
 
 ```mermaid
 flowchart TD
@@ -634,6 +650,8 @@ The engine and the API cooperate via files on shared disk. There is no database.
 | `daily_log_{YYYY-MM-DD}.csv` | engine, append-only | API | One row per warning market per cycle (healthy pairs skipped) |
 | `health_state.json` | engine, after external sends | API | Per-pair cooldowns, consecutive counters, rolling histories (reference prices, volume, layer churn), last observed mid + timestamp, global cooldowns |
 | `monitor_config.json` | API, on config edit | engine | Threshold overrides (partial doc; layered over shared defaults) |
+| `pair_volume_hourly.json` | engine, hourly loop | API | Per-pair hourly volume (base, close, quote) — D1's seasonal baseline. Backfills ~12.5 days from the k-line API on cold start; everything older exists only here |
+| `fill_rate_hourly.json` | engine, hourly roll | API | Per-market hourly fill-event counts — D2's seasonal baseline. Cannot be backfilled from any endpoint |
 
 ### Config sharing
 
@@ -746,8 +764,22 @@ kline:
 volume_spike:
   mode: baseline_relative             # or "absolute"
   spike_ratio: 3.0                    # D1 fires when vol >= this * baseline
-  min_baseline_buckets: 4             # trust gate for baseline
+  min_baseline_buckets: 4             # trust gate for the FALLBACK mean (windows)
   warmup_fallback: absolute           # or "suppress"
+  baseline_model: seasonal_median     # or "flat_mean" (instant rollback, no redeploy)
+  baseline_days: 30                   # how far back the seasonal baseline looks
+  min_slot_samples: 8                 # trust gate for a slot median (DAYS at this hour)
+
+fill_rate:
+  poll_interval_seconds: 5            # clamped at the exchange's own ticker refresh
+  baseline_buckets: 24                # the FALLBACK mean, in closed hours
+  min_baseline_buckets: 6             # trust gate for that mean (hours)
+  min_baseline_events: 8.0            # below this a market is too thin to judge
+  pct_change_threshold: 65.0          # D2 fires past this, in EITHER direction
+  condensed_retention_days: 90        # archive retention; unrecoverable if lost
+  baseline_model: seasonal_median     # or "flat_mean"
+  baseline_days: 30
+  min_slot_samples: 8                 # trust gate for a slot median (DAYS at this hour)
 
 layer_churn:
   top_pct: 0.5                        # A6 near-touch fraction

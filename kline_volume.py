@@ -18,11 +18,14 @@ environment reads, no async work — so api.py can import it without dragging in
 the monitor engine (debug.py runs apply_config() and builds an asyncio.Lock at
 import time; importing it from the API process would execute both).
 
-Volume here is BASE volume (USDT for usdtngn) — the candle's raw index-5 field,
-NOT multiplied by close. That is deliberately different from debug.py's
+`aggregate()` reports BASE volume (USDT for usdtngn) — the candle's raw index-5
+field, NOT multiplied by close. That is deliberately different from debug.py's
 compute_window_volume, which reports D1's QUOTE volume (volume × close, in naira)
 for spike thresholds. Two different numbers with two different jobs; don't
-"reconcile" them.
+"reconcile" them. `aggregate_quote()` is the one that carries BOTH, for D1's
+per-pair hourly archive — it is a separate function rather than a flag on
+aggregate() precisely so the USDTNGN dashboard series can never quietly change
+units underneath the graph it feeds.
 
 ────────────────────────── How the Quidax k-line API works ────────────────────
   GET /exchange-open-api/api/v1/markets/{market}/k?period=60&timestamp=<s>&limit=<n>
@@ -194,9 +197,9 @@ def fetch_klines(market: str, period_minutes: int, timestamp_s: int,
     return payload.get("data") or []
 
 
-def parse_candle(candle) -> tuple[datetime, float] | None:
+def parse_candle(candle) -> tuple[datetime, float, float] | None:
     """
-    One row -> (open time in NGT, BASE volume). None for a malformed row.
+    One row -> (open time in NGT, BASE volume, CLOSE price). None if malformed.
 
     Encodes the field-order convention in exactly one place: Quidax returns
     [ts_ms, open, CLOSE, high, low, volume] — OCHLV, not the more common OHLCV.
@@ -204,11 +207,17 @@ def parse_candle(candle) -> tuple[datetime, float] | None:
     reader adding price logic here can't repeat the bug debug.py's
     compute_window_volume once had (quoting volume against `low` instead of
     `close`).
+
+    `close` is returned rather than discarded because that bug is exactly what
+    aggregate_quote() below would otherwise have to re-derive: quote volume is
+    volume x close, and the alternative to returning it here is a THIRD copy of
+    this unpack somewhere else. The docstring above promised the convention
+    lives in one place; this keeps that true now that price logic exists.
     """
     try:
-        ts_ms, _open, _close, _high, _low, volume = candle[:6]
+        ts_ms, _open, close, _high, _low, volume = candle[:6]
         return (datetime.fromtimestamp(int(ts_ms) / 1000, tz=UTC).astimezone(NGT),
-                float(volume))
+                float(volume), float(close))
     except (IndexError, ValueError, TypeError):
         return None
 
@@ -244,7 +253,7 @@ def aggregate(rows: list, start_dt: datetime, end_excl: datetime,
         parsed = parse_candle(candle)
         if parsed is None:
             continue            # malformed row — skip, don't crash the run
-        open_ngt, vol = parsed
+        open_ngt, vol, _close = parsed
         if not (start_dt <= open_ngt < end_excl):
             continue            # outside the requested window (older tail or newer than end)
         if open_ngt in by_open:
@@ -265,6 +274,69 @@ def aggregate(rows: list, start_dt: datetime, end_excl: datetime,
         "expected_count": len(expected_opens),
         "retrieved_count": len(by_open),
         "missing_opens": sorted(expected_opens - set(by_open)),
+    }
+
+
+def aggregate_quote(rows: list, start_dt: datetime, end_excl: datetime,
+                    period_minutes: int = HOUR_MINUTES) -> dict:
+    """
+    Like aggregate(), but for D1's per-pair archive: each point carries BASE
+    volume, the candle's CLOSE, and the QUOTE volume (base x close) together.
+
+    Separate from aggregate() rather than a flag on it, because the two feed
+    different persisted series with different definitions, and a shared function
+    with a mode switch is how those definitions get accidentally swapped. The
+    USDTNGN dashboard series stays exactly what it was.
+
+    ──────────────── Why all three fields, not just quote volume ──────────────
+    D1's thresholds and floors are quote-denominated (naira/USDT), so quote
+    volume is what it compares. But a baseline spanning 30 days of quote volume
+    silently spans 30 days of PRICE too: if NGN moves 40% against an asset at
+    flat real activity, the median quote volume sits ~40% below today's figure
+    and D1 turns trigger-happy on a rally and blind on a selloff. That barely
+    mattered at the old 24-hour baseline; over 30 days, in a naira devaluation
+    environment, it matters a great deal.
+
+    So the baseline is taken over BASE volume — which carries no price — and
+    re-quoted at the current close before the comparison. Storing all three
+    keeps that reversible: the unit choice lives in one line of baseline
+    resolution rather than in the archive, and revisiting it needs no
+    re-backfill. That matters more than it sounds, because a re-backfill is
+    IMPOSSIBLE past the 300-candle wall (see the module docstring) — whatever
+    this function chooses not to store is gone in 12.5 days.
+    """
+    step = timedelta(minutes=period_minutes)
+
+    expected_opens = set()
+    t = floor_to_period(start_dt, period_minutes)
+    if t < start_dt:
+        t += step
+    while t < end_excl:
+        expected_opens.add(t)
+        t += step
+
+    by_open: dict[datetime, tuple[float, float]] = {}
+    for candle in rows:
+        parsed = parse_candle(candle)
+        if parsed is None:
+            continue
+        open_ngt, vol, close = parsed
+        if not (start_dt <= open_ngt < end_excl):
+            continue
+        if open_ngt in by_open:
+            continue            # de-dupe any overlap defensively
+        by_open[open_ngt] = (vol, close)
+
+    series = [{"ts": ts.isoformat(),
+               "volume": by_open[ts][0],
+               "close": by_open[ts][1],
+               "quote_volume": by_open[ts][0] * by_open[ts][1]}
+              for ts in sorted(by_open)]
+    return {
+        "series":          series,
+        "expected_count":  len(expected_opens),
+        "retrieved_count": len(by_open),
+        "missing_opens":   sorted(expected_opens - set(by_open)),
     }
 
 
