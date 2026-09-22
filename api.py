@@ -11,6 +11,8 @@ Endpoints:
     GET /api/history         → daily log CSV as JSON; optional ?date=YYYY-MM-DD (defaults to today)
     GET /api/alert-analysis  → range analytics over the daily logs; ?start=&end=&gap_cycles=
     GET /api/alert-log       → daily-log detections for a range, filtered by tier/market/issue
+    GET /api/alert-ledger    → alerts DELIVERED to Telegram, with their sign-offs; ?format=csv exports
+    POST /api/alert-ledger/action → acknowledge one or many delivered alerts
     GET /api/fill-rate       → D2 hourly fill-event series + self-baseline per market
     POST /api/request-cycle  → ask the monitor to start a cycle now (file signal; throttled)
     GET /api/diagnostics     → which writer last wrote what, and how long ago
@@ -20,6 +22,8 @@ Endpoints:
     GET /                    → serves dashboard.html from same directory
 """
 
+import csv
+import io
 import json
 import math
 import os
@@ -35,7 +39,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response
 
 from defaults import (default_config, merge_config, UPTIME_FIXED_STEP_NGN,
-                      ACKABLE_ISSUE_IDS,
+                      ACKABLE_ISSUE_IDS, ISSUE_NAMES, issue_name,
+                      LEDGER_ACTIONS, LEDGER_NOTE_MAX_CHARS,
                       classify_tier)  # single source of truth for config
 # Candle fetching + aggregation for the USDTNGN volume endpoints. Import-only
 # module (no side effects, no async), shared with debug.py so the OCHLV field
@@ -102,6 +107,33 @@ CYCLE_REQUEST_MIN_INTERVAL_SECONDS = 20
 # there is no cross-process write race in either direction. See debug.py's
 # ALERT_ACKS_FILE comment for the monitor half.
 ALERT_ACKS_FILE = DATA_DIR / "alert_acks.json"
+# ── Accountability ledger ────────────────────────────────────────────────────
+# Two files, one per writer, same one-way discipline as everything above.
+#
+#   alert_ledger_<date>.jsonl  — written by the MONITOR, read here. One append-only
+#       line per alert delivered to Telegram, plus a line per resolution. The
+#       monitor is the only process that ever knows a send succeeded, so it is the
+#       only one that can write this.
+#   alert_ledger_actions.json  — written HERE, read by nobody else. The team's
+#       tick-box, chosen action and optional note, keyed by fire id.
+#
+# The coupling is even weaker than ALERT_ACKS_FILE's above: the monitor does not
+# read the actions file AT ALL. That is deliberate and worth stating plainly,
+# because the vocabulary collides badly —
+#
+#       ALERT_ACKS_FILE   an "ack" MUTES an issue at the fire gate.
+#       LEDGER_ACTIONS_FILE  an acknowledgement mutes NOTHING. It is an audit
+#                            tick recording that a human saw the page and what
+#                            they did about it.
+#
+# Nothing the team ticks here can ever stop an alert firing. If you find yourself
+# adding a read of this file to debug.py, that is the bug.
+LEDGER_ACTIONS_FILE = DATA_DIR / "alert_ledger_actions.json"
+
+
+def ledger_file_for(day: str) -> Path:
+    """Monitor-written ledger day-file for an NGT date string (YYYY-MM-DD)."""
+    return DATA_DIR / f"alert_ledger_{day}.jsonl"
 # G1 depth-walk slippage tracker files (written by debug.py's depth_walk_loop)
 DEPTH_WALK_RAW_FILE       = DATA_DIR / "usdtngn_slippage_raw.json"
 DEPTH_WALK_CONDENSED_FILE = DATA_DIR / "usdtngn_slippage_hourly.json"
@@ -1063,6 +1095,10 @@ def get_alert_analysis(start: Optional[str] = None,
 # the browser receives one page at a time and never the range.
 
 _LOG_PAGE_SIZES = (50, 100, 200, 500)
+# Widest range the sign-off tab will read at once. Not a retention limit — the
+# ledger is kept forever — just a bound on how many day-files one request can
+# open, so a mistyped year asks for three years rather than three thousand.
+MAX_LEDGER_SPAN_DAYS = 1100
 _LOG_CSV_MAX    = 250_000   # rows; a whole busy month is ~4x this
 
 
@@ -1228,11 +1264,654 @@ def _log_csv_response(rows: list[dict], start_d, end_d):
 
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# ACCOUNTABILITY LEDGER
+# ══════════════════════════════════════════════════════════════════════════════
+# The alerts that actually reached the Telegram channel, each with a tick-box,
+# an action and an optional note — the dashboard replacement for the team's
+# hand-kept spreadsheet.
+#
+# NOT the same thing as /api/alert-log above, and the difference is the entire
+# point. That endpoint serves DETECTIONS: every cycle in which a pair had an
+# issue, whether or not anyone was told. This one serves DELIVERIES: the subset
+# that survived tier, cooldown, episode cap, Tier-2 confirmation, per-issue ack
+# and per-pair suspension, and so landed in front of a human. A 30-day range is
+# ~10^6 rows there and a few hundred here, because they are answering different
+# questions — "what did the monitor see" versus "what was someone paged about".
+# Only the second is something a person can be accountable for.
+#
+# None of the numpy machinery in /api/alert-log is warranted at this scale; these
+# are plain dicts and a sort.
+
+
+# How far BEFORE the queried range to read, purely to find where an episode
+# actually began. A condition that has been firing for days is still firing
+# today, so it belongs in today's view — but its "Alert time" should be when it
+# started paging, not when the window happens to open. Seven days of day-files is
+# a few dozen KB. An episode older than this reports its first fire within the
+# lookback instead, which understates its age but never invents one.
+LEDGER_EPISODE_LOOKBACK_DAYS = 7
+
+
+def _ledger_day_range(start_d, end_d):
+    """
+    The day-files to read: a lookback before start_d, the range, and ONE trailing
+    day after end_d.
+
+    The trailing day is not slack. A resolution is appended to the day-file of the
+    FIRE it closes, so an alert that fires at 23:58 and clears at 00:04 has its
+    resolve written into the EARLIER file — but the reverse also happens, and
+    reading one day past end_d is what lets a range ending "today" pick up a
+    resolution the monitor has already appended. Rows outside the range are
+    dropped after the fold, never before, so a resolve can always find its fire
+    and an episode can always find its start.
+    """
+    days = []
+    d = start_d - timedelta(days=LEDGER_EPISODE_LOOKBACK_DAYS)
+    while d <= end_d + timedelta(days=1):
+        days.append(d.strftime("%Y-%m-%d"))
+        d += timedelta(days=1)
+    return days
+
+
+def load_ledger(start_d, end_d) -> dict:
+    """
+    Fold the monitor's fire/resolve events into {episode_id: row}.
+
+    ONE ROW PER EPISODE, NOT PER FIRE. An issue that stays wrong does not stay
+    quiet: its cooldown lapses every ALERT_COOLDOWN_MINUTES and it pages again,
+    so a single ongoing condition emits a fire line every 15 minutes for as long
+    as it lasts. Keyed per fire, one permanently-broken market would add ~96 rows
+    a day to an accountability log, each needing its own tick, and the real
+    alerts would drown in them.
+
+    An episode runs from the first fire until the monitor observes the issue
+    clear, and every fire in between belongs to it. Its id is the id of its FIRST
+    fire, which makes it stable, self-dating and already a valid fire id — so a
+    sign-off recorded against it needs no new key space, and it keeps covering
+    the episode as the episode grows. Once the issue resolves, the next fire is a
+    genuinely new incident and opens a new episode with a new id, which needs a
+    new sign-off. That is the whole point: ticking something off covers the
+    incident, not one page from it.
+
+    Torn lines are SKIPPED, not fatal. The writer appends without locking (see
+    debug.py's ledger_file_for), so a read landing mid-append can see a partial
+    final line. It reappears whole on the next poll; 500-ing the tab over a
+    half-written byte range would be a far worse trade.
+
+    A resolve for a fire we never saw is discarded — the benign half of the
+    monitor's crash window, where the open-fire index survived but the fire line
+    did not. When an episode already carries a resolved_at, the EARLIEST wins: a
+    re-closed fire (state lost, closed again next cycle) should read as having
+    resolved when it did, not when the engine noticed twice.
+
+    Events must be seen in order, and they are: day-files are read oldest-first
+    and each is appended in cycle order. A resolution written after midnight
+    lands in the previous day's file, i.e. after that day's fires and before the
+    next day's — which is exactly its true position in time.
+    """
+    episodes: dict = {}
+    open_ep: dict = {}      # (market, issue) -> episode_id, while unresolved
+    fire_ep: dict = {}      # fire_id -> episode_id, so a resolve finds its episode
+    pending: dict = {}      # resolves seen before their fire line
+
+    lo = start_d.strftime("%Y-%m-%d")
+    hi = end_d.strftime("%Y-%m-%d")
+
+    def _close(ep_id, when):
+        ep = episodes.get(ep_id)
+        if not ep:
+            return
+        prev = ep.get("resolved_at")
+        if not prev or (when and when < prev):
+            ep["resolved_at"] = when
+        open_ep.pop((ep["market"], ep["issue"]), None)
+
+    for day in _ledger_day_range(start_d, end_d):
+        path = ledger_file_for(day)
+        if not path.exists():
+            continue
+        try:
+            with path.open(encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        ev = json.loads(line)
+                    except Exception:
+                        continue            # torn or partial — see docstring
+                    if not isinstance(ev, dict):
+                        continue
+                    fid = ev.get("id")
+                    if not fid:
+                        continue
+
+                    if ev.get("ev") == "resolve":
+                        when = ev.get("resolved_at")
+                        ep_id = fire_ep.get(fid)
+                        if ep_id:
+                            _close(ep_id, when)
+                        else:
+                            pending[fid] = when
+                        continue
+
+                    key = (ev.get("market") or "", ev.get("issue") or "")
+                    ts  = ev.get("ts") or ""
+                    ep_id = open_ep.get(key)
+
+                    if ep_id is None:
+                        # A new incident. Its first fire names it.
+                        ep_id = fid
+                        open_ep[key] = ep_id
+                        episodes[ep_id] = {
+                            **ev,
+                            "id":          ep_id,
+                            "ts":          ts,
+                            "last_ts":     ts,
+                            "fired_count": 1,
+                            "resolved_at": None,
+                            "_in_range":   lo <= ts[:10] <= hi,
+                        }
+                    else:
+                        ep = episodes[ep_id]
+                        ep["fired_count"] += 1
+                        ep["last_ts"] = ts
+                        # Carry the most recent description, and the WORST
+                        # severity the episode ever reached — an incident that
+                        # escalated to CRITICAL was a CRITICAL incident, even if
+                        # its latest page has calmed down.
+                        ep["label"] = ev.get("label") or ep.get("label")
+                        if _sev_rank(ev.get("severity")) > _sev_rank(ep.get("severity")):
+                            ep["severity"] = ev.get("severity")
+                        if ev.get("tier") and (not ep.get("tier")
+                                               or ev["tier"] < ep["tier"]):
+                            ep["tier"] = ev["tier"]
+                        if lo <= ts[:10] <= hi:
+                            ep["_in_range"] = True
+
+                    fire_ep[fid] = ep_id
+                    if fid in pending:
+                        _close(ep_id, pending.pop(fid))
+        except Exception:
+            continue                        # unreadable day — skip, don't fail
+    return episodes
+
+
+def load_ledger_actions() -> dict:
+    """Read alert_ledger_actions.json -> {fire_id: {...}}. Missing/corrupt -> {}."""
+    if not LEDGER_ACTIONS_FILE.exists():
+        return {}
+    try:
+        with open(LEDGER_ACTIONS_FILE, encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def save_ledger_actions(data: dict):
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    with open(LEDGER_ACTIONS_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2)
+
+
+# NOTE: sign-offs are kept FOREVER, deliberately — there is no prune here.
+#
+# An earlier version dropped them by age. That was wrong, and wrong in a way that
+# quietly destroys the record: the fires they attach to are never deleted (nothing
+# in this codebase sweeps the ledger day-files or daily_log_*.csv), so an expired
+# sign-off does not make a row disappear — it makes the row come back looking like
+# nobody ever actioned it. An accountability log that forgets who handled something
+# while remembering that it happened is worse than no log.
+#
+# The cost of keeping them is nil. An entry is a fire id and three short strings;
+# a day of signing off everything is well under a kilobyte, so this file measures
+# in megabytes after years.
+
+
+def _fmt_ts(iso: Optional[str]) -> str:
+    """ISO -> 'YYYY-MM-DD HH:MM:SS' for display, matching _log_rows' shape."""
+    if not iso:
+        return ""
+    try:
+        return datetime.fromisoformat(iso).strftime("%Y-%m-%d %H:%M:%S")
+    except (ValueError, TypeError):
+        return str(iso)[:19].replace("T", " ")
+
+
+def _fmt_duration(seconds: Optional[float]) -> str:
+    """Seconds -> 'H:MM:SS', the shape the team's sheet already uses."""
+    if seconds is None:
+        return ""
+    total = int(round(seconds))
+    return f"{total // 3600}:{(total % 3600) // 60:02d}:{total % 60:02d}"
+
+
+def _resolve_seconds(ts: Optional[str], resolved_at: Optional[str]) -> Optional[float]:
+    """
+    Time to resolve, in seconds, or None while open.
+
+    Clamped at zero. A negative span can only come from a clock step or a
+    hand-edited state file, and "-0:04:12" in an accountability export is worse
+    than useless — it makes the whole column suspect.
+    """
+    if not ts or not resolved_at:
+        return None
+    try:
+        delta = (datetime.fromisoformat(resolved_at)
+                 - datetime.fromisoformat(ts)).total_seconds()
+    except (ValueError, TypeError):
+        return None
+    return max(0.0, delta)
+
+
+def _ledger_rows(start_d, end_d, market=None, issue=None, status=None) -> list:
+    """
+    Joined, filtered, newest-first ledger rows for a range.
+
+    The join is a dict lookup per row — at a few hundred rows a day there is
+    nothing here to vectorise.
+    """
+    fires   = load_ledger(start_d, end_d)
+    actions = load_ledger_actions()
+    lo = start_d.strftime("%Y-%m-%d")
+    hi = end_d.strftime("%Y-%m-%d")
+    now = ngt_now()
+
+    out = []
+    for fid, ev in fires.items():
+        ts = ev.get("ts") or ""
+        # Selected by whether the episode PAGED anyone in range, not by where its
+        # first fire falls. A condition that began on Monday and is still firing
+        # on Friday belongs in Friday's view — it is part of what the channel
+        # carried that day — and it reports Monday as its alert time, because
+        # that is when it started. Fires outside the range (the lookback and the
+        # trailing fold day) are read only to place the episode correctly.
+        if not ev.get("_in_range"):
+            continue
+        sign = actions.get(fid) or {}
+        # Two possible answers to "when did this stop", and they are not equal.
+        # The engine's is an OBSERVATION — it saw the issue absent on a cycle.
+        # The manual one is a JUDGEMENT, for conditions the engine will never
+        # observe clear because they never will be (a deliberately thin book, a
+        # delisted market). The observation always wins where one exists: if the
+        # condition really did clear at 14:00, that is the truth regardless of
+        # someone having called it closed at 11:49.
+        engine_resolved = ev.get("resolved_at")
+        manual_cleared  = sign.get("cleared_at")
+        resolved_at     = engine_resolved or manual_cleared
+        resolved_manual = bool(manual_cleared) and not engine_resolved
+        secs = _resolve_seconds(ts, resolved_at)
+        open_min = None
+        if not resolved_at:
+            try:
+                open_min = round(max(0.0,
+                    (now - datetime.fromisoformat(ts)).total_seconds()) / 60, 1)
+            except (ValueError, TypeError):
+                open_min = None
+        out.append({
+            "id":              fid,
+            "ts":              _fmt_ts(ts),
+            "ts_iso":          ts,
+            "market":          ev.get("market") or "",
+            "scope":           ev.get("scope") or "pair",
+            "issue":           ev.get("issue") or "",
+            # Name resolved HERE rather than trusting the stamped copy, so
+            # renaming a check in defaults.py updates history too. The stamped
+            # name is the fallback for a row whose id has since left the table.
+            "name":            issue_name(ev.get("issue") or "") or ev.get("name") or "",
+            "severity":        ev.get("severity") or "",
+            "tier":            ev.get("tier"),
+            "label":           ev.get("label") or "",
+            "msg_id":          ev.get("msg_id") or "",
+            # How many times this one incident paged the channel, and when it
+            # last did. A count above 1 means the cooldown lapsed and it fired
+            # again while still unresolved — the same incident, not a new one.
+            "fired_count":     int(ev.get("fired_count") or 1),
+            "last_ts":         _fmt_ts(ev.get("last_ts")),
+            "resolved_at":     _fmt_ts(resolved_at),
+            "resolved_at_iso": resolved_at,
+            # True when the timestamp above is someone's judgement rather than
+            # the engine's observation. Surfaced so the page and the export can
+            # both say so rather than passing it off as measured.
+            "resolved_manual": resolved_manual,
+            "cleared_at":      _fmt_ts(manual_cleared),
+            "resolve_seconds": secs,
+            "time_to_resolve": _fmt_duration(secs),
+            "open_for_min":    open_min,
+            "acknowledged_at": _fmt_ts(sign.get("acknowledged_at")),
+            "action":          sign.get("action") or "",
+            "note":            sign.get("note") or "",
+            "acknowledged":    bool(sign.get("acknowledged_at")),
+        })
+
+    if market:
+        # "_global" is a real, selectable value (E1/E2 are keyed to no market),
+        # not an empty cell to fall through — see the facet list below.
+        out = [r for r in out if r["market"] == market]
+    if issue:
+        out = [r for r in out if r["issue"] == issue]
+    if status == "pending":
+        out = [r for r in out if not r["acknowledged"]]
+    elif status == "acknowledged":
+        out = [r for r in out if r["acknowledged"]]
+    elif status == "open":
+        out = [r for r in out if not r["resolved_at_iso"]]
+
+    out.sort(key=lambda r: r["ts_iso"], reverse=True)
+    return out
+
+
+_LEDGER_STATUSES = ("all", "pending", "acknowledged", "open")
+
+
+def _parse_ledger_range(start: Optional[str], end: Optional[str]):
+    """
+    Resolve ?start=/?end= for the ledger. Same shape as _parse_analysis_range,
+    WITHOUT its 30-day wall — deliberately, and only here.
+
+    That wall exists because the analysis tabs read daily_log_*.csv, where a
+    30-day range is ~10^6 detections and a wider one is a way to hang the box.
+    This endpoint reads the ledger, which is a few hundred rows a month, so the
+    same limit protects nothing and only makes older sign-offs unreadable. Since
+    sign-offs are now kept permanently (see the note above load_ledger_actions),
+    the log has to be readable for as long as it is kept, or keeping it is
+    pointless.
+
+    The presets in the page still stop at 30 days; this is what lets a TYPED date
+    go further. An inverted range is still rejected, and the span is still bounded
+    — generously — so a mistyped year cannot ask for every day-file ever written.
+    """
+    today = ngt_now().date()
+
+    def _d(raw: str, field: str):
+        try:
+            return datetime.strptime(raw, "%Y-%m-%d").date()
+        except ValueError:
+            raise HTTPException(status_code=400,
+                                detail=f"{field} must be YYYY-MM-DD, got {raw!r}")
+
+    end_d   = _d(end, "end") if end else today
+    start_d = _d(start, "start") if start else end_d - timedelta(days=6)
+
+    if start_d > end_d:
+        raise HTTPException(status_code=400, detail="start must not be after end")
+    span = (end_d - start_d).days + 1
+    if span > MAX_LEDGER_SPAN_DAYS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"range spans {span} days; max is {MAX_LEDGER_SPAN_DAYS}")
+    return start_d, end_d
+
+
+@app.get("/api/alert-ledger")
+def get_alert_ledger(start: Optional[str] = None,
+                     end: Optional[str] = None,
+                     market: Optional[str] = None,
+                     issue: Optional[str] = None,
+                     status: Optional[str] = None,
+                     page: int = 0,
+                     page_size: int = 50,
+                     format: Optional[str] = None):
+    """
+    Alerts delivered to Telegram in a date range, with their sign-offs.
+
+    ?start=&end=   YYYY-MM-DD, NGT, inclusive. NOT subject to the 30-day wall the
+                   analysis tabs carry — see _parse_ledger_range for why.
+    ?market=       exact symbol, lowercased, or "_global" for E1/E2.
+    ?issue=        exact issue id (B1, A2, …).
+    ?status=       all | pending | acknowledged | open. Defaults to **all**; the
+                   dashboard lands on `pending`, which is the day's actual job,
+                   but the API default stays unfiltered so a bare call is honest.
+    ?format=csv    the whole filtered set as a spreadsheet, not one page.
+
+    Counts in `facets` are computed over the range with market/issue applied but
+    NOT status, so the status dropdown can show how many rows each choice holds
+    without a second request.
+    """
+    start_d, end_d = _parse_ledger_range(start, end)
+    market = (market or "").strip().lower() or None
+    issue  = (issue or "").strip().upper() or None
+    status = (status or "all").strip().lower()
+    if status not in _LEDGER_STATUSES:
+        raise HTTPException(status_code=400,
+                            detail=f"status must be one of {list(_LEDGER_STATUSES)}")
+    page_size = page_size if page_size in _LOG_PAGE_SIZES else 50
+    page      = max(0, int(page))
+
+    unfiltered = _ledger_rows(start_d, end_d, market=market, issue=issue)
+    rows = [r for r in unfiltered
+            if status == "all"
+            or (status == "pending"      and not r["acknowledged"])
+            or (status == "acknowledged" and r["acknowledged"])
+            or (status == "open"         and not r["resolved_at_iso"])]
+
+    if format == "csv":
+        return _ledger_csv_response(rows[:_LOG_CSV_MAX], start_d, end_d)
+
+    # Facets over the market/issue-filtered set, each excluding its own filter —
+    # same cascade reasoning as /api/alert-log, just small enough to do in sets.
+    by_mi = _ledger_rows(start_d, end_d)
+    facets = {
+        "markets": sorted({r["market"] for r in by_mi
+                           if not issue or r["issue"] == issue}),
+        "issues":  sorted({r["issue"] for r in by_mi
+                           if not market or r["market"] == market}),
+        "counts": {
+            "all":          len(unfiltered),
+            "pending":      sum(1 for r in unfiltered if not r["acknowledged"]),
+            "acknowledged": sum(1 for r in unfiltered if r["acknowledged"]),
+            "open":         sum(1 for r in unfiltered if not r["resolved_at_iso"]),
+        },
+        # Served rather than transcribed into the page, for the same reason
+        # /api/status serves ISSUE_TIERS: a second copy in JS drifts silently the
+        # moment a check is renamed or an action word is added.
+        "issue_tiers": ISSUE_TIERS,
+        "issue_names": ISSUE_NAMES,
+        "actions":     list(LEDGER_ACTIONS),
+        "note_max":    LEDGER_NOTE_MAX_CHARS,
+    }
+
+    total = len(rows)
+    pages = max(1, -(-total // page_size))
+    page  = min(page, pages - 1)
+
+    return JSONResponse(_sanitize({
+        "coverage": {
+            "start":         start_d.strftime("%Y-%m-%d"),
+            "end":           end_d.strftime("%Y-%m-%d"),
+            "days_in_range": (end_d - start_d).days + 1,
+        },
+        "filters": {"market": market, "issue": issue, "status": status},
+        "facets":  facets,
+        "total": total, "page": page, "page_size": page_size,
+        "pages": pages if total else 0,
+        "rows": rows[page * page_size:(page + 1) * page_size],
+    }))
+
+
+def _ledger_csv_response(rows: list, start_d, end_d):
+    """
+    The filtered ledger as a CSV laid out to match the team's sheet column for
+    column, so a day's rows paste straight in.
+
+    Uses csv.writer rather than the hand-rolled quoting in _log_csv_response
+    above: two of these columns are free text an operator typed, and the
+    double-the-quote trick there only escapes one field and nothing else. A note
+    containing a comma would silently shift every column after it.
+    """
+    buf = io.StringIO()
+    w = csv.writer(buf, lineterminator="\n")
+    w.writerow(["Alert time", "Pair", "Alert type", "Source", "Acknowledged at",
+                "Action taken", "Note", "Resolved at", "Time to resolve"])
+    for r in rows:
+        w.writerow([
+            r["ts"],
+            "GLOBAL" if r["scope"] == "global" else str(r["market"]).upper(),
+            f'{r["issue"]} {r["name"]}'.strip(),
+            # Constant by design: every row in this file got here by being
+            # delivered to the channel. The column earns its place now that a
+            # dashboard-only log exists alongside — it says which one this is.
+            "Telegram",
+            r["acknowledged_at"],
+            r["action"],
+            r["note"],
+            # A clean timestamp, never annotated. This column is parsed as a
+            # date downstream, so a suffix would turn those cells into text and
+            # break the sheet's formulas on exactly the rows that needed a hand.
+            # The observed/manual distinction is kept on the page instead, where
+            # it can be shown without changing the value.
+            r["resolved_at"],
+            r["time_to_resolve"],
+        ])
+    name = f"alert_accountability_{start_d:%Y-%m-%d}_to_{end_d:%Y-%m-%d}.csv"
+    return Response(content=buf.getvalue(), media_type="text/csv",
+                    headers={"Content-Disposition": f'attachment; filename="{name}"'})
+
+
+@app.post("/api/alert-ledger/action")
+async def post_alert_ledger_action(request: Request):
+    """
+    Acknowledge (or un-acknowledge) one or many delivered alerts.
+
+    Body:
+        {"fire_ids": ["...", "..."], "acknowledged": true,
+         "action": "self-resolved", "note": "optional", "cleared": true}
+
+    `cleared` is the manual counterpart to the engine's resolved_at, for
+    conditions the monitor will never observe clear because they never will be.
+    It is deliberately INDEPENDENT of `acknowledged`: signing off says a human
+    dealt with the alert, calling it cleared says the condition is over, and on a
+    permanently-broken market those are different claims made at different times.
+    Sending `cleared` alone therefore does not sign the row off.
+
+    It does NOT close the episode. Episode grouping is driven purely by the
+    engine's resolve events, so a manual clear cannot cause the next page to open
+    a new row — which is exactly the duplication this log exists to avoid.
+
+    THIS DOES NOT MUTE ANYTHING. It is an audit record only — the monitor never
+    reads this file. The muting checkbox is /api/alert-acks, which is a different
+    endpoint writing a different file for a different purpose.
+
+    Always takes a LIST, because acknowledging is done in batches: one Telegram
+    carries ten alerts and one person deals with all of them at once. Every id in
+    a batch gets ONE shared `acknowledged_at`, which is the honest record of what
+    happened — and is exactly the pattern visible in the sheet this replaces,
+    where ten rows share a single timestamp. A single tick sends a one-element
+    list.
+
+    Ids are NOT checked against the ledger. A stale id is inert — it joins to no
+    row and is pruned by age — and verifying one would mean reading a month of
+    day-files on every checkbox click.
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON body")
+
+    fire_ids = body.get("fire_ids")
+    if not isinstance(fire_ids, list) or not fire_ids:
+        raise HTTPException(status_code=400, detail="fire_ids must be a non-empty list")
+    if len(fire_ids) > 500:
+        raise HTTPException(status_code=400, detail="at most 500 fire_ids per request")
+    clean_ids = []
+    for fid in fire_ids:
+        if not isinstance(fid, str) or fid.count("|") != 2:
+            raise HTTPException(status_code=400,
+                                detail=f"malformed fire_id: {fid!r}")
+        clean_ids.append(fid)
+
+    acknowledged = body.get("acknowledged", None)
+    if acknowledged is not None and not isinstance(acknowledged, bool):
+        raise HTTPException(status_code=400, detail="acknowledged must be a boolean")
+
+    cleared = body.get("cleared", None)
+    if cleared is not None and not isinstance(cleared, bool):
+        raise HTTPException(status_code=400, detail="cleared must be a boolean")
+
+    action = body.get("action")
+    if action is not None:
+        if not isinstance(action, str) or action not in LEDGER_ACTIONS:
+            raise HTTPException(status_code=400,
+                                detail=f"action must be one of {list(LEDGER_ACTIONS)}")
+
+    note = body.get("note")
+    if note is not None:
+        if not isinstance(note, str):
+            raise HTTPException(status_code=400, detail="note must be a string")
+        note = note.strip()[:LEDGER_NOTE_MAX_CHARS]
+
+    # Re-read inside the request rather than caching in a module global: two
+    # browser tabs ticking at once are last-writer-wins on this file, and a
+    # cached copy would widen that window from milliseconds to minutes.
+    data = load_ledger_actions()
+
+    stamp = ngt_now().isoformat()
+    touched = {}
+
+    if acknowledged is False:
+        # Un-ticking drops the sign-off but KEEPS a manual clear, which is a
+        # separate claim about the condition rather than about who handled it.
+        # Only an entry with nothing left in it is removed.
+        for fid in clean_ids:
+            entry = dict(data.get(fid) or {})
+            for k in ("acknowledged_at", "action", "note"):
+                entry.pop(k, None)
+            if entry:
+                data[fid] = entry
+            else:
+                data.pop(fid, None)
+            touched[fid] = entry or None
+        save_ledger_actions(data)
+        return JSONResponse({"status": "cleared", "acknowledged_at": None,
+                             "entries": touched})
+
+    for fid in clean_ids:
+        entry = dict(data.get(fid) or {})
+
+        # Sign off when asked to, or when the caller said nothing either way and
+        # is plainly not here only to set `cleared`.
+        if acknowledged is True or (acknowledged is None and cleared is None):
+            # Keep the ORIGINAL acknowledgement time when only the action or note
+            # is being edited. Re-stamping would rewrite when the team says they
+            # saw it every time someone fixes a typo in a note.
+            entry.setdefault("acknowledged_at", stamp)
+            if action is not None:
+                entry["action"] = action
+            elif not entry.get("action"):
+                # Ticking without choosing: the overwhelming majority of these
+                # self-resolve, and the sheet says so. Defaulting keeps the common
+                # case one click instead of two; the dropdown still overrides it.
+                entry["action"] = LEDGER_ACTIONS[0]
+        elif action is not None:
+            entry["action"] = action
+
+        if note is not None:
+            entry["note"] = note
+
+        if cleared is True:
+            entry["cleared_at"] = stamp
+        elif cleared is False:
+            entry.pop("cleared_at", None)
+
+        if entry:
+            data[fid] = entry
+        else:
+            data.pop(fid, None)
+        touched[fid] = entry or None
+
+    save_ledger_actions(data)
+    return JSONResponse({"status": "acknowledged", "acknowledged_at": stamp,
+                         "entries": touched})
+
+
 @app.get("/api/state")
 def get_state():
     """
     Raw health_state.json. Per pair: an "_alert" sub-key (Tier-2 consecutive
-    counters + per-issue cooldown expiries) and the last observed mid price with
+    counters, per-issue cooldown expiries, and open_fire_ids — the accountability
+    ledger rows delivered but not yet observed clear) and the last observed mid price with
     its timestamp (last_mid / last_mid_ts, NGT ISO — a stale timestamp means the
     pair's mid hasn't been observable since then). Plus the engine's rolling
     reference-feed history (_ref_hist), volume baselines (_vol_hist), layer-churn
@@ -1277,7 +1956,12 @@ def get_diagnostics():
         file_info(DEPTH_WALK_RAW_FILE, "Depth-walk raw bucket", "monitor (5s task)"),
         file_info(DEPTH_WALK_CONDENSED_FILE, "Depth-walk hourly", "monitor (5s task)"),
         file_info(DATA_DIR / f"daily_log_{now:%Y-%m-%d}.csv", "Today's daily log", "monitor"),
+        # Absent until the first alert of the day is DELIVERED, so "missing" here
+        # is the normal state on a quiet day and is not by itself a fault — unlike
+        # the rows above, which every cycle rewrites.
+        file_info(ledger_file_for(f"{now:%Y-%m-%d}"), "Today's alert ledger", "monitor"),
         file_info(CONFIG_FILE,         "Monitor config",        "api"),
+        file_info(LEDGER_ACTIONS_FILE, "Alert sign-offs",       "api"),
     ]
 
     # Content ages: what the newest RECORD inside says, not when the file was touched.

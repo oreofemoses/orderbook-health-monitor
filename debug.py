@@ -224,7 +224,8 @@ from defaults import (merge_config, default_config, UPTIME_FIXED_STEP_NGN,
                       SPREAD_GAP_FIXED_NGN, VOLUME_ARCHIVE_RETENTION_DAYS,
                       PAIR_VOLUME_RETENTION_DAYS,
                       ACKABLE_ISSUE_IDS, TIER1_IDS, TIER2_IDS, TIER3_IDS,
-                      classify_tier)  # single source of truth for config
+                      classify_tier, issue_name,
+                      LEDGER_RETENTION_DAYS)  # single source of truth for config
 # Pure candle-parsing/aggregation helpers, shared with api.py so the OCHLV field
 # convention and NGT hour bucketing can't drift between the two processes. Only
 # the pure functions are used here — the module's urllib fetch is for api.py's
@@ -304,6 +305,52 @@ SUSPENSIONS_FILE = os.path.join(DATA_DIR, "suspensions.json")
 # same comparison when reporting ack state to the dashboard, and prunes dead rows
 # on its own writes. Neither process ever needs to write the other's file.
 ALERT_ACKS_FILE = os.path.join(DATA_DIR, "alert_acks.json")
+
+# ── Accountability ledger — one row per alert DELIVERED to Telegram ───────────
+# NOT to be confused with ALERT_ACKS_FILE above, which it sits next to and shares
+# vocabulary with. An "ack" there MUTES an issue at the fire gate. A ledger
+# acknowledgement mutes nothing whatsoever: it is an audit tick recording that a
+# human saw the alert and says what they did about it, and the engine never reads
+# it. Keep the two apart in code as carefully as in your head — the failure mode
+# of confusing them is a dashboard tick that silently stops paging the team.
+#
+# WHY THIS FILE HAS TO EXIST AT ALL: nothing else in the system records what was
+# sent. daily_log_*.csv is DETECTIONS — every cycle a pair had an issue, whether
+# it reached Telegram or was swallowed by tier, cooldown, ack, suspension or an
+# episode cap. update_daily_log drops telegram_fired/telegram_detail entirely, so
+# the delivered subset cannot be recovered from it after the fact. This process is
+# the only one that ever knows a send succeeded, so this is the only place the
+# record can be made.
+#
+# One file per NGT day, mirroring daily_log_*.csv, and written ONLY here — api.py
+# reads it and keeps its own separate file for the ticks, so neither process ever
+# writes the other's. Same one-way discipline as every other file in this dir.
+#
+# APPEND-ONLY NDJSON (one JSON object per line), not a JSON array. The file is
+# never rewritten, only appended to — same discipline as update_daily_log's
+# mode="a" — and that choice is doing real work:
+#
+#   * resolved_at arrives LATER, and often on a later calendar day: an alert that
+#     fires at 23:58 and clears at 00:04 has to close a row in YESTERDAY's file.
+#     With a rewritten array that means read-modify-write of an old file; with an
+#     append it is just another line, and appending to an old file costs exactly
+#     what appending to today's costs. So a fire is one line and its resolution is
+#     a second line, and the reader folds the two by id.
+#   * A crash can only ever tear the final line, and the reader skips lines it
+#     cannot parse. There is no window in which the file is missing or truncated.
+#   * os.replace — the usual atomic-rewrite trick — is NOT atomic on Windows when
+#     another process holds the file open for reading, which is precisely what
+#     api.py does. Appending has no such failure mode on either OS.
+#
+# At ~20-100 rows/day this is a few KB per file.
+LEDGER_EVENT_FIRE    = "fire"
+LEDGER_EVENT_RESOLVE = "resolve"
+
+
+def ledger_file_for(day: str) -> str:
+    """Path to the ledger day-file for an NGT date string (YYYY-MM-DD)."""
+    return os.path.join(DATA_DIR, f"alert_ledger_{day}.jsonl")
+
 
 # Manual cycle request — {"requested_at": ISO (NGT)}. Written by api.py when an
 # operator hits Refresh on the dashboard; read here to cut the inter-cycle sleep
@@ -3371,6 +3418,167 @@ def update_daily_log(all_results: list):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# ACCOUNTABILITY LEDGER
+# ══════════════════════════════════════════════════════════════════════════════
+# One record per alert actually DELIVERED to Telegram, so the team can tick each
+# one off and export the result. See ledger_file_for above for the file format
+# and why it is append-only.
+#
+# The distinction this file exists to preserve: daily_log_*.csv answers "what did
+# the monitor SEE", and this answers "what did a human GET PAGED about". Those
+# differ by every suppression rule in the system — tier, cooldown, episode cap,
+# Tier-2 confirmation, per-issue ack and per-pair suspension — and only the second
+# question can be audited, because only it corresponds to something a person was
+# ever in a position to act on.
+
+
+def fire_id(stamp: str, symbol: str, issue_id: str) -> str:
+    """
+    Stable id for one delivered alert: "{ISO stamp}|{symbol}|{issue}".
+
+    Unique without a counter or a uuid. dedupe_actionable folds duplicate ids
+    before the fire gate, and should_fire_telegram is called exactly once per
+    (symbol, issue_id) per cycle, so a pair+issue can fire at most once per
+    stamp — and two cycles cannot share a microsecond.
+
+    Deliberately readable and self-dating: the date prefix is what lets a
+    resolution find the day-file its fire was written to, without an index.
+    """
+    return f"{stamp}|{symbol}|{issue_id}"
+
+
+def _fire_event(stamp: str, symbol: str, issue_id: str, severity: str,
+                label: str, msg_id: str, scope: str = "pair") -> dict:
+    """One delivered-alert record, ready to append."""
+    return {
+        "ev":       LEDGER_EVENT_FIRE,
+        "id":       fire_id(stamp, symbol, issue_id),
+        "ts":       stamp,
+        "market":   symbol,
+        "issue":    issue_id,
+        "name":     issue_name(issue_id),
+        "severity": severity,
+        # Tier is SNAPSHOTTED here, not recomputed at read time the way
+        # /api/alert-log derives it. A ledger row records a delivery decision
+        # that was made under the tiers in force at that moment; retiering a
+        # check later must not rewrite what the team was paged about last month.
+        #
+        # E1/E2 are keyed "_global" and never reach classify_tier, which is
+        # per-pair — so it would answer 2 for them (its unknown-id default) when
+        # both are Tier 1 by definition. api.py's ISSUE_TIERS carries the same
+        # override for the same reason.
+        "tier":     1 if scope == "global" else classify_tier(issue_id, severity),
+        "label":    label,
+        # Every row that rode the same Telegram message shares this. One message
+        # is the real unit of work — a person reads it once and handles it once —
+        # so the dashboard groups by it and offers to tick the whole group.
+        "msg_id":   msg_id,
+        "scope":    scope,
+    }
+
+
+def append_ledger(events: list) -> None:
+    """
+    Append events to their day-files, grouped so each file is opened once.
+
+    Routing: a fire goes to the day it fired; a resolve goes to the day its FIRE
+    was written, read straight off the id's date prefix. That is the whole
+    cross-midnight story — no index, no rewrite.
+
+    NEVER RAISES. run_cycle's top-level handler catches everything, so an
+    exception escaping here would abort the rest of the Persist block — including
+    save_state — and lose the cooldowns that were just committed on a confirmed
+    send. A missing ledger line is a gap in an audit log; a lost save_state
+    re-blasts the channel. The ledger is never worth the second failure.
+    """
+    if not events:
+        return
+    by_day: dict = {}
+    for ev in events:
+        try:
+            if ev.get("ev") == LEDGER_EVENT_RESOLVE:
+                day = str(ev["id"])[:10]      # the fire's date, not today's
+            else:
+                day = str(ev["ts"])[:10]
+            by_day.setdefault(day, []).append(ev)
+        except Exception as e:
+            print(f"WARN  Ledger: skipping malformed event ({e})")
+    for day, rows in by_day.items():
+        try:
+            os.makedirs(DATA_DIR, exist_ok=True)
+            with open(ledger_file_for(day), "a", encoding="utf-8") as f:
+                for ev in rows:
+                    f.write(json.dumps(ev, separators=(",", ":")) + "\n")
+        except Exception as e:
+            print(f"WARN  Ledger: could not append {len(rows)} event(s) to {day}: {e}")
+
+
+# ── Open-fire index ───────────────────────────────────────────────────────────
+# Which delivered alerts have not been observed clear yet, per (pair, issue),
+# kept inside health_state.json's existing _alert sub-dict so it is persisted by
+# save_state and survives a restart with no new file.
+#
+# A LIST, not a single slot, and that is load-bearing. An issue that stays present
+# continuously is never swept as resolved, but its cooldown expires every
+# ALERT_COOLDOWN_MINUTES and it fires AGAIN — so a long incident accumulates
+# several delivered alerts with no clear in between. A single slot would be
+# overwritten each time and every earlier row would stay open forever. With a
+# list they all close together on the cycle the issue finally clears, which is
+# both true and what the log should say: one incident, several pages, one
+# resolution.
+#
+# The key is open_fire_ids rather than anything starting fires_, which is already
+# taken by the per-episode delivery counter (increment_episode_fires).
+LEDGER_MAX_OPEN_PER_ISSUE = 64
+
+
+def open_fire(shared_state: dict, symbol: str, issue_id: str, fid: str):
+    """Record that `fid` is delivered and not yet observed clear."""
+    ids = (_alert_state(shared_state, symbol)
+           .setdefault("open_fire_ids", {}).setdefault(issue_id, []))
+    ids.append(fid)
+    # Bound it. A pair that is delisted or permanently broken while open would
+    # otherwise grow health_state.json a line at a time, forever. Dropped ids just
+    # stay open in the ledger, which is the honest reading anyway.
+    if len(ids) > LEDGER_MAX_OPEN_PER_ISSUE:
+        del ids[:-LEDGER_MAX_OPEN_PER_ISSUE]
+
+
+def close_fires(shared_state: dict, symbol: str, issue_id: str, when: str) -> list:
+    """
+    Resolve every open fire for (symbol, issue_id) as of `when`, and forget them.
+
+    Returns the resolve events to append; empty when nothing is open, so callers
+    can invoke it unconditionally inside a sweep.
+    """
+    ids = (_alert_state(shared_state, symbol)
+           .get("open_fire_ids", {}).pop(issue_id, []))
+    return [{"ev": LEDGER_EVENT_RESOLVE, "id": i, "resolved_at": when}
+            for i in ids]
+
+
+def prune_open_fires(shared_state: dict, symbol: str, before_day: str):
+    """
+    Drop open-fire ids older than `before_day` (YYYY-MM-DD).
+
+    These are fires whose issue was never observed clear — a delisted pair, a
+    retired check, a pair that has failed to fetch ever since. Past the retention
+    window their rows can no longer be queried, so holding their ids only grows
+    health_state.json. They stay open in the ledger, which is correct: nothing
+    ever proved they resolved.
+    """
+    idx = _alert_state(shared_state, symbol).get("open_fire_ids")
+    if not idx:
+        return
+    for issue_id in list(idx):
+        kept = [i for i in idx[issue_id] if str(i)[:10] >= before_day]
+        if kept:
+            idx[issue_id] = kept
+        else:
+            del idx[issue_id]
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # TELEGRAM
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -4285,11 +4493,25 @@ async def run_cycle(shared_state: dict, session: aiohttp.ClientSession, cycle_nu
     #
     # Runs after the F1 block above so F1 is already in `_actionable` — sweeping
     # earlier would stamp F1 resolved on the very cycle it fired.
+    #
+    # The accountability ledger closes here too, on exactly the same evidence.
+    # mark_resolved answers "may this ack retire?"; close_fires answers "when did
+    # the alert the team was paged about stop being true?" — the same observation,
+    # so they must be made in the same place or the two will disagree. Events are
+    # accumulated and appended once in the Persist block below rather than written
+    # per pair, so one cycle is one append per day-file rather than 45.
     resolved_stamp = ngt_now().isoformat()
+    ledger_closes  = []
+    retain_before  = (ngt_now() - timedelta(days=LEDGER_RETENTION_DAYS)).strftime("%Y-%m-%d")
     for r in results:
         present = {iid for iid, _, _ in r.get("_actionable", [])}
         for issue_id in _ACKABLE_IDS - present:
             mark_resolved(shared_state, r["symbol"], issue_id, resolved_stamp)
+            ledger_closes += close_fires(shared_state, r["symbol"], issue_id,
+                                         resolved_stamp)
+        # Forget ids too old to be queried. Their rows stay open in the ledger,
+        # which is the truthful reading — nothing ever observed them clear.
+        prune_open_fires(shared_state, r["symbol"], retain_before)
 
     warnings    = [r for r in results if r["status"] == "Warning"]
     alert_pairs = [r for r in warnings if r["should_alert"]]
@@ -4337,12 +4559,23 @@ async def run_cycle(shared_state: dict, session: aiohttp.ClientSession, cycle_nu
             )
             if sent:
                 start_cooldown(shared_state, "_global", "E1")
+                e1_stamp = ngt_now().isoformat()
+                e1_fire  = _fire_event(
+                    e1_stamp, "_global", "E1", "CRITICAL",
+                    f"{failed_count}/{len(PAIRS)} pairs failed to fetch this cycle",
+                    msg_id=e1_stamp, scope="global")
+                append_ledger([e1_fire])
+                open_fire(shared_state, "_global", "E1", e1_fire["id"])
             else:
                 print("[E1] Telegram send failed — cooldown not set, will retry next cycle")
         else:
             print(f"[E1] outage ratio {failure_ratio:.0%} — cooldown active, skipping Telegram")
     else:
         reset_consecutive(shared_state, "_global", "E1")
+        # The outage is over. This branch is the ONLY place the engine positively
+        # observes Quidax recovering — the per-pair sweep above never runs for
+        # "_global" — so it is where an open E1 row is closed.
+        ledger_closes += close_fires(shared_state, "_global", "E1", resolved_stamp)
 
     # ── E2: reference feed disconnect — Tier 1, per feed source ────────────────
     if e2_issues:
@@ -4353,12 +4586,29 @@ async def run_cycle(shared_state: dict, session: aiohttp.ClientSession, cycle_nu
             msg += "\nAll B1/B2/B3 checks for affected source(s) are suspended until the feed recovers."
             if await send_telegram(msg, session):
                 start_cooldown(shared_state, "_global", "E2")
+                e2_stamp = ngt_now().isoformat()
+                e2_fires = [
+                    _fire_event(e2_stamp, "_global", "E2", sev, label,
+                                msg_id=e2_stamp, scope="global")
+                    for _, sev, label in e2_issues
+                ]
+                # E2 emits one tuple per dead source, all in one message. They
+                # share an id only if they share a severity, which they can — so
+                # fold by id to keep the ledger one row per delivered alert.
+                seen = {}
+                for ev in e2_fires:
+                    seen[ev["id"]] = ev
+                append_ledger(list(seen.values()))
+                for ev in seen.values():
+                    open_fire(shared_state, "_global", "E2", ev["id"])
             else:
                 print("[E2] Telegram send failed — cooldown not set, will retry next cycle")
         else:
             print(f"[E2] reference feed down — cooldown active, skipping Telegram")
     else:
         reset_consecutive(shared_state, "_global", "E2")
+        # Reference feed is back — the global counterpart of the per-pair sweep.
+        ledger_closes += close_fires(shared_state, "_global", "E2", resolved_stamp)
 
     # ── Telegram: per-pair alerts with tier filtering ────────────────────────────
     # Build two buckets per pair:
@@ -4474,14 +4724,32 @@ async def run_cycle(shared_state: dict, session: aiohttp.ClientSession, cycle_nu
             msg += f"  Layers — Ask: {r['ask_layers']} | Bid: {r['bid_layers']}\n"
         # Commit cooldown + counter reset ONLY on a confirmed delivery.
         if await send_telegram(msg, session):
+            # One stamp for the whole message, not one per row. Every alert in
+            # this Telegram arrived at the same instant and is handled as one
+            # unit of work, so they share both their timestamp and their msg_id —
+            # which is what lets the dashboard offer "tick this whole alert".
+            fire_stamp = ngt_now().isoformat()
+            fires = []
             for r, issues in tg_pairs:
-                for issue_id, _, _ in issues:
+                for issue_id, severity, label in issues:
                     start_cooldown(shared_state, r["symbol"], issue_id)
                     reset_consecutive(shared_state, r["symbol"], issue_id)
                     # Count this confirmed delivery toward the per-episode cap
                     # (G2, D1 — no-op for uncapped issues).
                     if issue_id in _EPISODE_CAPPED_IDS:
                         increment_episode_fires(shared_state, r["symbol"], issue_id)
+                    fires.append(_fire_event(fire_stamp, r["symbol"], issue_id,
+                                             severity, label, msg_id=fire_stamp))
+            # Ledger BEFORE the open-fire index, and both before save_state at the
+            # end of the cycle. The two crash windows are not symmetric: losing
+            # save_state after a ledger append costs a cooldown (the alert re-fires
+            # and writes a second, honest row), while losing the append after a
+            # saved state would mean a Telegram went out with no accountability
+            # row and an index pointing at an id that does not exist. Only the
+            # first is recoverable, so the ledger goes first.
+            append_ledger(fires)
+            for ev in fires:
+                open_fire(shared_state, ev["market"], ev["issue"], ev["id"])
         else:
             print("⚠️  Anomaly Telegram send failed — cooldowns NOT committed, will retry next cycle")
 
@@ -4489,6 +4757,11 @@ async def run_cycle(shared_state: dict, session: aiohttp.ClientSession, cycle_nu
     # State is saved AFTER all Telegram sends so that cooldown timestamps written
     # on confirmed delivery are captured. Saving before the sends (Bug G) meant a
     # crash mid-send would lose the cooldowns and re-fire on the next restart.
+    # Resolutions, appended once for the whole cycle. Same ordering argument as
+    # the fire path above: written before save_state, so a crash in between
+    # re-closes next cycle (a resolve event is idempotent — the reader keeps the
+    # earliest per id) rather than orphaning a row open forever.
+    append_ledger(ledger_closes)
     clean_results = [{k: v for k, v in r.items() if not k.startswith("_")} for r in results]
     update_daily_log(clean_results)
     if clean_results:

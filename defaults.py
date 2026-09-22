@@ -249,6 +249,102 @@ def classify_tier(issue_id: str, severity: str) -> int:
     return 2
 
 
+# ── Human names for the alert ids ─────────────────────────────────────────────
+# The taxonomy docstring at the top of debug.py has carried these names since v1
+# but only as prose, so nothing could render them. The accountability ledger
+# needs them: its export is pasted into a sheet whose "Alert type" column reads
+# "Price Discrepancy", not "B1", and an id alone is unreadable to anyone who
+# hasn't memorised the taxonomy.
+#
+# Here rather than in either process for the same reason as ACKABLE_ISSUE_IDS
+# below it: api.py serves them to the dashboard and debug.py stamps them into
+# each ledger row at write time, so a second copy would drift.
+#
+# The RETIRED ids (A3, B3) are named too. They no longer fire, but ledger rows
+# and alert_acks entries written before the 2026-08 merges still carry them, and
+# a historical row must not render as a bare id just because the check is gone.
+ISSUE_NAMES: dict[str, str] = {
+    "A1": "Crossed Orderbook",
+    "A2": "Bid-Ask Spread Widening",
+    "A3": "One-Sided Market",            # retired -> A2:CRITICAL
+    "A4": "Book Depth Deviation",
+    "A5": "Depth Imbalance",
+    "A6": "Layer Churn Stall",
+    "B1": "Price Discrepancy",
+    "B2": "Source Exchange Divergence",
+    "B3": "Stale Reference Feed",        # retired -> B1
+    "B4": "Circuit Breaker Proximity",
+    "D1": "Volume Spike",
+    "D2": "Fill Rate Deviation",
+    "E1": "Quidax API Failure",
+    "E2": "Reference Feed Disconnect",
+    "F1": "Cross-Pair Arbitrage Gap",
+    "G1": "Depth-Walk Partial Fill",
+    "G2": "Candle Wick Anomaly",
+}
+
+
+def issue_name(issue_id: str) -> str:
+    """
+    Human name for an id, falling back to the id itself.
+
+    Never raises. An id that reaches a ledger row but not this table is a bug the
+    assert below catches at import — but a rendering path is the wrong place to
+    discover it, so this degrades to the id rather than 500-ing a tab.
+    """
+    return ISSUE_NAMES.get(str(issue_id).upper(), str(issue_id).upper())
+
+
+# Every id that can reach a dashboard row or a ledger row must have a name. E1/E2
+# are global (keyed "_global", never per-market) so they are absent from
+# ACKABLE_ISSUE_IDS and have to be named explicitly here. Mirrors debug.py's own
+# import-time assert over ACKABLE_ISSUE_IDS: adding a check without naming it
+# should fail loudly at startup, not render a bare id in an exported sheet weeks
+# later.
+_unnamed = (ACKABLE_ISSUE_IDS | {"E1", "E2", "G1"}) - set(ISSUE_NAMES)
+assert not _unnamed, f"ISSUE_NAMES is missing {sorted(_unnamed)}"
+del _unnamed
+
+
+# ── Accountability ledger: the "Action taken" vocabulary ──────────────────────
+# What an operator can record against an alert that was delivered to Telegram.
+# Fixed rather than free text because the whole point of the ledger is an export
+# that stays countable across months; a free-text column degrades into fifty
+# spellings of "self resolved" and can never be summed.
+#
+# Transcribed from the values already in use in the team's manual sheet, plus the
+# two it lacked. api.py validates every POST against this tuple and serves it to
+# the dashboard, which renders the <option> list from the served copy — so the
+# vocabulary exists exactly once, here.
+#
+# ORDER IS THE UI ORDER. "self-resolved" leads because it is the overwhelming
+# majority of rows.
+LEDGER_ACTIONS: tuple[str, ...] = (
+    "self-resolved",
+    "false positive",
+    "escalated",
+    "fixed manually",
+    "no action needed",
+)
+
+# How long the monitor keeps an UNRESOLVED fire in its open-fire index, in days.
+#
+# This bounds health_state.json, nothing else. A fire whose issue is never observed
+# clear — a delisted market, a retired check, a pair that has failed to fetch ever
+# since — would otherwise hold its id in that index forever. Past this window it is
+# dropped; the ledger row stays open, which is the truthful reading, since nothing
+# ever proved it resolved.
+#
+# It does NOT expire sign-offs. Those are kept permanently (see api.py): the fires
+# they attach to are never deleted either, and a sign-off that expired out from
+# under a surviving row would make it read as though nobody had ever actioned it.
+LEDGER_RETENTION_DAYS = 90
+
+# Longest note accepted on a ledger row. A note is a margin annotation, not an
+# incident report, and this file is read whole on every dashboard poll.
+LEDGER_NOTE_MAX_CHARS = 500
+
+
 # Canonical defaults. Every tunable the dashboard can edit has an entry here;
 # a stored monitor_config.json overrides these per-key via merge_config().
 DEFAULT_CONFIG: dict = {

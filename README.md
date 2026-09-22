@@ -13,6 +13,8 @@ data/
   cycle_request.json ← api writes / monitor reads: dashboard "run a cycle now"
   fill_rate_hourly.json ← monitor writes: D2 hourly fill events per market
   pair_volume_hourly.json ← monitor writes: D1 hourly volume per pair (base, close, quote)
+  alert_ledger_YYYY-MM-DD.jsonl ← monitor writes: one line per alert DELIVERED to Telegram
+  alert_ledger_actions.json     ← api writes, monitor never reads: the team's sign-offs
 ```
 
 ## Setup
@@ -48,6 +50,8 @@ To watch it live, just keep your monitor running alongside uvicorn.
 | `GET /api/pairs` | list of known pair symbols |
 | `GET /api/alert-acks` | live per-(pair, issue) acknowledgements + the ackable id list |
 | `POST /api/alert-acks` | set/clear one ack: `{symbol, issue_id, ack}` |
+| `GET /api/alert-ledger` | alerts DELIVERED to Telegram + their sign-offs; `?start=&end=&market=&issue=&status=&page=&page_size=&format=csv` |
+| `POST /api/alert-ledger/action` | sign off one or many: `{fire_ids, acknowledged, action, note}` |
 | `GET /api/usdtngn-volume` | USDTNGN hourly base volume (USDT); `?start=&end=` (ISO date or datetime, NGT) |
 | `GET /api/usdtngn-volume/rolling` | USDTNGN trailing-window volume, `?minutes=` (default 60) |
 | `GET /api/fill-rate` | D2 hourly fill-event series + per-market baseline, the rung that produced it and its MAD; `?market=&hours=` |
@@ -1097,6 +1101,93 @@ drift silently — the dashboard would just quietly mislabel rows.
 Filtering and paging are server-side; a 30-day range is ~10^6 detections and the
 browser only ever holds one page. **Export CSV** downloads the whole filtered
 set (capped at 250,000 rows), not just the page on screen.
+
+### Alert sign-off (the accountability ledger)
+
+Its own tab. Answers a different question from every other view in the
+dashboard: **what was a human actually paged about, and what did they do about
+it.**
+
+This replaces a spreadsheet the team kept by hand — one row per alert that
+arrived in the Telegram channel, ticked off to record that it was actioned, even
+when the action was none, because most self-resolve. The tick is the point: it
+is evidence the alert was seen.
+
+**Why it could not be built on the daily log.** The daily log records
+*detections* — every cycle in which a pair had an issue, whether or not anyone
+was told. The ledger records *deliveries* — the subset that survived tier,
+cooldown, episode cap, Tier-2 confirmation, per-issue ack and per-pair
+suspension. Those differ by every suppression rule in the system: a 30-day range
+is ~10^6 detections and a few hundred deliveries. And the daily log cannot even
+be filtered down to the delivered subset after the fact, because
+`update_daily_log` never persisted `telegram_fired`. Nothing recorded what was
+sent, so the record had to be created.
+
+**How it is written.** The monitor appends a line at each of the three points
+where `send_telegram` confirms delivery — the consolidated anomaly message, E1
+and E2 — inside the same block that commits the cooldown. That block is already
+the system's definition of "this reached the channel". A row is identified by
+`{ISO timestamp}|{symbol}|{issue}`, which is unique because each (pair, issue)
+fires at most once per cycle.
+
+**One row per incident, not per delivery.** An issue that stays wrong does not
+stay quiet — its cooldown lapses every `ALERT_COOLDOWN_MINUTES` and it pages
+again. Keyed per delivery, one permanently-broken market (CNGN/NGN's
+deliberately-thin book, say, or any delisted pair) would add ~96 rows a day,
+each wanting its own tick, and the real alerts would drown. So fires are folded
+into **episodes**: one row from the first page until the monitor observes the
+issue clear, carrying an `×n` count of how many times it paged. Tick it once and
+it stays ticked, however long it runs. A new row appears only after the issue
+has genuinely cleared and come back — a new incident, which needs a new
+sign-off. The episode's id is the id of its first fire, so a sign-off needs no
+new key space and keeps covering the episode as it grows.
+
+**Resolved at / Time to resolve are computed, not typed.** The same sweep that
+expires an acknowledgement — the cycle in which an issue is observed absent —
+closes the ledger rows delivered for it. An incident that paged three times over
+an hour closes all three at once, which is what happened. A row the monitor has
+never seen clear reads `open`, with how long it has been open; nothing is
+synthesised to fill the column.
+
+**Two files, one writer each**, the same discipline as everything else in
+`data/`. The monitor owns `alert_ledger_*.jsonl`; the API owns
+`alert_ledger_actions.json` and the monitor never reads it. Append-only NDJSON
+rather than a rewritten array: a resolution belongs to the day-file of the fire
+it closes, so an alert that fires at 23:58 and clears at 00:04 appends to
+*yesterday's* file — cheap as an append, a read-modify-write of an old file
+otherwise. A torn final line is the only damage a crash can do, and the reader
+skips it.
+
+> **This is not `alert_acks.json`.** An "ack" there mutes an issue at the fire
+> gate. A sign-off here mutes nothing at all — the engine never reads it. The two
+> use the same word for opposite things, so they are kept apart in code: anything
+> to do with the ledger is named `ledger`. An alert muted by a real ack, or by a
+> pair suspension, never reached anyone and so never appears in this tab.
+
+Ticking a row records the sign-off immediately and defaults the action to
+`self-resolved`, which is what the overwhelming majority are; the dropdown
+overrides it in place. **Sign off all on this page** posts every outstanding row
+in one request, so a batch shares one timestamp — the pattern already visible in
+the sheet, where ten rows carry the same one. **Export for sheet** downloads the
+range laid out column-for-column to match it:
+
+```
+Alert time,Pair,Alert type,Source,Acknowledged at,Action taken,Note,Resolved at,Time to resolve
+```
+
+**Retention: the record is permanent, and readable for as long as it is kept.**
+Nothing deletes the day-files (nothing sweeps `daily_log_*.csv` either), and
+sign-offs are never pruned — the fires they attach to survive forever, so an
+expiring sign-off would not hide a row, it would resurrect it looking like
+nobody had ever actioned it. Roughly 7 MB a year at current volumes. This tab is
+therefore the one historical view NOT behind `MAX_ANALYSIS_DAYS`: the analysis
+tabs cap at 30 days because a month of `daily_log_*.csv` is ~10^6 detections,
+while a month of ledger is a few hundred rows, so the same cap would protect
+nothing and only make old sign-offs unreadable. The range presets still stop at
+30 days; typing a date reaches as far back as the files go.
+
+History starts when the feature was deployed. There is nothing to back-fill
+from — that is the same gap that made the ledger necessary.
 
 ### Out of scope
 

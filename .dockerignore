@@ -17,6 +17,10 @@ __pycache__/
 # copy must never be baked into the image, where it would shadow the mount if
 # the volume ever failed to attach.
 data/
+# Local snapshots of the above, taken before test runs. The Dockerfile COPYs
+# named files so these could never reach the image, but they would still be
+# uploaded as build context on every deploy.
+data.bak-*/
 
 # Secrets. Telegram credentials come from `fly secrets`, never from the image.
 .env

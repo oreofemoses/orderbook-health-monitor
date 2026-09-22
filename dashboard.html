@@ -798,6 +798,49 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
 }
 .aa-coverage { font-size: 11px; color: var(--text-muted); }
 .aa-sub { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+
+/* ─── Accountability ledger ─────────────────────── */
+.led-check { width: 15px; height: 15px; cursor: pointer; accent-color: var(--accent); }
+.led-select, .led-note {
+  font-size: 11px; padding: 3px 6px; border-radius: var(--radius-sm);
+  border: 1px solid var(--border); background: var(--bg-card);
+  color: var(--text-primary); font-family: inherit;
+}
+.led-select { min-width: 124px; }
+.led-note { width: 100%; min-width: 120px; }
+.led-select:disabled, .led-note:disabled { opacity: .35; cursor: not-allowed; }
+/* Rows that rode the same Telegram share a tint band, so the unit of work a
+   person actually handled is visible at a glance rather than inferred. */
+.dl-table tr.led-row td:first-child { border-left: 3px solid transparent; }
+.dl-table tr.led-msg-a td:first-child { border-left-color: var(--accent); }
+.dl-table tr.led-msg-b td:first-child { border-left-color: var(--amber); }
+.led-open { color: var(--amber); font-weight: 600; }
+.led-clear-btn {
+  margin-left: 6px; padding: 1px 6px; font-size: 10px; cursor: pointer;
+  border-radius: 8px; border: 1px solid var(--border);
+  background: var(--bg-card); color: var(--text-muted); font-family: inherit;
+}
+.led-clear-btn:hover { color: var(--text-primary); border-color: var(--accent); }
+.led-manual {
+  display: inline-block; margin-left: 5px; padding: 0 5px;
+  font-size: 10px; font-weight: 600; border-radius: 8px;
+  background: var(--bg-base); color: var(--text-muted);
+  border: 1px dashed var(--border);
+}
+.led-repeat {
+  display: inline-block; margin-left: 6px; padding: 0 5px;
+  font-size: 10px; font-weight: 600; border-radius: 8px;
+  background: var(--bg-base); color: var(--text-muted);
+  border: 1px solid var(--border);
+}
+.led-bulk {
+  display: none; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 9px 12px; margin-bottom: 12px; border-radius: var(--radius-sm);
+  background: var(--bg-base); border: 1px solid var(--accent);
+}
+.led-bulk.show { display: flex; }
+.led-bulk-count { font-size: 12px; font-weight: 600; color: var(--text-primary); }
+.led-grouped { cursor: pointer; }
 </style>
 </head>
 <body>
@@ -846,6 +889,13 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
     <div class="nav-item" data-tab="alerts" onclick="showTab('alerts', 'aa-log-section')">
       <i class="ti ti-table"></i>
       <span>Daily log</span>
+    </div>
+
+    <div class="nav-section-label" style="margin-top:8px">Accountability</div>
+    <div class="nav-item" data-tab="ledger" onclick="showTab('ledger')">
+      <i class="ti ti-checkbox"></i>
+      <span>Alert sign-off</span>
+      <span class="nav-badge" id="led-nav-badge" style="display:none">0</span>
     </div>
 
     <div class="nav-section-label" style="margin-top:8px">Settings</div>
@@ -1454,6 +1504,145 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
 
     </div> <!-- /tab-alerts -->
 
+    <!-- ═══ Alert sign-off (accountability ledger) ═══════════════════════════ -->
+    <div class="tab-panel" id="tab-ledger">
+
+      <div class="slippage-controls">
+        <div class="range-group" id="led-range-group">
+          <button class="range-btn active" data-range="1d"  onclick="setLedRange('1d')">Today</button>
+          <button class="range-btn"        data-range="7d"  onclick="setLedRange('7d')">7d</button>
+          <button class="range-btn"        data-range="14d" onclick="setLedRange('14d')">14d</button>
+          <button class="range-btn"        data-range="30d" onclick="setLedRange('30d')">30d</button>
+        </div>
+        <div class="divider"></div>
+        <label for="led-date-start">Range:</label>
+        <input type="date" id="led-date-start" onchange="setLedDateRange()" />
+        <span style="font-size:11px;color:var(--text-muted)">to</span>
+        <input type="date" id="led-date-end" onchange="setLedDateRange()" />
+        <div class="divider"></div>
+        <button class="btn" onclick="fetchLedger()">
+          <i class="ti ti-refresh"></i> Reload
+        </button>
+        <span class="aa-coverage" id="led-coverage" style="margin-left:auto">—</span>
+      </div>
+
+      <div class="log-card chart-card">
+        <div class="section-header">
+          <div class="section-title">
+            <i class="ti ti-checkbox" style="font-size:16px;color:var(--accent)"></i>
+            Alert sign-off
+            <span class="count" id="led-count">—</span>
+          </div>
+          <button class="btn" onclick="downloadLedger()"
+                  title="Download every row matching the current filters, laid out for the accountability sheet">
+            <i class="ti ti-download"></i> Export for sheet
+          </button>
+        </div>
+        <div class="aa-sub" style="margin-bottom:12px">
+          Every alert that was <b>delivered to the Telegram channel</b> — not every issue the
+          monitor saw. Tick one to record that it was actioned, even when the action was none;
+          most self-resolve. Rows sharing a coloured edge arrived in the same message.
+          <br>
+          <b>One row per incident, not per message.</b> An issue that stays wrong pages again
+          every time its cooldown lapses, so a row carries a <span class="led-repeat">×n</span>
+          count rather than reappearing — tick it once and it stays ticked, however long it runs.
+          A new row appears only once the issue has actually cleared and then comes back, which
+          is a genuinely new incident and needs its own sign-off.
+          <br>
+          <br>
+          <b>Acknowledged at is yours; Resolved at is the monitor's.</b> Ticking a row records
+          that you dealt with it — it does not resolve it, and it cannot: the engine stamps
+          <b>Resolved at</b> only on the cycle it actually sees the issue clear. A condition
+          that is still happening (or that never clears, like a deliberately thin book) stays
+          <span class="led-open">open</span> with a blank duration however many times it is
+          ticked. That is the honest reading, and it is why ticking cannot close the row —
+          doing so would make the next page a brand-new row needing a brand-new tick.
+          Where a condition genuinely never will clear, <b>mark cleared</b> records a duration
+          by hand; it is flagged <span class="led-manual">manual</span> in the export so a
+          judgement never reads as a measurement.
+          <br>
+          Ticking here <b>does not mute anything</b> — that is the checkbox on a market's check
+          row in Market Overview, which is a different control. Alerts suppressed by a mute, a
+          pair suspension, a cooldown or a Tier-3 rule never reached anyone, so they never
+          appear here. <b>Resolved at</b> is stamped by the monitor the first cycle the issue is
+          observed clear. History starts when this feature was deployed; there is nothing to
+          back-fill from.
+        </div>
+
+        <div class="led-bulk" id="led-bulk">
+          <span class="led-bulk-count" id="led-bulk-count">—</span>
+          <select class="led-select" id="led-bulk-action"></select>
+          <button class="btn" onclick="applyLedgerBulk()">
+            <i class="ti ti-checks"></i> Sign off all on this page
+          </button>
+        </div>
+
+        <div class="daily-log-controls">
+          <!-- Defaults to ALL, not "Needs sign-off". Filtering to pending looks
+               like the obvious default for a work queue, but it makes the tab
+               unusable: the action dropdown and note only enable once a row is
+               ticked, and ticking it removes it from a pending-filtered view
+               before either can be reached. Showing the whole day also matches
+               the sheet this replaces, where signed-off rows stay on the page. -->
+          <select id="led-filter-status" title="Which rows to show">
+            <option value="all" selected>All alerts</option>
+            <option value="pending">Needs sign-off</option>
+            <option value="acknowledged">Signed off</option>
+            <option value="open">Still unresolved</option>
+          </select>
+          <select id="led-filter-market">
+            <option value="">All markets</option>
+          </select>
+          <select id="led-filter-alert" title="Show only this alert id">
+            <option value="">All alert types</option>
+          </select>
+          <select id="led-page-size">
+            <option value="50">50 rows</option>
+            <option value="100">100 rows</option>
+            <option value="200">200 rows</option>
+            <option value="500">500 rows</option>
+          </select>
+          <span style="font-size:12px;color:var(--text-muted);margin-left:auto" id="led-counts">—</span>
+        </div>
+
+        <div class="dl-table-wrap">
+          <table class="dl-table">
+            <thead>
+              <tr>
+                <th style="width:28px" title="Your sign-off: tick to record that this alert was actioned. This does NOT resolve the alert — see Resolved at.">
+                  <i class="ti ti-check"></i></th>
+                <th>Alert time (NGT)</th>
+                <th>Pair</th>
+                <th>Alert type</th>
+                <th>Severity</th>
+                <th title="When a human ticked this row. Set by you.">Acknowledged at</th>
+                <th>Action taken</th>
+                <th style="min-width:150px">Note</th>
+                <th title="When the MONITOR observed the issue clear. Stamped by the engine, never by a sign-off — a condition that is still happening stays open no matter how many times it has been ticked.">Resolved at</th>
+                <th title="Resolved at minus Alert time. Blank while the issue is still happening.">Time to resolve</th>
+              </tr>
+            </thead>
+            <tbody id="led-tbody">
+              <tr><td colspan="10" style="color:var(--text-muted);padding:20px 10px">Loading…</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="dl-pagination">
+          <span id="led-page-info">—</span>
+          <div class="dl-pagination-btns">
+            <button class="btn" id="led-prev" onclick="ledChangePage(-1)" disabled>
+              <i class="ti ti-chevron-left"></i> Prev
+            </button>
+            <button class="btn" id="led-next" onclick="ledChangePage(1)">
+              Next <i class="ti ti-chevron-right"></i>
+            </button>
+          </div>
+        </div>
+      </div>
+
+    </div> <!-- /tab-ledger -->
+
   </div>
 </div>
 
@@ -2040,6 +2229,7 @@ function showTab(tab, anchor) {
     titleEl.textContent = {
       slippage: "USDT/NGN — Depth-walk slippage",
       alerts:   "Alert analysis",
+      ledger:   "Alert sign-off",
     }[tab] || "Market Overview";
   }
 
@@ -2058,6 +2248,16 @@ function showTab(tab, anchor) {
   // and no refetch on every tab switch. setAaRange seeds the date inputs and
   // fetches; after that aaData is already populated.
   if (tab === "alerts" && !aaData) setAaRange(aaRange || "1d");
+
+  // The sign-off tab is the one historical view that grows while you look at it:
+  // alerts land on today's range as they fire. So unlike the analysis tab, which
+  // loads once and then only on a range change, this one refetches whenever it
+  // has been away long enough to be stale. No background polling — the tab is
+  // only interesting while it is open.
+  if (tab === "ledger") {
+    if (!ledData) setLedRange(ledRange || "1d");
+    else if (Date.now() - ledFetchedAt > 30000) fetchLedger();
+  }
 
   if (anchor) {
     // Wait one frame so the newly-visible panel has laid out before scrolling
@@ -5271,6 +5471,342 @@ function downloadAlertLog() {
 
 ["log-filter-tier", "log-filter-market", "log-filter-alert", "log-page-size"]
   .forEach(id => document.getElementById(id).addEventListener("change", logFilterChanged));
+
+
+// ── Alert sign-off (accountability ledger) ───────────────────────────────────
+// Served by /api/alert-ledger, which lists what actually reached the Telegram
+// channel — a few hundred rows a day, not the ~10^6 detections the Daily log
+// spans. Paging and filtering stay server-side for consistency with that tab
+// rather than out of necessity.
+//
+// INTERACTION: one click signs a row off. The checkbox IS the action, not a
+// selection to be applied later — this replaces a spreadsheet where ticking was
+// already one keystroke, so anything slower than that is a downgrade. Ticking
+// without choosing an action records the server's default (self-resolved), which
+// is what the overwhelming majority of these are; the dropdown then overrides it
+// in place. The page-wide button exists because the team signs off in batches —
+// in the sheet this replaces, ten rows routinely share one timestamp — and it
+// posts every pending row in ONE request so they genuinely do.
+//
+// Nothing here mutes anything. The visually similar checkbox on a market's check
+// row (toggleAlertAck) writes a DIFFERENT file and does stop the engine paging;
+// this one is an audit record the engine never reads. Keep them apart.
+
+let ledRange     = "1d";
+let ledPage      = 0;
+let ledPageSize  = 50;
+let ledLoading   = false;
+let ledData      = null;
+let ledFetchedAt = 0;
+
+function setLedRange(range) {
+  ledRange = range;
+  document.querySelectorAll("#led-range-group .range-btn").forEach(b => {
+    b.classList.toggle("active", b.dataset.range === range);
+  });
+  const days = { "1d": 1, "7d": 7, "14d": 14, "30d": 30 }[range] || 1;
+  const end   = new Date();
+  const start = new Date();
+  // days - 1, not days. _parse_analysis_range rejects a start that is >= 30 days
+  // old, so a "30d" preset reaching a full 30 days back is a 400. Same arithmetic
+  // as setAaRange, and for the same reason.
+  start.setDate(start.getDate() - (days - 1));
+  document.getElementById("led-date-start").value = aaLocalDate(start);
+  document.getElementById("led-date-end").value   = aaLocalDate(end);
+  ledPage = 0;
+  fetchLedger();
+}
+
+function setLedDateRange() {
+  ledRange = null;
+  document.querySelectorAll("#led-range-group .range-btn")
+    .forEach(b => b.classList.remove("active"));
+  ledPage = 0;
+  fetchLedger();
+}
+
+function ledFilters() {
+  return {
+    status: document.getElementById("led-filter-status").value,
+    market: document.getElementById("led-filter-market").value,
+    issue:  document.getElementById("led-filter-alert").value,
+  };
+}
+
+function ledQuery(extra = {}) {
+  const f = ledFilters();
+  const p = new URLSearchParams({
+    start: document.getElementById("led-date-start").value,
+    end:   document.getElementById("led-date-end").value,
+    status: f.status,
+    page:  ledPage,
+    page_size: ledPageSize,
+    ...extra,
+  });
+  if (f.market) p.set("market", f.market);
+  if (f.issue)  p.set("issue", f.issue);
+  return p.toString();
+}
+
+async function fetchLedger() {
+  const start = document.getElementById("led-date-start").value;
+  const end   = document.getElementById("led-date-end").value;
+  if (!start || !end || ledLoading) return;
+
+  ledLoading  = true;
+  ledPageSize = parseInt(document.getElementById("led-page-size").value) || 50;
+  try {
+    const r = await fetch(`${API_BASE}/api/alert-ledger?${ledQuery()}`);
+    if (!r.ok) {
+      let detail = `HTTP ${r.status}`;
+      try { detail = (await r.json()).detail || detail; } catch (_) {}
+      document.getElementById("led-tbody").innerHTML =
+        `<tr><td colspan="10" style="color:var(--red);padding:20px 10px">${detail}</td></tr>`;
+      return;
+    }
+    ledData      = await r.json();
+    ledPage      = ledData.page;
+    ledFetchedAt = Date.now();
+    renderLedger();
+  } catch (err) {
+    document.getElementById("led-tbody").innerHTML =
+      `<tr><td colspan="10" style="color:var(--red);padding:20px 10px">Could not reach the API</td></tr>`;
+  } finally {
+    ledLoading = false;
+  }
+}
+
+function ledEsc(s) {
+  return String(s == null ? "" : s)
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+// Rebuild one <select> from a facet list, keeping the current choice when it
+// survives. Mirrors logSyncSelect; kept separate because this tab's dropdowns do
+// not cascade the same way and a shared helper would have to branch on that.
+function ledSyncSelect(id, options, allLabel, fmt = v => v, grouped = false) {
+  const sel  = document.getElementById(id);
+  const prev = sel.value;
+  const keep = prev && options.includes(prev);
+  sel.innerHTML = `<option value="">${allLabel}</option>` +
+    (grouped
+      ? alertOptionsHtml(options, keep ? prev : "")
+      : options.map(o => `<option value="${ledEsc(o)}"${o === prev ? " selected" : ""}>${fmt(o)}</option>`).join(""));
+  if (!keep) sel.value = "";
+}
+
+function ledMarketLabel(m) {
+  return m === "_global" ? "Global (E1/E2)" : String(m).toUpperCase();
+}
+
+function ledFmtOpen(min) {
+  if (min < 60)   return `${Math.round(min)}m`;
+  if (min < 1440) return `${(min / 60).toFixed(1)}h`;
+  return `${Math.round(min / 1440)}d`;
+}
+
+function renderLedger() {
+  if (!ledData) return;
+  const f = ledData.facets || {};
+
+  ledSyncSelect("led-filter-market", f.markets || [], "All markets", ledMarketLabel);
+  if (f.issue_tiers) issueTiers = f.issue_tiers;
+  ledSyncSelect("led-filter-alert", f.issues || [], "All alert types", v => v, true);
+
+  // The bulk action dropdown is built from what the server serves, never from a
+  // list transcribed here — the vocabulary lives in defaults.py.
+  const bulkSel = document.getElementById("led-bulk-action");
+  if (!bulkSel.dataset.built && (f.actions || []).length) {
+    bulkSel.innerHTML = f.actions.map(a =>
+      `<option value="${ledEsc(a)}">${ledEsc(a)}</option>`).join("");
+    bulkSel.dataset.built = "1";
+  }
+
+  const c = f.counts || {};
+  document.getElementById("led-counts").textContent =
+    `${Number(c.pending || 0).toLocaleString()} to sign off · ` +
+    `${Number(c.acknowledged || 0).toLocaleString()} done · ` +
+    `${Number(c.open || 0).toLocaleString()} still unresolved`;
+
+  const cov = ledData.coverage || {};
+  document.getElementById("led-coverage").textContent =
+    cov.start === cov.end ? cov.start : `${cov.start} → ${cov.end}`;
+
+  // Sidebar nudge. The whole point of this tab is that someone remembers to come
+  // back to it, so the outstanding count belongs where it is seen WITHOUT opening
+  // the tab. Counted over the range with market/issue applied but not status, so
+  // it doesn't read "0 left" merely because the view is filtered to signed rows.
+  const badge   = document.getElementById("led-nav-badge");
+  const pending = Number(c.pending || 0);
+  badge.style.display = pending ? "" : "none";
+  badge.textContent   = pending > 99 ? "99+" : pending;
+
+  const total = ledData.total || 0;
+  document.getElementById("led-count").textContent =
+    `${total.toLocaleString()} alert${total === 1 ? "" : "s"}`;
+
+  const from = total ? ledPage * ledData.page_size + 1 : 0;
+  const to   = Math.min(from + (ledData.rows || []).length - 1, total);
+  document.getElementById("led-page-info").textContent =
+    total ? `${from.toLocaleString()}–${to.toLocaleString()} of ${total.toLocaleString()}`
+          : "No rows";
+  document.getElementById("led-prev").disabled = ledPage === 0;
+  document.getElementById("led-next").disabled = ledPage >= (ledData.pages || 1) - 1;
+
+  const rows = ledData.rows || [];
+
+  // The page-wide button only appears when there is actually something on this
+  // page to sign off, and says how many — so it can never silently do nothing.
+  const unsigned = rows.filter(r => !r.acknowledged).length;
+  const bar = document.getElementById("led-bulk");
+  bar.classList.toggle("show", unsigned > 0);
+  document.getElementById("led-bulk-count").textContent =
+    `${unsigned} alert${unsigned === 1 ? "" : "s"} on this page not signed off`;
+
+  if (!rows.length) {
+    document.getElementById("led-tbody").innerHTML =
+      `<tr><td colspan="10" style="color:var(--text-muted);padding:20px 10px">` +
+      `Nothing to sign off in this range.</td></tr>`;
+    return;
+  }
+
+  const actions = f.actions || [];
+  const noteMax = f.note_max || 500;
+  // Alternate the tint per Telegram message so consecutive groups are
+  // distinguishable; the colour carries no meaning beyond "same message".
+  const msgSeen = [];
+  document.getElementById("led-tbody").innerHTML = rows.map(r => {
+    if (r.msg_id && !msgSeen.includes(r.msg_id)) msgSeen.push(r.msg_id);
+    const tint = r.msg_id
+      ? (msgSeen.indexOf(r.msg_id) % 2 ? "led-msg-b" : "led-msg-a") : "";
+    const id   = ledEsc(r.id);
+    const opts = actions.map(a =>
+      `<option value="${ledEsc(a)}"${a === r.action ? " selected" : ""}>${ledEsc(a)}</option>`).join("");
+    return `<tr class="led-row ${tint}">
+      <td><input type="checkbox" class="led-check" ${r.acknowledged ? "checked" : ""}
+                 title="${r.acknowledged ? "Signed off — untick to undo" : "Tick to record that this was actioned"}"
+                 onchange="toggleLedgerRow('${id}', this.checked)" /></td>
+      <td class="dl-ts">${ledEsc(r.ts)}${r.fired_count > 1
+          ? `<span class="led-repeat" title="This one incident paged the channel ${r.fired_count} times — most recently ${ledEsc(r.last_ts)}. It is still one row because it never cleared in between.">×${r.fired_count}</span>`
+          : ""}</td>
+      <td class="dl-market" title="${ledEsc(r.label)}">${ledMarketLabel(r.market)}</td>
+      <td class="dl-issues">
+        <span class="dl-issue-badge ${ledEsc(r.severity)}">${ledEsc(r.issue)}</span>
+        <span style="color:var(--text-secondary)">${ledEsc(r.name)}</span>
+      </td>
+      <td><span class="aa-pill-badge ${ledEsc(r.severity)}">${ledEsc(r.severity)}</span></td>
+      <td class="dl-ts">${r.acknowledged_at ? ledEsc(r.acknowledged_at) : "—"}</td>
+      <td>
+        <select class="led-select" ${r.acknowledged ? "" : "disabled"}
+                onchange="setLedgerAction('${id}', this.value)">
+          ${r.action ? "" : '<option value=""></option>'}${opts}
+        </select>
+      </td>
+      <td>
+        <input class="led-note" type="text" maxlength="${noteMax}"
+               value="${ledEsc(r.note)}" placeholder="—"
+               ${r.acknowledged ? "" : "disabled"}
+               onchange="setLedgerNote('${id}', this.value)" />
+      </td>
+      <td class="dl-ts">${r.resolved_at
+          ? `${ledEsc(r.resolved_at)}${r.resolved_manual
+               ? `<span class="led-manual" title="Recorded by hand, not observed by the monitor — the condition may still be present. Click to undo.">manual</span>`
+                 + `<button class="led-clear-btn" title="Undo this manual clear" onclick="setLedgerCleared('${ledEsc(r.id)}', false)">×</button>`
+               : ""}`
+          : `<span class="led-open" title="The monitor has not yet seen this issue clear">open${
+               r.open_for_min != null ? ` · ${ledFmtOpen(r.open_for_min)}` : ""}</span>`
+            + `<button class="led-clear-btn" title="This condition will never clear on its own (a deliberately thin book, a delisted market). Record it as cleared now so the export has a duration. Marked as manual, and it does not close the row — further pages still fold into it." onclick="setLedgerCleared('${ledEsc(r.id)}', true)">mark cleared</button>`}</td>
+      <td class="dl-depth">${r.time_to_resolve ? ledEsc(r.time_to_resolve) : "—"}</td>
+    </tr>`;
+  }).join("");
+}
+
+// ── Writes ───────────────────────────────────────────────────────────────────
+// One endpoint covers a single tick and a page-wide apply; a single tick is just
+// a one-element list. Every id in one call shares one acknowledged_at, which is
+// what makes a batch read as the single act it actually was.
+async function postLedgerAction(payload, okMsg) {
+  try {
+    const res = await fetch(`${API_BASE}/api/alert-ledger/action`, {
+      method:  "POST",
+      headers: { "Content-Type": "application/json" },
+      body:    JSON.stringify(payload),
+    });
+    if (!res.ok) {
+      throw new Error((await res.json().catch(() => ({}))).detail || res.statusText);
+    }
+    await res.json();
+    if (okMsg) showToast(okMsg);
+  } catch (err) {
+    showToast(`Could not save: ${err.message}`, true);
+  } finally {
+    // Refetch either way, success or failure. resolved_at is owned by the
+    // MONITOR and can change between renders, so reconciling from the server is
+    // the only way a row stays honest — and on failure it snaps the checkbox
+    // back to the truth rather than leaving the UI claiming a sign-off that was
+    // never stored. Same contract as toggleAlertAck.
+    fetchLedger();
+  }
+}
+
+function toggleLedgerRow(fid, on) {
+  postLedgerAction({ fire_ids: [fid], acknowledged: on },
+                   on ? "Signed off" : "Sign-off cleared");
+}
+
+function setLedgerAction(fid, action) {
+  if (!action) return;
+  postLedgerAction({ fire_ids: [fid], acknowledged: true, action }, "Action saved");
+}
+
+// onchange, deliberately not oninput — one request per keystroke against a
+// file-backed store is how it gets corrupted.
+function setLedgerNote(fid, note) {
+  postLedgerAction({ fire_ids: [fid], acknowledged: true, note }, "Note saved");
+}
+
+// The manual counterpart to the engine's resolved_at, for conditions it will
+// never observe clear. Sent WITHOUT `acknowledged`, so calling something cleared
+// does not silently also sign it off — they are separate claims.
+function setLedgerCleared(fid, on) {
+  postLedgerAction({ fire_ids: [fid], cleared: on },
+                   on ? "Marked cleared (manual)" : "Manual clear removed");
+}
+
+function applyLedgerBulk() {
+  const ids = ((ledData && ledData.rows) || [])
+    .filter(r => !r.acknowledged).map(r => r.id);
+  if (!ids.length) { showToast("Nothing on this page to sign off", true); return; }
+  const action = document.getElementById("led-bulk-action").value;
+  postLedgerAction({ fire_ids: ids, acknowledged: true, action },
+                   `${ids.length} alert${ids.length === 1 ? "" : "s"} signed off`);
+}
+
+function ledChangePage(dir) {
+  if (!ledData) return;
+  const maxPage = Math.max(0, (ledData.pages || 1) - 1);
+  const next = Math.max(0, Math.min(ledPage + dir, maxPage));
+  if (next === ledPage) return;
+  ledPage = next;
+  fetchLedger();
+}
+
+function ledFilterChanged() {
+  ledPage = 0;
+  fetchLedger();
+}
+
+// Through the server so the export covers the whole filtered set rather than the
+// page on screen, and by navigation rather than fetch+blob so the API's
+// Content-Disposition filename survives — same reasoning as downloadAlertLog.
+function downloadLedger() {
+  if (!ledData || !ledData.total) { showToast("No rows to download", true); return; }
+  window.location = `${API_BASE}/api/alert-ledger?${ledQuery({ format: "csv" })}`;
+}
+
+["led-filter-status", "led-filter-market", "led-filter-alert", "led-page-size"]
+  .forEach(id => document.getElementById(id).addEventListener("change", ledFilterChanged));
 
 </script>
 </body>

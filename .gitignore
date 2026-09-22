@@ -11,3 +11,8 @@ venv/
 # slippage files and usdtngn_volume_hourly.json. In production this lives on the
 # Fly volume at /app/data; locally it lands here.
 data/
+
+# Snapshots of data/ taken before running the monitor against it locally. Same
+# runtime state as above, so it has no business in the repo either — and unlike
+# data/ it would otherwise be picked up by a bare `git add`.
+data.bak-*/
