@@ -1534,7 +1534,7 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
             <span class="count" id="led-count">—</span>
           </div>
           <button class="btn" onclick="downloadLedger()"
-                  title="Download every row matching the current filters, laid out for the accountability sheet">
+                  title="Download every row matching the current filters, laid out for the accountability sheet. Alerts that closed in under 2 minutes are left out as noise; still-open ones are always included.">
             <i class="ti ti-download"></i> Export for sheet
           </button>
         </div>

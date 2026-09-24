@@ -1100,6 +1100,11 @@ _LOG_PAGE_SIZES = (50, 100, 200, 500)
 # open, so a mistyped year asks for three years rather than three thousand.
 MAX_LEDGER_SPAN_DAYS = 1100
 _LOG_CSV_MAX    = 250_000   # rows; a whole busy month is ~4x this
+# Sign-off CSV only: an alert that closed this fast is noise in an accountability
+# sheet — it just pushes the rows that do need a signature further down. Applied
+# ONLY to the export; the page still shows these, because "it flapped and cleared"
+# is worth seeing on screen even when it isn't worth a line in the sheet.
+LEDGER_CSV_MIN_RESOLVE_SECONDS = 120
 
 
 def _tier_lookup(ex: pd.DataFrame) -> np.ndarray:
@@ -1664,7 +1669,9 @@ def get_alert_ledger(start: Optional[str] = None,
     ?status=       all | pending | acknowledged | open. Defaults to **all**; the
                    dashboard lands on `pending`, which is the day's actual job,
                    but the API default stays unfiltered so a bare call is honest.
-    ?format=csv    the whole filtered set as a spreadsheet, not one page.
+    ?format=csv    the whole filtered set as a spreadsheet, not one page. Rows
+                   that closed in under two minutes are left out of the file as
+                   noise; still-open rows always survive. See _ledger_csv_rows.
 
     Counts in `facets` are computed over the range with market/issue applied but
     NOT status, so the status dropdown can show how many rows each choice holds
@@ -1688,7 +1695,8 @@ def get_alert_ledger(start: Optional[str] = None,
             or (status == "open"         and not r["resolved_at_iso"])]
 
     if format == "csv":
-        return _ledger_csv_response(rows[:_LOG_CSV_MAX], start_d, end_d)
+        return _ledger_csv_response(_ledger_csv_rows(rows)[:_LOG_CSV_MAX],
+                                    start_d, end_d)
 
     # Facets over the market/issue-filtered set, each excluding its own filter —
     # same cascade reasoning as /api/alert-log, just small enough to do in sets.
@@ -1729,6 +1737,20 @@ def get_alert_ledger(start: Optional[str] = None,
         "pages": pages if total else 0,
         "rows": rows[page * page_size:(page + 1) * page_size],
     }))
+
+
+def _ledger_csv_rows(rows: list) -> list:
+    """
+    Drop every row that closed in under LEDGER_CSV_MIN_RESOLVE_SECONDS — whether
+    the engine observed it clear or someone called it cleared by hand, and whether
+    or not it was signed off. A fast close is noise in the sheet either way.
+
+    A row with NO resolution time is always kept: it is still open, which is the
+    sheet's whole reason for existing, and it has no duration to compare.
+    """
+    return [r for r in rows
+            if r.get("resolve_seconds") is None
+            or r["resolve_seconds"] >= LEDGER_CSV_MIN_RESOLVE_SECONDS]
 
 
 def _ledger_csv_response(rows: list, start_d, end_d):
