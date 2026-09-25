@@ -209,6 +209,7 @@ Run modes:
 """
 
 import asyncio
+import glob
 import json
 import math
 import os
@@ -225,7 +226,8 @@ from defaults import (merge_config, default_config, UPTIME_FIXED_STEP_NGN,
                       PAIR_VOLUME_RETENTION_DAYS,
                       ACKABLE_ISSUE_IDS, TIER1_IDS, TIER2_IDS, TIER3_IDS,
                       classify_tier, issue_name,
-                      LEDGER_RETENTION_DAYS)  # single source of truth for config
+                      LEDGER_RETENTION_DAYS,
+                      ALERT_RECORD_RETENTION_DAYS)  # single source of truth for config
 # Pure candle-parsing/aggregation helpers, shared with api.py so the OCHLV field
 # convention and NGT hour bucketing can't drift between the two processes. Only
 # the pure functions are used here — the module's urllib fetch is for api.py's
@@ -3417,6 +3419,49 @@ def update_daily_log(all_results: list):
     print(f"✅ Daily log appended: {path} (+{len(rows)} warning row(s))")
 
 
+# Last NGT day prune_alert_records completed cleanly. The sweep is a glob over a
+# year of day-files — cheap, but there's nothing to find more than once a day.
+_alert_records_pruned_day: Optional[str] = None
+
+
+def prune_alert_records():
+    """
+    Delete daily_log_*.csv and alert_ledger_*.jsonl day-files older than
+    ALERT_RECORD_RETENTION_DAYS. This process writes both, so it is the one that
+    deletes them; the sign-offs attached to ledger rows are dropped on the same
+    cutoff by api.py, which owns that file.
+
+    Runs at most once per NGT day. A file that can't be removed (on Windows, one
+    api.py has open for reading) leaves the day unmarked so the next cycle retries.
+    """
+    global _alert_records_pruned_day
+    today = ngt_now().strftime("%Y-%m-%d")
+    if _alert_records_pruned_day == today:
+        return
+    cutoff = (ngt_now() - timedelta(days=ALERT_RECORD_RETENTION_DAYS)).strftime("%Y-%m-%d")
+    removed, failed = 0, 0
+    for pattern, prefix in (("daily_log_*.csv", "daily_log_"),
+                            ("alert_ledger_*.jsonl", "alert_ledger_")):
+        for path in glob.glob(os.path.join(DATA_DIR, pattern)):
+            day = os.path.basename(path)[len(prefix):len(prefix) + 10]
+            try:
+                datetime.strptime(day, "%Y-%m-%d")
+            except ValueError:
+                continue                    # not a day-file; leave it alone
+            if day >= cutoff:
+                continue
+            try:
+                os.remove(path)
+                removed += 1
+            except OSError as e:
+                failed += 1
+                print(f"⚠️  Could not delete expired alert record {path}: {e}")
+    if removed:
+        print(f"🧹 Deleted {removed} alert record day-file(s) older than {cutoff}")
+    if not failed:
+        _alert_records_pruned_day = today
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # ACCOUNTABILITY LEDGER
 # ══════════════════════════════════════════════════════════════════════════════
@@ -4764,6 +4809,7 @@ async def run_cycle(shared_state: dict, session: aiohttp.ClientSession, cycle_nu
     append_ledger(ledger_closes)
     clean_results = [{k: v for k, v in r.items() if not k.startswith("_")} for r in results]
     update_daily_log(clean_results)
+    prune_alert_records()
     if clean_results:
         pd.DataFrame(clean_results).to_csv(os.path.join(DATA_DIR, "latest.csv"), index=False)
     save_state(shared_state)

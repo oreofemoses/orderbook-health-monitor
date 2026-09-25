@@ -47,6 +47,7 @@ To watch it live, just keep your monitor running alongside uvicorn.
 | `GET /api/diagnostics` | which writer last wrote what, and how long ago — start here when the dashboard looks wrong |
 | `GET /api/alert-analysis` | range analytics over the daily logs; `?start=&end=` (YYYY-MM-DD, NGT), `?gap_cycles=` |
 | `GET /api/alert-log` | daily-log detections for a range; `?start=&end=&tier=&market=&issue=&page=&page_size=&format=csv` |
+| `GET /api/alert-log/download` | every `daily_log_*.csv` in any retained range as one CSV (Date column added); `?start=&end=` |
 | `GET /api/pairs` | list of known pair symbols |
 | `GET /api/alert-acks` | live per-(pair, issue) acknowledgements + the ackable id list |
 | `POST /api/alert-acks` | set/clear one ack: `{symbol, issue_id, ack}` |
@@ -1045,8 +1046,10 @@ because the hour-of-day heatmap orders its rows by it.
 
 **`GET /api/alert-analysis`** — `?start=&end=` (YYYY-MM-DD, NGT, inclusive;
 defaults to the trailing 7 days) and `?gap_cycles=` (0-10, default 2). Max span
-and max age are both 30 days, the same wall `parse_daily_log` enforces, applied
-to both edges. Aggregation is server-side because a busy 30-day range is ~10^6
+is 30 days; there is no age limit, so the range can sit anywhere in the
+retained history. A wider range shows a download card instead:
+`GET /api/alert-log/download?start=&end=` streams every `daily_log_*.csv` in the
+range as one CSV, with a Date column prepended, straight from disk. Aggregation is server-side because a busy 30-day range is ~10^6
 rows across 30 files: a couple of seconds of pandas and ~40 KB of JSON here,
 versus 30 sequential fetches and tens of megabytes in the browser. There's no
 polling — it's a historical view over closed logs, so it loads on first open and
@@ -1175,16 +1178,18 @@ range laid out column-for-column to match it:
 Alert time,Pair,Alert type,Source,Acknowledged at,Action taken,Note,Resolved at,Time to resolve
 ```
 
-**Retention: the record is permanent, and readable for as long as it is kept.**
-Nothing deletes the day-files (nothing sweeps `daily_log_*.csv` either), and
-sign-offs are never pruned — the fires they attach to survive forever, so an
-expiring sign-off would not hide a row, it would resurrect it looking like
-nobody had ever actioned it. Roughly 7 MB a year at current volumes. This tab is
-therefore the one historical view NOT behind `MAX_ANALYSIS_DAYS`: the analysis
-tabs cap at 30 days because a month of `daily_log_*.csv` is ~10^6 detections,
+**Retention: one year, then deleted — and readable for as long as it is kept.**
+`daily_log_*.csv`, `alert_ledger_*.jsonl` and the sign-offs in
+`alert_ledger_actions.json` are all kept for `ALERT_RECORD_RETENTION_DAYS` (365,
+in `defaults.py`). The monitor deletes expired day-files once a day; the API
+drops expired sign-offs on the same cutoff, so a row and its sign-off always go
+together — a sign-off expiring on its own would resurrect its row looking like
+nobody had ever actioned it. Neither this tab nor the analysis tabs have an age
+limit. This tab's span cap is far wider than `MAX_ANALYSIS_DAYS`: the analysis
+tabs cap a request at 30 days because a month of `daily_log_*.csv` is ~10^6 detections,
 while a month of ledger is a few hundred rows, so the same cap would protect
 nothing and only make old sign-offs unreadable. The range presets still stop at
-30 days; typing a date reaches as far back as the files go.
+30 days; typing a date reaches as far back as the files go (one year).
 
 History starts when the feature was deployed. There is nothing to back-fill
 from — that is the same gap that made the ledger necessary.

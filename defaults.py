@@ -335,10 +335,22 @@ LEDGER_ACTIONS: tuple[str, ...] = (
 # dropped; the ledger row stays open, which is the truthful reading, since nothing
 # ever proved it resolved.
 #
-# It does NOT expire sign-offs. Those are kept permanently (see api.py): the fires
-# they attach to are never deleted either, and a sign-off that expired out from
-# under a surviving row would make it read as though nobody had ever actioned it.
+# It does NOT expire sign-offs or ledger rows; ALERT_RECORD_RETENTION_DAYS below
+# does that.
 LEDGER_RETENTION_DAYS = 90
+
+# How long the alert RECORDS are kept, in days: the daily log (daily_log_*.csv),
+# the accountability ledger (alert_ledger_*.jsonl) and its sign-offs
+# (alert_ledger_actions.json). Older day-files are deleted by the monitor, which
+# writes them; older sign-offs are dropped by the API, which writes those.
+#
+# The ledger rows and their sign-offs MUST expire on the same cutoff. A sign-off
+# that expired out from under a surviving row would make it read as though
+# nobody had ever actioned it; a sign-off outliving its row is just dead weight.
+#
+# Deliberately NOT a config knob, for the same reason as the archives above:
+# shrinking it from a dashboard field would destroy history nothing can rebuild.
+ALERT_RECORD_RETENTION_DAYS = 365
 
 # Longest note accepted on a ledger row. A note is a margin annotation, not an
 # incident report, and this file is read whole on every dashboard poll.

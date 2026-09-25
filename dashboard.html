@@ -797,6 +797,10 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
   padding: 28px 0; text-align: center;
 }
 .aa-coverage { font-size: 11px; color: var(--text-muted); }
+/* A range wider than AA_MAX_DAYS hides the whole tab body behind the download card. */
+.aa-too-wide { display: none; }
+#tab-alerts.aa-range-too-wide > .aa-too-wide { display: block; }
+#tab-alerts.aa-range-too-wide > :not(.slippage-controls):not(.aa-too-wide) { display: none !important; }
 .aa-sub { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
 
 /* ─── Accountability ledger ─────────────────────── */
@@ -1286,6 +1290,22 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
           <i class="ti ti-refresh"></i> Reload
         </button>
         <span class="aa-coverage" id="aa-coverage" style="margin-left:auto">—</span>
+      </div>
+
+      <!-- Shown instead of everything below when the range is wider than the
+           dashboard will load (AA_MAX_DAYS); see reloadAlertTab. -->
+      <div class="chart-card aa-too-wide" id="aa-too-wide">
+        <div class="section-title">
+          <i class="ti ti-file-spreadsheet" style="font-size:16px;color:var(--accent)"></i>
+          This range is too wide to show here
+        </div>
+        <div class="aa-sub" style="margin:8px 0 14px">
+          The dashboard shows up to <b>30 days</b> at a time. For <span id="aa-too-wide-days">—</span>
+          days, download the raw daily log instead, as a single CSV.
+        </div>
+        <a class="btn" id="aa-too-wide-link" href="#" download style="text-decoration:none">
+          <i class="ti ti-download"></i> Download daily log (.csv)
+        </a>
       </div>
 
       <!-- Headline counters -->
@@ -5058,6 +5078,9 @@ setInterval(fetchAndRender, 60_000);
 // counts how long issues linger, which is a real question but not the same one
 // as "how often did they fire" — so the stat cards show both.
 
+// Widest range the tab will load; mirrors MAX_ANALYSIS_DAYS in api.py. Wider
+// ranges get a download link to the raw daily log instead.
+const AA_MAX_DAYS = 30;
 let aaData    = null;
 let aaRange   = "1d";
 let aaLoading = false;
@@ -5122,6 +5145,22 @@ function setAaDateRange() {
 // re-fetches on every filter and page change, while the aggregates only change
 // when the range does.
 function reloadAlertTab() {
+  const start = document.getElementById("aa-date-start").value;
+  const end   = document.getElementById("aa-date-end").value;
+  const tab   = document.getElementById("tab-alerts");
+  // Inclusive day count, from the plain date strings so no timezone can shift it.
+  const days  = start && end
+    ? Math.round((Date.parse(end) - Date.parse(start)) / 86_400_000) + 1 : 0;
+  const tooWide = days > AA_MAX_DAYS;
+  tab.classList.toggle("aa-range-too-wide", tooWide);
+  if (tooWide) {
+    document.getElementById("aa-too-wide-days").textContent = days;
+    document.getElementById("aa-too-wide-link").href =
+      `${API_BASE}/api/alert-log/download?start=${start}&end=${end}`;
+    document.getElementById("aa-coverage").textContent =
+      `${start} → ${end} · ${days} days · download only`;
+    return;
+  }
   fetchAlertAnalysis();
   logPage = 0;
   fetchAlertLog();
@@ -5355,6 +5394,9 @@ async function fetchAlertLog() {
       try { detail = (await r.json()).detail || detail; } catch (_) {}
       document.getElementById("log-tbody").innerHTML =
         `<tr><td colspan="6" style="color:var(--red);padding:20px 10px">${detail}</td></tr>`;
+      logData = null;
+      ["log-count", "log-tier-counts", "log-page-info"]
+        .forEach(id => { document.getElementById(id).textContent = "—"; });
       return;
     }
     logData = await r.json();
@@ -5507,9 +5549,8 @@ function setLedRange(range) {
   const days = { "1d": 1, "7d": 7, "14d": 14, "30d": 30 }[range] || 1;
   const end   = new Date();
   const start = new Date();
-  // days - 1, not days. _parse_analysis_range rejects a start that is >= 30 days
-  // old, so a "30d" preset reaching a full 30 days back is a 400. Same arithmetic
-  // as setAaRange, and for the same reason.
+  // days - 1, not days: the range is inclusive of both ends, so "30d" is today
+  // plus the 29 days before it. Same arithmetic as setAaRange.
   start.setDate(start.getDate() - (days - 1));
   document.getElementById("led-date-start").value = aaLocalDate(start);
   document.getElementById("led-date-end").value   = aaLocalDate(end);

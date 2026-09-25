@@ -36,12 +36,13 @@ import numpy as np
 import pandas as pd
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 
 from defaults import (default_config, merge_config, UPTIME_FIXED_STEP_NGN,
                       ACKABLE_ISSUE_IDS, ISSUE_NAMES, issue_name,
                       LEDGER_ACTIONS, LEDGER_NOTE_MAX_CHARS,
-                      classify_tier)  # single source of truth for config
+                      classify_tier,
+                      ALERT_RECORD_RETENTION_DAYS)  # single source of truth for config
 # Candle fetching + aggregation for the USDTNGN volume endpoints. Import-only
 # module (no side effects, no async), shared with debug.py so the OCHLV field
 # convention and NGT hour bucketing stay identical across both processes.
@@ -260,13 +261,11 @@ def parse_latest_csv() -> list[dict]:
 
 def parse_daily_log(date_str: Optional[str] = None) -> list[dict]:
     if date_str:
-        # Validate format and clamp to 30-day window
+        # Validate the format only. There is no age limit: any day still on disk
+        # can be read, and the monitor deletes days past ALERT_RECORD_RETENTION_DAYS.
         try:
-            requested = datetime.strptime(date_str, "%Y-%m-%d").replace(tzinfo=NIGERIAN_TZ)
+            datetime.strptime(date_str, "%Y-%m-%d")
         except ValueError:
-            return []
-        earliest = ngt_now() - timedelta(days=30)
-        if requested < earliest.replace(hour=0, minute=0, second=0, microsecond=0):
             return []
         target_date = date_str
     else:
@@ -509,7 +508,7 @@ def get_status():
 def get_history(date: Optional[str] = None):
     """
     Daily log for a given date, returned as JSON rows.
-    ?date=YYYY-MM-DD  — serve that day's file (max 30 days back; omit for today).
+    ?date=YYYY-MM-DD  — serve that day's file (any day still on disk; omit for today).
     Rows are in file order (oldest-first); the dashboard reverses for newest-first display.
     """
     resolved_date = date or ngt_now().strftime("%Y-%m-%d")
@@ -547,7 +546,10 @@ def get_history(date: Optional[str] = None):
 # and the few remaining loops run over already-aggregated frames whose row count
 # is bounded by the number of issue ids (13) or markets (~55), never by cycles.
 
-MAX_ANALYSIS_DAYS  = 30    # mirrors parse_daily_log's clamp
+# Widest span one request may read; NOT an age limit. Bounded by the VM's memory:
+# a busy day is ~33k rows, and the whole range is held in memory at once. Wider
+# ranges are served as a raw download instead (/api/alert-log/download).
+MAX_ANALYSIS_DAYS  = 30
 EPISODE_GAP_CYCLES = 2     # a run survives up to this many missing cycles
 _SEVERITY_RANK     = {"MEDIUM": 1, "HIGH": 2, "CRITICAL": 3}
 _RANK_TO_SEV       = {v: k for k, v in _SEVERITY_RANK.items()}
@@ -566,9 +568,10 @@ def _parse_analysis_range(start: Optional[str], end: Optional[str]):
     Resolve ?start=/?end= (YYYY-MM-DD, NGT) into inclusive date bounds.
 
     Defaults to the trailing 7 days ending today. Rejects a malformed date, an
-    inverted range, and a span or age beyond MAX_ANALYSIS_DAYS — the same 30-day
-    wall parse_daily_log enforces, applied to both edges so a caller can't reach
-    past retention from either side.
+    inverted range, and a span wider than MAX_ANALYSIS_DAYS. There is no age
+    limit: a range can sit anywhere in the retained history, and days already
+    deleted (past ALERT_RECORD_RETENTION_DAYS) simply come back as missing. The
+    span cap is a memory bound; the dashboard offers the raw download beyond it.
     """
     today = ngt_now().date()
 
@@ -587,17 +590,15 @@ def _parse_analysis_range(start: Optional[str], end: Optional[str]):
     span = (end_d - start_d).days + 1
     if span > MAX_ANALYSIS_DAYS:
         raise HTTPException(status_code=400,
-                            detail=f"range spans {span} days; max is {MAX_ANALYSIS_DAYS}")
-    if (today - start_d).days >= MAX_ANALYSIS_DAYS:
-        raise HTTPException(status_code=400,
-                            detail=f"start is beyond the {MAX_ANALYSIS_DAYS}-day retention window")
+                            detail=f"range spans {span} days; the dashboard shows up to "
+                                   f"{MAX_ANALYSIS_DAYS} — download the raw log for wider ranges")
     return start_d, end_d
 
 
-def _load_alert_frame(start_d, end_d, with_depth=False):
+def _load_alert_frame(start_d, end_d):
     """
-    Concat every daily log in [start_d, end_d] into one frame carrying a real
-    datetime, and report which dates were present.
+    Read every daily log in [start_d, end_d] into one compact frame carrying a
+    real datetime, and report which dates were present.
 
     The log stores only HH:MM:SS, so the date has to come from the filename —
     that's the only reason days are read one file at a time rather than globbed.
@@ -606,24 +607,30 @@ def _load_alert_frame(start_d, end_d, with_depth=False):
     but empty" both legitimately mean "no alerts that day" and are reported the
     same way.
 
-    Only the three columns the analysis needs are parsed by default. Depth is
-    the widest column in the file and the aggregates never read it, so it is
-    opt-in: `with_depth` is for the alert-log endpoint, which shows it on the
-    handful of rows in the page it returns.
+    MEMORY is what bounds how wide a range can be, so no string survives past its
+    own day. Each day's Market and Issues are factorised on the spot and mapped
+    into range-wide code tables, so the concatenated frame is a datetime plus a
+    few small integers per row — around 20 bytes, where carrying the raw strings
+    cost ~200. Depth, the widest column, is not read here at all: _log_rows
+    fetches it from the day-file for just the rows it returns, using `_src_row`
+    (the row's position in its day-file) and `_date`.
 
     Both string-heavy steps run over UNIQUE values and are broadcast back
-    through an inverse index, which is the single biggest win available here.
-    A day holds at most ~1440 distinct clock times and ~55 distinct market names
-    across tens of thousands of rows, so parsing the uniques turns two multi-
-    second passes into two instant ones.
+    through an inverse index. A day holds at most ~1440 distinct clock times and
+    ~55 distinct market names across tens of thousands of rows, so parsing the
+    uniques turns two multi-second passes into two instant ones.
 
     pd.factorize rather than np.unique for the uniquing: np.unique on an object
-    array sorts it, which means comparing Python strings pairwise, and that
-    measured as the largest single cost in the whole endpoint. factorize hashes
-    instead, and nothing downstream needs the categories in sorted order — every
-    output list is sorted explicitly where it is built.
+    array sorts it, which means comparing Python strings pairwise. factorize
+    hashes instead, and nothing downstream needs the categories in sorted order —
+    every output list is sorted explicitly where it is built.
     """
-    frames, found, missing = [], [], []
+    ts_parts, mkt_parts, iss_parts, date_parts, row_parts = [], [], [], [], []
+    # Market names are normalised on the uniques before being coded: two
+    # spellings that differ only in case or padding must collapse to ONE code.
+    mkt_index: dict = {}
+    iss_index: dict = {}
+    found, missing = [], []
     d = start_d
     while d <= end_d:
         ds   = d.strftime("%Y-%m-%d")
@@ -631,42 +638,48 @@ def _load_alert_frame(start_d, end_d, with_depth=False):
         df   = None
         if path.exists():
             try:
-                cols = ["Timestamp", "Market", "Issues"]
-                if with_depth:
-                    cols.append("Depth")
-                df = pd.read_csv(path, usecols=lambda c: c in cols, dtype=str)
+                df = pd.read_csv(path, dtype=str,
+                                 usecols=lambda c: c in ("Timestamp", "Market", "Issues"))
             except Exception:
                 df = None
-        if df is not None and not df.empty:
-            df["_date"] = ds
+        if df is not None and not df.empty and {"Timestamp", "Market", "Issues"} <= set(df.columns):
             codes, uniq = pd.factorize(df["Timestamp"].fillna(""))
-            parsed = pd.to_datetime(pd.Series([f"{ds} {u}" for u in uniq]),
+            parsed = pd.to_datetime(pd.Series([f"{ds} {u}" for u in uniq], dtype=object),
                                     format="%Y-%m-%d %H:%M:%S", errors="coerce")
-            df["ts"] = parsed.to_numpy()[codes]
-            frames.append(df)
+            ts   = parsed.to_numpy()[codes]
+            keep = ~pd.isna(ts)
+
+            mc, mu = pd.factorize(df["Market"].fillna(""))
+            mmap = np.array([mkt_index.setdefault(str(x).strip().lower(), len(mkt_index))
+                             for x in mu], dtype=np.int32)
+            ic, iu = pd.factorize(df["Issues"].fillna(""))
+            imap = np.array([iss_index.setdefault(str(x), len(iss_index)) for x in iu],
+                            dtype=np.int32)
+            del df
+
+            ts_parts.append(ts[keep])
+            mkt_parts.append(mmap[mc][keep])
+            iss_parts.append(imap[ic][keep])
+            row_parts.append(np.flatnonzero(keep).astype(np.int32))
+            date_parts.append(np.full(int(keep.sum()), len(found), dtype=np.int32))
             found.append(ds)
         else:
             missing.append(ds)
         d += timedelta(days=1)
 
-    if not frames:
+    if not ts_parts or sum(len(t) for t in ts_parts) == 0:
         return pd.DataFrame(), found, missing
 
-    all_df = pd.concat(frames, ignore_index=True)
-    all_df = all_df.dropna(subset=["ts"]).reset_index(drop=True)
-    if all_df.empty:
-        return pd.DataFrame(), found, missing
-
-    # Market names are normalised on the uniques, then re-uniqued: two spellings
-    # that differ only in case or padding must collapse to ONE category, which a
-    # straight rename_categories would reject as a duplicate.
-    inv, seen  = pd.factorize(all_df["Market"].fillna(""))
-    normed     = pd.Index([str(x).strip().lower() for x in seen])
-    inv2, cats = pd.factorize(normed)
-    all_df["market"] = pd.Categorical.from_codes(inv2[inv], categories=cats)
-
-    all_df["Issues"] = all_df["Issues"].fillna("").astype(str)
-    all_df["_date"]  = all_df["_date"].astype("category")
+    all_df = pd.DataFrame({
+        "ts":       np.concatenate(ts_parts),
+        "market":   pd.Categorical.from_codes(np.concatenate(mkt_parts),
+                                              categories=pd.Index(list(mkt_index), dtype=object)),
+        "Issues":   pd.Categorical.from_codes(np.concatenate(iss_parts),
+                                              categories=pd.Index(list(iss_index), dtype=object)),
+        "_date":    pd.Categorical.from_codes(np.concatenate(date_parts),
+                                              categories=pd.Index(found, dtype=object)),
+        "_src_row": np.concatenate(row_parts),
+    })
     return all_df, found, missing
 
 
@@ -738,25 +751,32 @@ def _explode_issues(all_df: pd.DataFrame):
         return pd.DataFrame(empty_cols)
     tok_index = {t: i for i, t in enumerate(vocab)}
 
-    widths  = np.array([len(l) for l in tok_lists], dtype=np.int64)
-    offsets = np.concatenate([[0], np.cumsum(widths)])
+    # int32 throughout: a year of busy logs is ~2*10^7 exploded rows, and each
+    # int64 temporary at that size is 160 MB the VM does not have. Temporaries
+    # are dropped as soon as they are consumed for the same reason.
+    widths  = np.array([len(l) for l in tok_lists], dtype=np.int32)
+    offsets = np.concatenate([[0], np.cumsum(widths)]).astype(np.int32)
     flat    = np.fromiter((tok_index[t] for lst in tok_lists for t in lst),
                           dtype=np.int32, count=int(widths.sum()))
 
     rep   = widths[cc]
-    total = int(rep.sum())
+    total = int(rep.sum(dtype=np.int64))
     if total == 0:
         return pd.DataFrame(empty_cols)
-    row_idx   = np.repeat(np.arange(len(cc)), rep)
-    run_start = np.repeat(np.cumsum(rep) - rep, rep)
-    within    = np.arange(total) - run_start
-    tok_codes = flat[np.repeat(offsets[cc], rep) + within]
+    row_idx   = np.repeat(np.arange(len(cc), dtype=np.int32), rep)
+    tok_codes = np.arange(total, dtype=np.int32)
+    tok_codes -= np.repeat((np.cumsum(rep, dtype=np.int32) - rep), rep)   # position within the row
+    tok_codes += np.repeat(offsets[cc], rep)                               # + the row's combo offset
+    del rep
+    tok_codes = flat[tok_codes]
 
     issue_names = np.array([t.split(":", 1)[0].strip() for t in vocab], dtype=object)
     sev_names   = np.array([t.split(":", 1)[1].strip().upper() if ":" in t else ""
                             for t in vocab], dtype=object)
     issue_cats, issue_of_tok = np.unique(issue_names, return_inverse=True)
     sev_cats,   sev_of_tok   = np.unique(sev_names,   return_inverse=True)
+    issue_of_tok = issue_of_tok.astype(np.int16)   # gathered to every row below
+    sev_of_tok   = sev_of_tok.astype(np.int16)
     rank_of_tok = np.array([_sev_rank(s) for s in sev_names], dtype=np.int16)
 
     mkt = all_df["market"]
@@ -847,7 +867,10 @@ def _build_episodes(ex: pd.DataFrame, cycle_s: float, gap_cycles: int) -> pd.Dat
         "detections": (ends - starts + 1).astype("int64"),
         "peak_rank":  peak,
         "first_rank": first,
-        "severity":   sev_labels[peak],
+        # Categorical, not an object array: a noisy range can stitch millions of
+        # episodes, and one Python pointer per row is memory the VM lacks.
+        "severity":   pd.Categorical.from_codes(peak.astype(np.int16),
+                                                categories=pd.Index(sev_labels)),
         "escalated":  peak > first,
     })
     eps["duration_min"] = (eps["end_s"] - eps["start_s"] + cycle_s) / 60.0
@@ -873,7 +896,7 @@ def get_alert_analysis(start: Optional[str] = None,
     Aggregate alert analytics across a date range of daily logs.
 
     ?start=&end=   YYYY-MM-DD, NGT, inclusive. Defaults to the trailing 7 days.
-                   Max span and max age are both MAX_ANALYSIS_DAYS.
+                   Max span is MAX_ANALYSIS_DAYS; any start date is allowed.
     ?gap_cycles=   missing cycles an episode survives before it's split (0-10).
 
     Aggregation happens here rather than in the browser for a blunt reason: a
@@ -1095,9 +1118,9 @@ def get_alert_analysis(start: Optional[str] = None,
 # the browser receives one page at a time and never the range.
 
 _LOG_PAGE_SIZES = (50, 100, 200, 500)
-# Widest range the sign-off tab will read at once. Not a retention limit — the
-# ledger is kept forever — just a bound on how many day-files one request can
-# open, so a mistyped year asks for three years rather than three thousand.
+# Widest range the sign-off tab will read at once. Not a retention limit (that is
+# ALERT_RECORD_RETENTION_DAYS) — just a bound on how many day-files one request
+# can open, so a mistyped year asks for three years rather than three thousand.
 MAX_LEDGER_SPAN_DAYS = 1100
 _LOG_CSV_MAX    = 250_000   # rows; a whole busy month is ~4x this
 # Sign-off CSV only: an alert that closed this fast is noise in an accountability
@@ -1161,7 +1184,7 @@ def get_alert_log(start: Optional[str] = None,
     page_size = page_size if page_size in _LOG_PAGE_SIZES else 50
     page      = max(0, int(page))
 
-    all_df, found, missing = _load_alert_frame(start_d, end_d, with_depth=True)
+    all_df, found, missing = _load_alert_frame(start_d, end_d)
     coverage = {
         "start":              start_d.strftime("%Y-%m-%d"),
         "end":                end_d.strftime("%Y-%m-%d"),
@@ -1230,17 +1253,27 @@ def _log_rows(ex: pd.DataFrame, all_df: pd.DataFrame, idx, tiers) -> list[dict]:
     """
     Materialise the selected exploded rows.
 
-    Depth is looked up here rather than carried through the explode: it's the
-    widest column in the file and only the handful of rows actually being
-    returned need it. `_row` is the position of each detection's source row in
-    all_df, which _explode_issues keeps for exactly this.
+    Depth is read here, from the day-files, rather than loaded with the range:
+    it's the widest column in the file and only the rows actually being returned
+    need it. `_row` is each detection's row in all_df, whose `_src_row` is that
+    row's position in its own day-file — so one read of the Depth column per day
+    touched fills the whole selection.
     """
     if len(idx) == 0:
         return []
     sub   = ex.iloc[idx]
-    src   = sub["_row"].to_numpy()
-    depth = (all_df["Depth"].to_numpy()[src] if "Depth" in all_df.columns
-             else np.full(len(src), ""))
+    src   = all_df["_src_row"].to_numpy()[sub["_row"].to_numpy()]
+    days  = sub["_date"].astype(str).to_numpy()
+    depth = np.full(len(src), "", dtype=object)
+    for ds in pd.unique(days):
+        at = np.flatnonzero(days == ds)
+        try:
+            col = pd.read_csv(DATA_DIR / f"daily_log_{ds}.csv", dtype=str,
+                              usecols=["Depth"])["Depth"].to_numpy()
+            ok  = src[at] < len(col)
+            depth[at[ok]] = col[src[at[ok]]]
+        except Exception:
+            pass                            # file gone or unreadable: blank depth
     ts    = sub["ts"].dt.strftime("%Y-%m-%d %H:%M:%S").tolist()
     return [{
         "ts":       t,
@@ -1252,6 +1285,84 @@ def _log_rows(ex: pd.DataFrame, all_df: pd.DataFrame, idx, tiers) -> list[dict]:
     } for t, m, i, sv, tr, d in zip(
         ts, sub["market"].astype(str), sub["issue"].astype(str),
         sub["severity"].astype(str), tiers[idx], depth)]
+
+
+def _daily_log_csv_stream(days_paths):
+    """
+    Yield the daily logs for a range as ONE CSV, a day at a time, so memory stays
+    flat however many days are asked for.
+
+    The files store only HH:MM:SS, so a Date column is prepended from each
+    filename; otherwise rows go out byte-for-byte as the monitor wrote them. The
+    header is taken from the NEWEST file, i.e. the current format. A day whose
+    header differs (a file written before a column change) is re-mapped onto it
+    through the csv module rather than copied, so no row ever lands under the
+    wrong column.
+    """
+    header = None
+    for _, path in reversed(days_paths):
+        try:
+            with open(path, encoding="utf-8", newline="") as f:
+                header = f.readline().rstrip("\r\n") or None
+        except OSError:
+            continue
+        if header:
+            break
+    if not header:
+        return
+    yield f"Date,{header}\n"
+    for ds, path in days_paths:
+        try:
+            with open(path, encoding="utf-8", newline="") as f:
+                first = f.readline().rstrip("\r\n")
+                if not first:
+                    continue
+                if first == header:
+                    buf = []
+                    for line in f:
+                        line = line.rstrip("\r\n")
+                        if line:
+                            buf.append(f"{ds},{line}\n")
+                        if len(buf) >= 5000:
+                            yield "".join(buf)
+                            buf = []
+                    if buf:
+                        yield "".join(buf)
+                else:
+                    cols = next(csv.reader([header]))
+                    out  = io.StringIO()
+                    w    = csv.writer(out, lineterminator="\n")
+                    for row in csv.DictReader(f, fieldnames=next(csv.reader([first]))):
+                        w.writerow([ds] + [row.get(c, "") or "" for c in cols])
+                    yield out.getvalue()
+        except OSError:
+            continue                        # deleted by the retention sweep mid-download
+
+
+@app.get("/api/alert-log/download")
+def download_alert_log(start: Optional[str] = None, end: Optional[str] = None):
+    """
+    Every daily log in a range as a single CSV, oldest day first, with a Date
+    column added in front.
+
+    For ranges wider than MAX_ANALYSIS_DAYS, which the dashboard will not load.
+    The files are streamed from disk rather than parsed into a frame, so the range
+    can span everything retained (ALERT_RECORD_RETENTION_DAYS) without touching
+    memory. Days with no file (quiet, or already deleted) are simply absent.
+    """
+    start_d, end_d = _parse_ledger_range(start, end)
+    days_paths, d = [], start_d
+    while d <= end_d:
+        ds   = d.strftime("%Y-%m-%d")
+        path = DATA_DIR / f"daily_log_{ds}.csv"
+        if path.exists():
+            days_paths.append((ds, path))
+        d += timedelta(days=1)
+    if not days_paths:
+        raise HTTPException(status_code=404, detail="no daily log files in this range")
+    name = f"daily_log_{start_d:%Y-%m-%d}_to_{end_d:%Y-%m-%d}.csv"
+    return StreamingResponse(_daily_log_csv_stream(days_paths), media_type="text/csv",
+                             headers={"Content-Disposition": f'attachment; filename="{name}"'})
 
 
 def _log_csv_response(rows: list[dict], start_d, end_d):
@@ -1444,15 +1555,21 @@ def load_ledger(start_d, end_d) -> dict:
 
 
 def load_ledger_actions() -> dict:
-    """Read alert_ledger_actions.json -> {fire_id: {...}}. Missing/corrupt -> {}."""
+    """
+    Read alert_ledger_actions.json -> {fire_id: {...}}. Missing/corrupt -> {}.
+    Entries older than ALERT_RECORD_RETENTION_DAYS are dropped (see note below).
+    """
     if not LEDGER_ACTIONS_FILE.exists():
         return {}
     try:
         with open(LEDGER_ACTIONS_FILE, encoding="utf-8") as f:
             data = json.load(f)
-        return data if isinstance(data, dict) else {}
     except Exception:
         return {}
+    if not isinstance(data, dict):
+        return {}
+    cutoff = (ngt_now() - timedelta(days=ALERT_RECORD_RETENTION_DAYS)).strftime("%Y-%m-%d")
+    return {fid: v for fid, v in data.items() if str(fid)[:10] >= cutoff}
 
 
 def save_ledger_actions(data: dict):
@@ -1461,18 +1578,16 @@ def save_ledger_actions(data: dict):
         json.dump(data, f, indent=2)
 
 
-# NOTE: sign-offs are kept FOREVER, deliberately — there is no prune here.
+# Sign-offs expire on EXACTLY the cutoff the monitor uses to delete the ledger
+# day-files (ALERT_RECORD_RETENTION_DAYS), and must never outlive or predecease
+# them by more than that. An earlier version dropped sign-offs on their own, shorter
+# clock, which made surviving rows come back looking like nobody ever actioned
+# them. Keyed by fire id, whose first 10 characters are the fire's NGT date, so
+# the age test needs no join against the ledger.
 #
-# An earlier version dropped them by age. That was wrong, and wrong in a way that
-# quietly destroys the record: the fires they attach to are never deleted (nothing
-# in this codebase sweeps the ledger day-files or daily_log_*.csv), so an expired
-# sign-off does not make a row disappear — it makes the row come back looking like
-# nobody ever actioned it. An accountability log that forgets who handled something
-# while remembering that it happened is worse than no log.
-#
-# The cost of keeping them is nil. An entry is a fire id and three short strings;
-# a day of signing off everything is well under a kilobyte, so this file measures
-# in megabytes after years.
+# load_ledger_actions filters expired entries out, so they are never served, and
+# every save_ledger_actions writes that filtered view back — the file sheds them
+# on the next sign-off.
 
 
 def _fmt_ts(iso: Optional[str]) -> str:
@@ -1614,19 +1729,15 @@ _LEDGER_STATUSES = ("all", "pending", "acknowledged", "open")
 def _parse_ledger_range(start: Optional[str], end: Optional[str]):
     """
     Resolve ?start=/?end= for the ledger. Same shape as _parse_analysis_range,
-    WITHOUT its 30-day wall — deliberately, and only here.
+    but with a far wider span cap.
 
-    That wall exists because the analysis tabs read daily_log_*.csv, where a
-    30-day range is ~10^6 detections and a wider one is a way to hang the box.
-    This endpoint reads the ledger, which is a few hundred rows a month, so the
-    same limit protects nothing and only makes older sign-offs unreadable. Since
-    sign-offs are now kept permanently (see the note above load_ledger_actions),
-    the log has to be readable for as long as it is kept, or keeping it is
-    pointless.
+    The analysis tabs cap a request at MAX_ANALYSIS_DAYS because they read
+    daily_log_*.csv, where a 30-day range is ~10^6 detections. This endpoint reads
+    the ledger, a few hundred rows a month, so a whole retained year fits in one
+    request. Neither has an age limit — both read as far back as the files go.
 
-    The presets in the page still stop at 30 days; this is what lets a TYPED date
-    go further. An inverted range is still rejected, and the span is still bounded
-    — generously — so a mistyped year cannot ask for every day-file ever written.
+    An inverted range is still rejected, and the span is still bounded so a
+    mistyped year cannot ask for thousands of day-files.
     """
     today = ngt_now().date()
 
@@ -1662,8 +1773,8 @@ def get_alert_ledger(start: Optional[str] = None,
     """
     Alerts delivered to Telegram in a date range, with their sign-offs.
 
-    ?start=&end=   YYYY-MM-DD, NGT, inclusive. NOT subject to the 30-day wall the
-                   analysis tabs carry — see _parse_ledger_range for why.
+    ?start=&end=   YYYY-MM-DD, NGT, inclusive. span may reach MAX_LEDGER_SPAN_DAYS,
+                   not the analysis tabs' 30 — see _parse_ledger_range for why.
     ?market=       exact symbol, lowercased, or "_global" for E1/E2.
     ?issue=        exact issue id (B1, A2, …).
     ?status=       all | pending | acknowledged | open. Defaults to **all**; the

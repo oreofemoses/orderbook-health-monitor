@@ -647,7 +647,7 @@ The engine and the API cooperate via files on shared disk. There is no database.
 | File | Written by | Read by | Contents |
 |---|---|---|---|
 | `latest.csv` | engine, end of every cycle | API | One row per pair, current cycle's full metrics |
-| `daily_log_{YYYY-MM-DD}.csv` | engine, append-only | API | One row per warning market per cycle (healthy pairs skipped) |
+| `daily_log_{YYYY-MM-DD}.csv` | engine, append-only; deleted after 365 days | API | One row per warning market per cycle (healthy pairs skipped) |
 | `health_state.json` | engine, after external sends | API | Per-pair cooldowns, consecutive counters, rolling histories (reference prices, volume, layer churn), last observed mid + timestamp, global cooldowns |
 | `monitor_config.json` | API, on config edit | engine | Threshold overrides (partial doc; layered over shared defaults) |
 | `pair_volume_hourly.json` | engine, hourly loop | API | Per-pair hourly volume (base, close, quote) — D1's seasonal baseline. Backfills ~12.5 days from the k-line API on cold start; everything older exists only here |
@@ -706,7 +706,7 @@ The dashboard is a single-page HTML/JS app polling the API on a fixed interval. 
 | Endpoint | Poll interval | Purpose |
 |---|---|---|
 | `GET /api/status` | 60 s | Current cycle: all pairs with their metrics + a summary block |
-| `GET /api/history` | 60 s | Today's daily log (or a specified date, up to 30 days back) |
+| `GET /api/history` | 60 s | Today's daily log (or any specified date still retained — one year) |
 | `GET /api/state` | on-demand | Raw state for debugging / detail panel |
 | `GET /api/config` | on config panel open | Merged config for the edit form |
 | `POST /api/config` | on save | Persist edited config |
