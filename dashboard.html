@@ -368,6 +368,13 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
 .mr-badge.blue { background: var(--blue-bg);  color: var(--blue-text);  }
 .mr-badge.muted{ background: var(--bg-base);  color: var(--text-muted); border: 1px solid var(--border-strong); }
 
+.mr-book {
+  flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center;
+  width: 28px; height: 28px; border-radius: 6px; font-size: 15px;
+  color: var(--text-muted); border: 1px solid var(--border); text-decoration: none;
+  transition: background .15s, color .15s, border-color .15s;
+}
+.mr-book:hover { background: var(--accent-light); color: var(--accent); border-color: var(--accent); }
 .mr-chevron { color: var(--text-muted); font-size: 16px; flex-shrink: 0; transition: transform .15s; }
 .market-row:hover .mr-chevron { transform: translateX(2px); color: var(--text-secondary); }
 .market-row.selected .mr-chevron { color: var(--accent); transform: rotate(90deg); }
@@ -2337,6 +2344,12 @@ function symParts(symbol) {
   return { base: base + "/" + quote, raw: s };
 }
 
+// Quidax Pro trade page for a market, e.g. "qdxngn" → .../trade/QDX_NGN
+function quidaxTradeUrl(symbol) {
+  const pair = symParts(symbol).base.replace("/", "_");
+  return `https://pro.quidax.io/en_US/trade/${encodeURIComponent(pair)}`;
+}
+
 // ── Fetch ─────────────────────────────────────────────────────────────────────
 async function fetchAndRender() {
   const pulse  = document.getElementById("pulse");
@@ -2724,6 +2737,10 @@ function renderMarketRow(p) {
       <div class="mr-price-label">Spread</div>
     </div>
     <div class="mr-issues">${primaryBadge}${issuesBadgesHtml}</div>
+    <a class="mr-book" href="${quidaxTradeUrl(p.symbol)}" target="_blank" rel="noopener noreferrer"
+       onclick="event.stopPropagation()" title="Open ${base} order book on Quidax" aria-label="Open ${base} order book on Quidax">
+      <i class="ti ti-external-link"></i>
+    </a>
     <i class="ti ti-chevron-right mr-chevron"></i>
   </div>`;
 }
@@ -3186,7 +3203,13 @@ function renderDetailPanel(p) {
         <div class="detail-sym">${base}</div>
         <div class="detail-time">${p.timestamp ? p.timestamp.split(" ").pop() : ngtTime()} WAT</div>
       </div>
-      <span class="mr-badge ${statusBadgeCls}" style="font-size:12px;padding:4px 12px">${statusText}</span>
+      <div style="display:flex;align-items:center;gap:8px">
+        <span class="mr-badge ${statusBadgeCls}" style="font-size:12px;padding:4px 12px">${statusText}</span>
+        <a class="btn" href="${quidaxTradeUrl(p.symbol)}" target="_blank" rel="noopener noreferrer"
+           style="text-decoration:none" title="Open ${base} order book on Quidax">
+          <i class="ti ti-external-link"></i> Order book
+        </a>
+      </div>
     </div>
     ${telegramCaption ? `<div style="font-size:11px;color:var(--text-muted);margin:-6px 0 14px">${telegramCaption}</div>` : ""}
     <div class="detail-metrics">
