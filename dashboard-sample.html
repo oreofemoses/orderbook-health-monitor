@@ -372,6 +372,26 @@ a.btn { text-decoration: none; }
 .chip.ok { background: none; color: var(--text-3); font-weight: 500; padding: 0; }
 .chip.good { background: var(--green-soft); color: var(--green-text); }
 
+.col-ob { width: 1%; padding-left: 0 !important; }
+.ob-link { width: 26px; height: 26px; border-radius: 6px; display: grid; place-items: center; color: var(--text-3); }
+@media (hover: hover) and (pointer: fine) { .ob-link:hover { color: var(--text); background: var(--gray-soft); } }
+
+/* Cycle progress: fixed to the viewport so it can never reflow the page.
+   Moves on transform only; eases out toward each checkpoint so a long phase
+   reads as progress rather than a stalled countdown. */
+.progress { position: fixed; top: 0; left: 0; right: 0; height: 2px; z-index: 99; pointer-events: none; opacity: 0; transition: opacity 200ms ease; }
+.progress.on { opacity: 1; }
+.progress i { display: block; height: 100%; background: var(--accent); transform: scaleX(0); transform-origin: left; transition: transform 400ms var(--ease-out); }
+.progress.error i { background: var(--red); }
+
+/* Spread over the session: a functional graph, so no animation. */
+.spark { margin-bottom: 18px; }
+.spark svg { display: block; width: 100%; height: 56px; overflow: visible; }
+.spark .line { fill: none; stroke: var(--accent); stroke-width: 1.5; vector-effect: non-scaling-stroke; }
+.spark .tgt { stroke: var(--text-3); stroke-width: 1; stroke-dasharray: 3 3; vector-effect: non-scaling-stroke; }
+.spark .dot { fill: var(--accent); }
+.spark-meta { display: flex; justify-content: space-between; font-size: 0.6875rem; color: var(--text-3); margin-top: 4px; }
+.spark-empty { font-size: 0.75rem; color: var(--text-3); padding: 10px 12px; border-radius: 8px; box-shadow: 0 0 0 1px var(--hairline); }
 .tg { display: inline-flex; align-items: center; gap: 5px; font-size: 0.75rem; color: var(--text-3); }
 .tg.sent { color: var(--text); }
 .tg.sent svg { color: var(--accent); }
@@ -741,7 +761,11 @@ a.btn { text-decoration: none; }
 .hold.holding { color: var(--red-text); }
 
 /* ─── Narrow screens ─────────────────────────────────────── */
+/* Columns leave in order of how much the detail panel already repeats them:
+   depth, then Telegram state and the order-book link, then mid price. */
 @media (max-width: 1360px) { .col-depth { display: none; } }
+@media (max-width: 1240px) { .col-tg, .col-ob { display: none; } }
+@media (max-width: 1100px) { .col-mid { display: none; } }
 .scrim { display: none; }
 @media (max-width: 1100px) {
   .charts, .two { grid-template-columns: minmax(0, 1fr); }
@@ -749,7 +773,7 @@ a.btn { text-decoration: none; }
 }
 @media (max-width: 960px) {
   .grid { grid-template-columns: minmax(0, 1fr); }
-  .col-tg { display: none; }
+  .col-tg, .col-ob { display: none; }
   .detail {
     position: fixed; left: 0; right: 0; bottom: 0; top: auto; z-index: 50;
     max-height: 86vh; border-radius: 16px 16px 0 0;
@@ -812,6 +836,7 @@ a.btn { text-decoration: none; }
   .toast, .toast[data-leaving="true"] { transform: none; transition: opacity 200ms ease; }
   .explain summary svg, .how svg, .more svg { transition: none; }
   .switch input::after { transition: none; }
+  .progress i { transition: none; }
   .switch input:active:not(:disabled)::after { transform: none; }
   .switch input:checked:active:not(:disabled)::after { transform: translateX(12px); }
   .cfg { transform: none; opacity: 0; transition: opacity 200ms ease, visibility 0s linear 200ms; }
@@ -878,6 +903,7 @@ a.btn { text-decoration: none; }
                 <th class="r col-depth">Depth bid / ask</th>
                 <th>Issues</th>
                 <th class="col-tg">Telegram</th>
+                <th class="col-ob"><span hidden>Order book</span></th>
               </tr>
             </thead>
             <tbody id="rows"></tbody>
@@ -1010,6 +1036,7 @@ a.btn { text-decoration: none; }
     </div>
 
     <div id="aa-body">
+      <div class="notice neutral" id="aa-empty" hidden>No alerts were logged in this range.</div>
       <div class="kpis">
         <div class="kpi"><div class="kpi-k">Alert episodes</div><div class="kpi-v num" id="a-ep">—</div><div class="kpi-s" id="a-ep-s">distinct runs</div></div>
         <div class="kpi"><div class="kpi-k">Detections</div><div class="kpi-v num" id="a-det">—</div><div class="kpi-s" id="a-det-s">issue × market × cycle</div></div>
@@ -1057,7 +1084,7 @@ a.btn { text-decoration: none; }
             </select>
             <select class="select" id="log-market" aria-label="Market"><option value="">All markets</option></select>
             <select class="select" id="log-alert" aria-label="Alert type"><option value="">All alert types</option></select>
-            <select class="select" id="log-size" aria-label="Rows per page"><option value="50">50 rows</option><option value="100">100 rows</option><option value="200">200 rows</option></select>
+            <select class="select" id="log-size" aria-label="Rows per page"><option value="50">50 rows</option><option value="100">100 rows</option><option value="200">200 rows</option><option value="500">500 rows</option></select>
             <span class="muted num" id="log-tiers">—</span>
           </div>
           <div class="dt-wrap"><table class="dt">
@@ -1103,7 +1130,7 @@ a.btn { text-decoration: none; }
       <div class="filters">
         <select class="select" id="so-market" aria-label="Market"><option value="">All markets</option></select>
         <select class="select" id="so-alert" aria-label="Alert type"><option value="">All alert types</option></select>
-        <select class="select" id="so-size" aria-label="Rows per page"><option value="50">50 rows</option><option value="100">100 rows</option><option value="200">200 rows</option></select>
+        <select class="select" id="so-size" aria-label="Rows per page"><option value="50">50 rows</option><option value="100">100 rows</option><option value="200">200 rows</option><option value="500">500 rows</option></select>
       </div>
       <div class="dt-wrap"><table class="dt led">
         <thead><tr>
@@ -1142,6 +1169,7 @@ a.btn { text-decoration: none; }
 <div class="scrim" id="scrim"></div>
 <div class="tip" id="tip" role="tooltip"></div>
 <div class="toaster" id="toaster" aria-live="polite"></div>
+<div class="progress" id="progress" aria-hidden="true"><i></i></div>
 
 <script>
 // ══════════════════════════════════════════════════════════════════════════════
@@ -1586,6 +1614,7 @@ function rowHTML(p, i) {
     <td class="r num col-depth">${esc(p.depth_bid || "—")} <span class="muted">/</span> ${esc(p.depth_ask || "—")}</td>
     <td><div class="chips">${chips}</div></td>
     <td class="col-tg"><span class="tg ${tg.sent ? "sent" : ""}">${tg.sent ? sendIcon(12) : ""}${esc(tg.text)}</span></td>
+    <td class="col-ob"><a class="ob-link pressable" href="${quidaxUrl(p.symbol)}" target="_blank" rel="noopener noreferrer" title="Open ${esc(base)}/${esc(quote)} order book on Quidax" aria-label="Open ${esc(base)}/${esc(quote)} order book on Quidax"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 17 17 7"/><path d="M8 7h9v9"/></svg></a></td>
   </tr>`;
 }
 function renderRows() {
@@ -1646,16 +1675,55 @@ function renderDetail() {
       ${metric("DWS", p.dws == null ? "—" : Number(p.dws).toFixed(3), p.dws > (p.dws_threshold ?? Infinity) ? "warn" : "")}
       ${metric("Imbalance", p.imbalance_ratio == null ? "—" : Number(p.imbalance_ratio).toFixed(2) + "×")}
     </div>
+    ${sparkHTML(p)}
     ${issueCards(p, tg)}
     <div class="section-k">Book</div>
     <dl class="kv num">
       <dt>Depth bid / ask</dt><dd>${esc(p.depth_bid || "—")} / ${esc(p.depth_ask || "—")}</dd>
       <dt>Layers ask / bid</dt><dd>${p.ask_layers ?? "—"} / ${p.bid_layers ?? "—"}</dd>
-      <dt>Reference price</dt><dd>${fmtPrice(p.trusted_ref)}</dd>
+      <dt>Reference price</dt><dd>${fmtPrice(p.trusted_ref)}${num(p.trusted_ref) && num(p.mid_price) !== null ? ` <span class="muted">(${pctS((num(p.mid_price) - num(p.trusted_ref)) / num(p.trusted_ref) * 100, 2, true)})</span>` : ""}</dd>
       <dt>Heavier side</dt><dd>${esc(p.heavier_side || "—")}</dd>
     </dl>
     <div class="hint"><span><span class="kbd">↑</span><span class="kbd">↓</span> move</span><span><span class="kbd">/</span> filter</span><span><span class="kbd">1</span>–<span class="kbd">4</span> views</span></div>
   `;
+}
+
+// ── Spread over the session ──────────────────────────────────────────────────
+// The current dashboard's spread chart, per market: one point per monitor cycle
+// since this page opened, up to the last 30, against the market's target. The
+// API keeps no spread history (the daily log stores issues only), so like the
+// original it builds while the page stays open.
+const spreadHist = {};
+function recordSpreads(d) {
+  (d.pairs || []).forEach(p => {
+    const v = num(p.current_spread);
+    if (v === null) return;
+    const h = spreadHist[p.symbol] || (spreadHist[p.symbol] = []);
+    if (h.length && h[h.length - 1].ts === p.timestamp) return;   // same cycle polled twice
+    h.push({ ts: p.timestamp, v });
+    if (h.length > 30) h.shift();
+  });
+}
+function sparkHTML(p) {
+  const h = spreadHist[p.symbol] || [];
+  const head = `<div class="section-k">Spread this session</div>`;
+  if (h.length < 2) return `<div class="spark">${head}<div class="spark-empty">Builds while this page stays open: one point per monitor cycle, up to the last 30.</div></div>`;
+  const tgt = num(p.target_spread);
+  const vals = h.map(o => o.v).concat(tgt !== null ? [tgt] : []);
+  let lo = Math.min(...vals), hi = Math.max(...vals);
+  const pad = (hi - lo) * 0.12 || Math.abs(hi) * 0.05 || 0.01;
+  lo -= pad; hi += pad;
+  const X = i => (i / (h.length - 1)) * 100, Y = v => 40 - ((v - lo) / (hi - lo)) * 40;
+  const pts = h.map((o, i) => `${X(i).toFixed(2)},${Y(o.v).toFixed(2)}`).join(" ");
+  const last = h[h.length - 1].v;
+  const time = ts => String(ts || "").split(" ").pop().slice(0, 5);
+  return `<div class="spark">${head}
+    <svg viewBox="0 0 100 40" preserveAspectRatio="none" role="img" aria-label="Spread over the last ${h.length} cycles, now ${pctS(last, 3)}${tgt !== null ? `, target ${pctS(tgt, 2)}` : ""}">
+      ${tgt !== null ? `<line class="tgt" x1="0" x2="100" y1="${Y(tgt).toFixed(2)}" y2="${Y(tgt).toFixed(2)}" />` : ""}
+      <polyline class="line" points="${pts}" />
+    </svg>
+    <div class="spark-meta num"><span>${h.length} cycles · since ${esc(time(h[0].ts))}</span><span>now ${pctS(last, 3)}${tgt !== null ? ` · target ${pctS(tgt, 2)} (dashed)` : ""}</span></div>
+  </div>`;
 }
 
 // ── Issue cards + other checks ───────────────────────────────────────────────
@@ -1927,9 +1995,10 @@ async function load({ manual = false } = {}) {
     const [d] = await Promise.all([res.json(), loadAcks()]);   // acks first, so switches never flash off
     data = d;
     source = "live";
+    recordSpreads(d);
   } catch (e) {
     err = e.message;
-    if (!data && SNAPSHOT) { data = SNAPSHOT; source = "sample"; err = null; }
+    if (!data && SNAPSHOT) { data = SNAPSHOT; source = "sample"; err = null; recordSpreads(data); }
   }
   if (data) {
     if (!selected || !data.pairs.some(p => p.symbol === selected)) {
@@ -1948,14 +2017,74 @@ async function load({ manual = false } = {}) {
     else toast("Up to date", `Last cycle ${data.summary?.last_updated || "unknown"}`);
   }
 }
+// ── Refresh: reload, then ask the monitor for a fresh cycle ──────────────────
+// Ported from refreshNow(). Reloading alone often redraws identical numbers
+// (the API serves the last cycle), so on the Overview, Refresh also asks the
+// monitor to run a cycle now and waits for it to land. The monitor is a
+// separate process: completion is detected by summary.last_updated moving.
+// Asking for a cycle is a write, so against production (read-only) Refresh
+// only reloads.
+const prog = $("progress");
+function progress(frac, { error = false } = {}) {
+  prog.classList.add("on");
+  prog.classList.toggle("error", error);
+  prog.firstElementChild.style.transform = `scaleX(${frac})`;
+}
+function progressEnd({ error = false } = {}) {
+  progress(1, { error });
+  // Reach 100% visibly, fade, then reset while invisible.
+  setTimeout(() => {
+    prog.classList.remove("on");
+    setTimeout(() => { prog.firstElementChild.style.transform = "scaleX(0)"; prog.classList.remove("error"); }, 220);
+  }, 350);
+}
+async function runCycle() {
+  const before = data && data.summary ? data.summary.last_updated : null;
+  progress(0.08);
+  await load();
+  progress(0.3);
+  let res;
+  try { res = await fetch(`${API}/api/request-cycle`, { method: "POST" }); }
+  catch (_) { toast("Offline", "Couldn’t reach the API to request a cycle.", { error: true }); progressEnd({ error: true }); return; }
+  if (res.status === 429) {
+    const b = await res.json().catch(() => ({}));
+    toast("A cycle is already queued", `Data reloaded. Next request possible in ~${b.retry_after_seconds ?? 20}s.`);
+    progressEnd(); return;
+  }
+  if (!res.ok) { toast("Reloaded", "The monitor didn’t accept a cycle request."); progressEnd(); return; }
+  const b = await res.json().catch(() => ({}));
+  if (b.monitor_stale) {
+    toast("Reloaded — monitor not running", "Nothing is picking up cycle requests, so no new cycle will land.", { error: true });
+    progressEnd({ error: true }); return;
+  }
+  // A cycle takes ~45–60s. The bar creeps 30→90% while we wait, and only
+  // reaches 100% when the new cycle actually arrives.
+  let frac = 0.3;
+  const creep = setInterval(() => { frac = Math.min(0.9, frac + 0.015); progress(frac); }, 900);
+  const deadline = Date.now() + 90_000;
+  let landed = false;
+  try {
+    while (Date.now() < deadline) {
+      await new Promise(r => setTimeout(r, 2000));
+      try {
+        const s = await getJSON(`${API}/api/status`);
+        if (s.summary && s.summary.last_updated && s.summary.last_updated !== before) { landed = true; break; }
+      } catch (_) { /* keep waiting until the deadline */ }
+    }
+  } finally { clearInterval(creep); }
+  if (landed) { await load(); toast("Cycle complete", `Last cycle ${data.summary?.last_updated || "unknown"}`); progressEnd(); }
+  else { toast("The cycle didn’t finish in time", "Data reloaded; it may still land on the next poll.", { error: true }); progressEnd({ error: true }); }
+}
+$("refresh-btn").title = CAN_WRITE ? "Reload, and ask the monitor to run a cycle now" : "Reload (read-only: can’t ask production to run a cycle)";
 $("refresh-btn").addEventListener("click", async () => {
   const btn = $("refresh-btn");
-  if (btn.getAttribute("aria-busy") === "true") return;
+  if (btn.getAttribute("aria-busy") === "true") return;   // also blocks the double request that would 429
   btn.setAttribute("aria-busy", "true");
   try {
     if (view === "depth") await fetchDepth({ manual: true });
     else if (view === "alerts") { await reloadAlerts(); toast("Analysis reloaded", `${ngtTime()} WAT`); }
     else if (view === "signoff") { await fetchLedger(); toast("Sign-off reloaded", `${ngtTime()} WAT`); }
+    else if (CAN_WRITE && source === "live") await runCycle();
     else await load({ manual: true });
   } finally { btn.removeAttribute("aria-busy"); }
 });
@@ -2622,6 +2751,7 @@ function renderAnalysis() {
   const s = aaData.summary || {}, cov = aaData.coverage || {};
   const quiet = (cov.dates_without_data || []).length;
   setText("aa-coverage", `${cov.start === cov.end ? cov.start : `${cov.start} → ${cov.end}`} · ${cov.days_with_data}/${cov.days_in_range} day${cov.days_in_range === 1 ? "" : "s"} with alerts${quiet ? ` · ${quiet} quiet` : ""}`);
+  $("aa-empty").hidden = (s.total_episodes || 0) > 0;
   setText("a-ep", nfmt(s.total_episodes));
   setText("a-ep-s", s.issue_types ? `${s.issue_types} alert type${s.issue_types === 1 ? "" : "s"}` : "distinct runs");
   setText("a-det", nfmt(s.total_detections));
