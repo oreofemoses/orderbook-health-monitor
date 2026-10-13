@@ -91,7 +91,12 @@
 /* Hardcoded pass-row colours need a dark override (others use vars) */
 [data-theme="dark"] .check-row.pass { background: rgba(16,185,129,0.16); color: #6ee7b7; border-color: rgba(16,185,129,0.35); }
 
-body { font-family: var(--font); background: var(--bg-base); color: var(--text-primary); font-size: 14px; min-height: 100vh; display: flex; transition: background .2s ease, color .2s ease; }
+body { font-family: var(--font); background: var(--bg-base); color: var(--text-primary); font-size: .875rem; min-height: 100vh; display: flex; transition: background .2s ease, color .2s ease; }
+/* Applied for ~250ms around a theme toggle so every surface eases between light
+   and dark together, instead of the page background fading while cards snap. */
+.theme-fading *, .theme-fading *::before, .theme-fading *::after {
+  transition: background-color .2s ease, color .2s ease, border-color .2s ease, box-shadow .2s ease !important;
+}
 
 /* ─── Sidebar ───────────────────────────────────── */
 .sidebar {
@@ -119,32 +124,35 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
   background: var(--accent);
   border-radius: 8px;
   display: flex; align-items: center; justify-content: center;
-  color: #fff; font-size: 16px;
+  color: #fff; font-size: 1rem;
 }
-.sidebar-logo-text { font-size: 14px; font-weight: 600; color: var(--text-primary); }
-.sidebar-logo-sub  { font-size: 11px; color: var(--text-muted); }
+.sidebar-logo-text { font-size: .875rem; font-weight: 600; color: var(--text-primary); }
+.sidebar-logo-sub  { font-size: .6875rem; color: var(--text-muted); }
 
 .sidebar-nav { flex: 1; padding: 12px 10px; overflow-y: auto; }
-.nav-section-label { font-size: 10px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: .06em; padding: 8px 10px 4px; }
+.nav-section-label { font-size: .625rem; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: .06em; padding: 8px 10px 4px; }
 .nav-item {
-  display: flex; align-items: center; gap: 10px;
+  display: flex; align-items: center; gap: 10px; width: 100%;
   padding: 8px 12px; border-radius: var(--radius-sm);
-  color: var(--text-secondary); font-size: 13px; font-weight: 500;
-  cursor: pointer; transition: all .15s;
+  color: var(--text-secondary); font-size: .8125rem; font-weight: 500;
+  font-family: inherit; text-align: left; border: 0; background: none;
+  cursor: pointer; transition: background .15s, color .15s, transform .1s ease-out;
   text-decoration: none; user-select: none;
 }
 .nav-item:hover { background: var(--bg-base); color: var(--text-primary); }
 .nav-item.active { background: var(--accent-light); color: var(--accent); }
-.nav-item i { font-size: 16px; flex-shrink: 0; }
-.nav-badge { margin-left: auto; font-size: 10px; background: var(--red-bg); color: var(--red-text); padding: 1px 6px; border-radius: 10px; font-weight: 600; }
+.nav-item i { font-size: 1rem; flex-shrink: 0; }
+.nav-badge { margin-left: auto; font-size: .625rem; background: var(--red-bg); color: var(--red-text); padding: 1px 6px; border-radius: 10px; font-weight: 600; }
 .nav-badge.ok { background: var(--green-bg); color: var(--green-text); }
 
 .sidebar-bottom { padding: 12px 10px 20px; border-top: 1px solid var(--border); }
 .sidebar-status { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-radius: var(--radius-sm); background: var(--bg-base); }
-.pulse { width: 8px; height: 8px; border-radius: 50%; background: var(--green); flex-shrink: 0; animation: blink 2s infinite; }
-.pulse.stale { background: var(--amber); }
+/* Steady while healthy; it only pulses when something needs attention, so the
+   motion carries meaning instead of looping forever in the corner of the eye. */
+.pulse { width: 8px; height: 8px; border-radius: 50%; background: var(--green); flex-shrink: 0; }
+.pulse.stale { background: var(--amber); animation: blink 2s infinite; }
 @keyframes blink { 0%,100%{opacity:1} 50%{opacity:.3} }
-.sidebar-status-text { font-size: 11px; color: var(--text-secondary); line-height: 1.3; }
+.sidebar-status-text { font-size: .6875rem; color: var(--text-secondary); line-height: 1.3; }
 .sidebar-status-text b { color: var(--text-primary); font-weight: 600; }
 
 /* ─── Main ──────────────────────────────────────── */
@@ -156,9 +164,16 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
   flex-direction: column;
 }
 
+/* Translucent material: content scrolls visibly underneath instead of the bar
+   consuming an opaque strip. The edge line only appears once something is
+   actually under it (.scrolled, toggled on scroll). */
 .topbar {
   background: var(--bg-card);
-  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--bg-card) 72%, transparent);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  backdrop-filter: blur(20px) saturate(180%);
+  border-bottom: 1px solid transparent;
+  transition: border-color .2s ease, box-shadow .2s ease;
   padding: 0 24px;
   height: 56px;
   display: flex;
@@ -167,17 +182,38 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
   gap: 16px;
   position: sticky; top: 0; z-index: 50;
 }
-.topbar-title { font-size: 15px; font-weight: 600; }
+.topbar.scrolled { border-bottom-color: var(--border); box-shadow: 0 4px 12px -8px rgba(0,0,0,.18); }
+@media (prefers-reduced-transparency: reduce) {
+  .topbar { background: var(--bg-card); -webkit-backdrop-filter: none; backdrop-filter: none; }
+}
+@media (prefers-contrast: more) {
+  .topbar { background: var(--bg-card); -webkit-backdrop-filter: none; backdrop-filter: none; border-bottom-color: var(--border-strong); }
+}
+.topbar-title { font-size: .9375rem; font-weight: 600; }
 .topbar-right { display: flex; align-items: center; gap: 12px; }
-.topbar-clock { font-family: var(--mono); font-size: 12px; color: var(--text-muted); background: var(--bg-base); padding: 4px 10px; border-radius: 6px; }
+.topbar-clock { font-family: var(--mono); font-size: .75rem; color: var(--text-muted); background: var(--bg-base); padding: 4px 10px; border-radius: 6px; }
 .btn {
-  font-size: 12px; cursor: pointer; background: var(--bg-base);
+  font-size: .75rem; cursor: pointer; background: var(--bg-base);
   border: 1px solid var(--border-strong); border-radius: var(--radius-sm);
   padding: 6px 14px; color: var(--text-secondary); font-family: var(--font);
   display: inline-flex; align-items: center; gap: 6px;
-  transition: all .15s; font-weight: 500;
+  transition: background .15s, color .15s, border-color .15s, transform .1s ease-out; font-weight: 500;
 }
 .btn:hover { background: var(--border); color: var(--text-primary); }
+
+/* Pressed state. Feedback lands on pointer-down, not on release: without it a
+   tap on a touch screen (no hover) shows nothing until the next render. */
+.btn:active:not(:disabled),
+.range-btn:active,
+.chart-pill:active,
+.nav-item:active { transform: scale(.97); }
+.market-row:active { transform: scale(.995); box-shadow: var(--shadow); }
+.mr-book:active { transform: scale(.92); }
+
+.btn:focus-visible, .range-btn:focus-visible, .chart-pill:focus-visible,
+.nav-item:focus-visible, .mr-book:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 2px;
+}
 .btn-accent { background: var(--accent); color: #fff; border-color: var(--accent); }
 .btn-accent:hover { background: #6d28d9; color: #fff; }
 .btn:disabled { opacity: .6; cursor: not-allowed; }
@@ -201,12 +237,14 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
 }
 #refresh-progress.active { opacity: 1; }
 #refresh-progress .bar {
-  height: 100%; width: 0%;
+  height: 100%; width: 100%;
+  transform: scaleX(0); transform-origin: left center;
   background: linear-gradient(90deg, var(--accent-mid), var(--accent));
   /* Eased so the bar decelerates toward each checkpoint. A linear fill reads as
      a countdown and looks stalled whenever a phase runs long; this reads as
-     progress even when the wait is genuinely open-ended. */
-  transition: width .4s cubic-bezier(.25,.8,.25,1);
+     progress even when the wait is genuinely open-ended. Driven by scaleX
+     rather than width so each step is compositor-only, with no layout pass. */
+  transition: transform .4s cubic-bezier(.25,.8,.25,1);
   box-shadow: 0 0 8px var(--accent-mid);
 }
 #refresh-progress.error .bar {
@@ -216,7 +254,7 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
 /* Short-lived status line next to the button — says which phase is running, so a
    long wait is explained rather than just slow. */
 .refresh-note {
-  font-size: 11px; color: var(--text-secondary);
+  font-size: .6875rem; color: var(--text-secondary);
   white-space: nowrap; opacity: 0; transition: opacity .2s;
 }
 .refresh-note.show { opacity: 1; }
@@ -227,7 +265,7 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
 .error-banner {
   background: var(--red-bg); color: var(--red-text);
   border: 1px solid rgba(239,68,68,.2); border-radius: var(--radius-sm);
-  padding: 10px 14px; font-size: 13px; margin-bottom: 20px; display: none;
+  padding: 10px 14px; font-size: .8125rem; margin-bottom: 20px; display: none;
   align-items: center; gap: 8px;
 }
 
@@ -243,10 +281,11 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
 }
 .slippage-controls .range-group { display: flex; gap: 4px; }
 .slippage-controls .range-btn {
-  font-size: 12px; font-family: var(--font); font-weight: 500;
+  font-size: .75rem; font-family: var(--font); font-weight: 500;
   padding: 6px 12px; border: 1px solid var(--border-strong);
   border-radius: var(--radius-sm); background: var(--bg-base);
   color: var(--text-secondary); cursor: pointer;
+  transition: transform .1s ease-out;
 }
 .slippage-controls .range-btn.active {
   background: var(--accent); border-color: var(--accent); color: #fff;
@@ -254,20 +293,25 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
 .slippage-controls .divider {
   width: 1px; height: 24px; background: var(--border);
 }
-.slippage-controls label { font-size: 12px; color: var(--text-muted); font-weight: 500; }
+.slippage-controls label { font-size: .75rem; color: var(--text-muted); font-weight: 500; }
 .slippage-controls input[type="date"],
 .slippage-controls input[type="number"] {
-  font-size: 12px; font-family: var(--font);
+  font-size: .75rem; font-family: var(--font);
   border: 1px solid var(--border-strong); border-radius: var(--radius-sm);
   padding: 5px 9px; background: var(--bg-base); color: var(--text-primary);
 }
 .slippage-controls .live-badge {
-  margin-left: auto; font-size: 11px; color: var(--text-muted);
+  margin-left: auto; font-size: .6875rem; color: var(--text-muted);
   display: flex; align-items: center; gap: 6px;
 }
 .slippage-controls .live-badge .dot {
   width: 8px; height: 8px; border-radius: 50%;
   background: var(--green); box-shadow: 0 0 0 3px var(--green-bg);
+}
+/* Same rule as the sidebar pulse: still when the feed is fresh, pulsing amber
+   only when it has gone stale. */
+.slippage-controls .live-badge .dot.stale {
+  background: var(--amber); box-shadow: 0 0 0 3px var(--amber-bg);
   animation: pulse-dot 2s ease-in-out infinite;
 }
 @keyframes pulse-dot { 0%, 100% { opacity: 1; } 50% { opacity: .5; } }
@@ -291,7 +335,7 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
 .stat-icon {
   width: 42px; height: 42px; border-radius: 10px;
   display: flex; align-items: center; justify-content: center;
-  font-size: 20px; flex-shrink: 0;
+  font-size: 1.25rem; flex-shrink: 0;
 }
 .stat-icon.purple { background: var(--accent-light); color: var(--accent); }
 .stat-icon.green  { background: var(--green-bg);    color: var(--green); }
@@ -299,8 +343,8 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
 .stat-icon.red    { background: var(--red-bg);      color: var(--red); }
 .stat-icon.blue   { background: var(--blue-bg);     color: var(--blue); }
 .stat-body { flex: 1; min-width: 0; }
-.stat-label { font-size: 11px; color: var(--text-muted); font-weight: 500; margin-bottom: 4px; text-transform: uppercase; letter-spacing: .04em; }
-.stat-value { font-size: 28px; font-weight: 600; line-height: 1; font-family: var(--mono); }
+.stat-label { font-size: .6875rem; color: var(--text-muted); font-weight: 500; margin-bottom: 4px; text-transform: uppercase; letter-spacing: .04em; }
+.stat-value { font-size: 1.75rem; font-weight: 600; line-height: 1; font-family: var(--mono); letter-spacing: -0.02em; }
 .stat-value.purple { color: var(--accent); }
 .stat-value.green  { color: var(--green); }
 .stat-value.amber  { color: var(--amber); }
@@ -312,8 +356,8 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
   display: flex; align-items: center; justify-content: space-between;
   margin-bottom: 14px;
 }
-.section-title { font-size: 14px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
-.section-title .count { font-size: 11px; background: var(--bg-base); color: var(--text-muted); padding: 2px 8px; border-radius: 20px; font-weight: 500; }
+.section-title { font-size: .875rem; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+.section-title .count { font-size: .6875rem; background: var(--bg-base); color: var(--text-muted); padding: 2px 8px; border-radius: 20px; font-weight: 500; }
 
 .two-col { display: grid; grid-template-columns: 1fr 340px; gap: 20px; align-items: start; margin-bottom: 24px; }
 
@@ -350,17 +394,17 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
 .market-row.selected { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-light), var(--shadow); }
 
 .mr-sym { flex: 0 0 90px; }
-.mr-sym-name { font-size: 14px; font-weight: 600; }
-.mr-sym-base { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+.mr-sym-name { font-size: .875rem; font-weight: 600; }
+.mr-sym-base { font-size: .6875rem; color: var(--text-muted); margin-top: 2px; }
 .mr-price { flex: 0 0 100px; }
-.mr-price-val { font-family: var(--mono); font-size: 13px; font-weight: 500; }
-.mr-price-label { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+.mr-price-val { font-family: var(--mono); font-size: .8125rem; font-weight: 500; }
+.mr-price-label { font-size: .6875rem; color: var(--text-muted); margin-top: 2px; }
 .mr-spread { flex: 0 0 80px; }
-.mr-spread-val { font-family: var(--mono); font-size: 13px; font-weight: 500; }
-.mr-spread-label { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+.mr-spread-val { font-family: var(--mono); font-size: .8125rem; font-weight: 500; }
+.mr-spread-label { font-size: .6875rem; color: var(--text-muted); margin-top: 2px; }
 .mr-issues { flex: 1; display: flex; flex-wrap: wrap; gap: 5px; justify-content: flex-end; align-items: center; }
 .mr-badge {
-  font-size: 10px; padding: 2px 8px; border-radius: 20px; font-weight: 600; white-space: nowrap;
+  font-size: .625rem; padding: 2px 8px; border-radius: 20px; font-weight: 600; white-space: nowrap;
 }
 .mr-badge.ok   { background: var(--green-bg); color: var(--green-text); }
 .mr-badge.warn { background: var(--amber-bg); color: var(--amber-text); }
@@ -370,14 +414,16 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
 
 .mr-book {
   flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center;
-  width: 28px; height: 28px; border-radius: 6px; font-size: 15px;
+  width: 28px; height: 28px; border-radius: 6px; font-size: .9375rem;
   color: var(--text-muted); border: 1px solid var(--border); text-decoration: none;
   transition: background .15s, color .15s, border-color .15s;
 }
 .mr-book:hover { background: var(--accent-light); color: var(--accent); border-color: var(--accent); }
-.mr-chevron { color: var(--text-muted); font-size: 16px; flex-shrink: 0; transition: transform .15s; }
+.mr-chevron { color: var(--text-muted); font-size: 1rem; flex-shrink: 0; transition: transform .15s; }
 .market-row:hover .mr-chevron { transform: translateX(2px); color: var(--text-secondary); }
-.market-row.selected .mr-chevron { color: var(--accent); transform: rotate(90deg); }
+/* Points right, toward where the detail panel opens. Rotating it down implied
+   the row would expand in place, which is not what happens. */
+.market-row.selected .mr-chevron { color: var(--accent); transform: translateX(2px); }
 
 /* ─── Detail Panel (right col) ──────────────────── */
 .detail-panel {
@@ -392,12 +438,12 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
   display: flex; flex-direction: column; align-items: center; justify-content: center;
   padding: 40px 20px; color: var(--text-muted); text-align: center; gap: 12px;
 }
-.detail-empty i { font-size: 32px; }
-.detail-empty p { font-size: 13px; line-height: 1.5; }
+.detail-empty i { font-size: 2rem; }
+.detail-empty p { font-size: .8125rem; line-height: 1.5; }
 
 .detail-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; gap: 8px; }
-.detail-sym { font-size: 18px; font-weight: 700; }
-.detail-time { font-size: 11px; color: var(--text-muted); font-family: var(--mono); }
+.detail-sym { font-size: 1.125rem; font-weight: 700; }
+.detail-time { font-size: .6875rem; color: var(--text-muted); font-family: var(--mono); }
 
 .detail-metrics {
   display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 16px;
@@ -405,14 +451,14 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
 .dm {
   background: var(--bg-base); border-radius: var(--radius-sm); padding: 10px 12px;
 }
-.dm .k { font-size: 10px; color: var(--text-muted); font-weight: 600; text-transform: uppercase; letter-spacing: .04em; margin-bottom: 4px; }
-.dm .v { font-size: 15px; font-weight: 600; font-family: var(--mono); }
+.dm .k { font-size: .625rem; color: var(--text-muted); font-weight: 600; text-transform: uppercase; letter-spacing: .04em; margin-bottom: 4px; }
+.dm .v { font-size: .9375rem; font-weight: 600; font-family: var(--mono); }
 .dm .v.ok   { color: var(--green); }
 .dm .v.warn { color: var(--amber); }
 .dm .v.crit { color: var(--red); }
 .dm .v.muted{ color: var(--text-secondary); }
 
-.detail-alerts-title { font-size: 12px; font-weight: 600; color: var(--text-secondary); text-transform: uppercase; letter-spacing: .04em; margin-bottom: 10px; }
+.detail-alerts-title { font-size: .75rem; font-weight: 600; color: var(--text-secondary); text-transform: uppercase; letter-spacing: .04em; margin-bottom: 10px; }
 
 .alert-checks { display: flex; flex-direction: column; gap: 6px; }
 /* Tier heading inside the check list. Quieter than .detail-alerts-title above it
@@ -421,13 +467,13 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
    its background. The :first-child reset stops the first group pushing the list
    away from its own title. */
 .check-group {
-  font-size: 10px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase;
+  font-size: .625rem; font-weight: 600; letter-spacing: .06em; text-transform: uppercase;
   color: var(--text-muted); margin: 8px 0 -1px 2px;
 }
 .check-group:first-child { margin-top: 0; }
 .check-row {
   display: flex; align-items: flex-start; gap: 10px;
-  padding: 9px 12px; border-radius: var(--radius-sm); font-size: 12px;
+  padding: 9px 12px; border-radius: var(--radius-sm); font-size: .75rem;
   border: 1px solid transparent;
 }
 .check-row.pass  { background: #f0fdf4; color: #166534; border-color: #bbf7d0; }
@@ -435,11 +481,11 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
 .check-row.crit  { background: var(--red-bg); color: var(--red-text); border-color: #fca5a5; }
 .check-row.info  { background: var(--blue-bg); color: var(--blue-text); border-color: #93c5fd; }
 .check-row.na    { background: var(--bg-base); color: var(--text-muted); border-color: transparent; }
-.check-icon { font-size: 14px; flex-shrink: 0; margin-top: 1px; }
+.check-icon { font-size: .875rem; flex-shrink: 0; margin-top: 1px; }
 .check-body { flex: 1; min-width: 0; }
 .check-name { font-weight: 600; display: flex; align-items: center; gap: 6px; }
-.check-desc { font-size: 11px; opacity: .85; margin-top: 1px; }
-.check-sev { font-size: 10px; font-weight: 700; flex-shrink: 0; padding: 1px 6px; border-radius: 4px; background: rgba(0,0,0,.08); margin-top: 1px; }
+.check-desc { font-size: .6875rem; opacity: .85; margin-top: 1px; }
+.check-sev { font-size: .625rem; font-weight: 700; flex-shrink: 0; padding: 1px 6px; border-radius: 4px; background: rgba(0,0,0,.08); margin-top: 1px; }
 
 /* ─── Chart Card ────────────────────────────────── */
 .chart-card {
@@ -450,15 +496,16 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
   margin-bottom: 24px;
 }
 .chart-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
-.chart-title { font-size: 14px; font-weight: 600; }
+.chart-title { font-size: .875rem; font-weight: 600; }
 .chart-selector { display: flex; gap: 6px; flex-wrap: wrap; }
 .chart-pill {
-  font-size: 11px; padding: 3px 10px; border-radius: 20px; cursor: pointer;
+  font-size: .6875rem; padding: 3px 10px; border-radius: 20px; cursor: pointer;
   border: 1px solid var(--border-strong); background: var(--bg-base);
-  color: var(--text-secondary); font-weight: 500; transition: all .15s;
+  color: var(--text-secondary); font-weight: 500; font-family: inherit;
+  transition: background .15s, color .15s, border-color .15s, transform .1s ease-out;
 }
 .chart-pill.active { background: var(--accent); border-color: var(--accent); color: #fff; }
-.legend { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 10px; font-size: 11px; color: var(--text-secondary); }
+.legend { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 10px; font-size: .6875rem; color: var(--text-secondary); }
 .legend span { display: flex; align-items: center; gap: 4px; }
 .swatch { width: 10px; height: 10px; border-radius: 2px; flex-shrink: 0; }
 
@@ -472,13 +519,13 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
 .log-row {
   display: flex; gap: 12px; padding: 9px 0;
   border-bottom: 1px solid var(--border);
-  align-items: flex-start; font-size: 12px;
+  align-items: flex-start; font-size: .75rem;
 }
 .log-row:last-child { border-bottom: none; }
 .log-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--amber); flex-shrink: 0; margin-top: 4px; }
-.log-time { color: var(--text-muted); white-space: nowrap; min-width: 56px; font-family: var(--mono); font-size: 11px; }
+.log-time { color: var(--text-muted); white-space: nowrap; min-width: 56px; font-family: var(--mono); font-size: .6875rem; }
 .log-msg  { color: var(--text-primary); line-height: 1.5; }
-.empty-state { font-size: 13px; color: var(--text-muted); padding: 20px 0; }
+.empty-state { font-size: .8125rem; color: var(--text-muted); padding: 20px 0; }
 .empty-state-green { color: var(--green); display: flex; align-items: center; gap: 6px; }
 
 /* ─── Responsive ────────────────────────────────── */
@@ -497,17 +544,43 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
   .content { padding: 16px; }
   .topbar { padding: 0 16px; }
 }
-@media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+/* Reduced motion swaps movement for gentler equivalents rather than killing all
+   feedback: transforms, loops and slides go; opacity and colour fades that help
+   people follow a change (toast, refresh note, drawer, theme) stay. Canvas
+   charts and JS-driven scrolling read the same media query in script. */
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  .pulse, .spin, .slippage-controls .live-badge .dot { animation: none !important; }
+  .btn:active, .range-btn:active, .chart-pill:active, .nav-item:active,
+  .market-row:active, .mr-book:active,
+  .market-row:hover, .market-row:hover .mr-chevron, .market-row.selected .mr-chevron { transform: none !important; }
+  .mr-chevron, .check-chev { transition: none !important; }
+  #refresh-progress .bar { transition: none !important; }
+  /* The drawer cross-fades in place instead of sliding. */
+  .config-drawer { transform: none !important; opacity: 0; transition: opacity .2s ease !important; }
+  .config-overlay.open .config-drawer { opacity: 1; }
+}
 
 /* ─── Config panel ──────────────────────────────── */
+/* Modal drawer. Slides in from the right edge and leaves the same way, with the
+   scrim dimming in alongside it. Always laid out (visibility, not display) so
+   the transition has a start value; a class toggle mid-flight reverses from the
+   current on-screen position, so open/close can be interrupted at any point.
+   The curve settles without overshoot — this opens from a click, not a flick. */
 .config-overlay {
-  display: none;
+  display: flex;
   position: fixed; inset: 0; z-index: 200;
-  background: rgba(0,0,0,0.4);
+  background: rgba(0,0,0,0);
   align-items: flex-start;
   justify-content: flex-end;
+  visibility: hidden; pointer-events: none;
+  transition: background .3s ease, visibility 0s linear .32s;
 }
-.config-overlay.open { display: flex; }
+.config-overlay.open {
+  visibility: visible; pointer-events: auto;
+  background: rgba(0,0,0,0.4);
+  transition: background .3s ease, visibility 0s;
+}
 .config-drawer {
   background: var(--bg-card);
   width: 640px; max-width: 96vw;
@@ -515,14 +588,18 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
   overflow-y: auto;
   box-shadow: -4px 0 24px rgba(0,0,0,0.15);
   display: flex; flex-direction: column;
+  transform: translateX(100%);
+  transition: transform .32s cubic-bezier(.32,.72,0,1);
 }
+.config-overlay.open .config-drawer { transform: none; }
+.config-drawer:focus { outline: none; }
 .config-drawer-header {
   padding: 20px 24px 16px;
   border-bottom: 1px solid var(--border);
   display: flex; align-items: center; justify-content: space-between;
   position: sticky; top: 0; background: var(--bg-card); z-index: 1;
 }
-.config-drawer-title { font-size: 15px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+.config-drawer-title { font-size: .9375rem; font-weight: 600; display: flex; align-items: center; gap: 8px; }
 .config-drawer-body { padding: 20px 24px; flex: 1; }
 .config-drawer-footer {
   padding: 16px 24px;
@@ -532,7 +609,7 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
 }
 .config-section { margin-bottom: 28px; }
 .config-section-title {
-  font-size: 12px; font-weight: 600; color: var(--text-secondary);
+  font-size: .75rem; font-weight: 600; color: var(--text-secondary);
   text-transform: uppercase; letter-spacing: .05em;
   margin-bottom: 14px; padding-bottom: 8px;
   border-bottom: 1px solid var(--border);
@@ -540,19 +617,19 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
 }
 .config-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .config-field { display: flex; flex-direction: column; gap: 5px; }
-.config-field label { font-size: 12px; color: var(--text-secondary); font-weight: 500; }
+.config-field label { font-size: .75rem; color: var(--text-secondary); font-weight: 500; }
 .config-field input[type=number], .config-field input[type=text] {
   border: 1px solid var(--border-strong); border-radius: var(--radius-sm);
-  padding: 7px 10px; font-size: 13px; font-family: var(--mono);
+  padding: 7px 10px; font-size: .8125rem; font-family: var(--mono);
   color: var(--text-primary); background: var(--bg-base); width: 100%;
   transition: border-color .15s;
 }
 .config-field input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px rgba(124,58,237,.12); }
-.config-field .hint { font-size: 11px; color: var(--text-muted); line-height: 1.4; }
+.config-field .hint { font-size: .6875rem; color: var(--text-muted); line-height: 1.4; }
 
-.pairs-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.pairs-table { width: 100%; border-collapse: collapse; font-size: .8125rem; }
 .pairs-table th {
-  text-align: left; padding: 6px 8px; font-size: 11px; font-weight: 600;
+  text-align: left; padding: 6px 8px; font-size: .6875rem; font-weight: 600;
   color: var(--text-muted); text-transform: uppercase; letter-spacing: .04em;
   border-bottom: 1px solid var(--border);
 }
@@ -560,26 +637,26 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
 .pairs-table tr:hover td { background: var(--bg-base); }
 .pairs-table input[type=text], .pairs-table input[type=number] {
   border: 1px solid transparent; border-radius: 5px;
-  padding: 4px 7px; font-size: 12px; font-family: var(--mono);
+  padding: 4px 7px; font-size: .75rem; font-family: var(--mono);
   color: var(--text-primary); background: transparent; width: 100%;
   transition: border-color .12s;
 }
 .pairs-table input:focus { outline: none; border-color: var(--accent); background: var(--bg-card); box-shadow: 0 0 0 2px rgba(124,58,237,.1); }
 .pairs-table .del-btn {
   background: none; border: none; cursor: pointer; color: var(--text-muted);
-  font-size: 16px; padding: 2px 6px; border-radius: 4px; line-height: 1;
+  font-size: 1rem; padding: 2px 6px; border-radius: 4px; line-height: 1;
   transition: color .12s, background .12s;
 }
 .pairs-table .del-btn:hover { color: var(--red); background: var(--red-bg); }
 .pairs-table .suspend-btn {
   display: inline-flex; align-items: center; gap: 4px; cursor: pointer;
-  font-family: var(--mono); font-size: 11px; font-weight: 500;
+  font-family: var(--mono); font-size: .6875rem; font-weight: 500;
   padding: 3px 8px; border-radius: 5px; line-height: 1; white-space: nowrap;
   border: 1px solid var(--border-strong); background: var(--bg-base);
   color: var(--text-secondary); transition: color .12s, background .12s, border-color .12s;
 }
 .pairs-table .suspend-btn:hover { color: var(--text-primary); background: var(--bg-card-hover); }
-.pairs-table .suspend-btn i { font-size: 13px; }
+.pairs-table .suspend-btn i { font-size: .8125rem; }
 /* Active = pair is currently muted; button now resumes. Amber, to read as "paused". */
 .pairs-table .suspend-btn.active {
   border-color: var(--amber, #f59e0b); background: var(--amber-bg, #fef3c7);
@@ -593,7 +670,7 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
 
 .config-toast {
   position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
-  background: var(--green); color: #fff; font-size: 13px; font-weight: 500;
+  background: var(--green); color: #fff; font-size: .8125rem; font-weight: 500;
   padding: 10px 20px; border-radius: var(--radius); z-index: 9999;
   box-shadow: 0 4px 16px rgba(0,0,0,.18);
   opacity: 0; transition: opacity .3s; pointer-events: none;
@@ -613,7 +690,7 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
   display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-bottom: 16px;
 }
 .daily-log-controls select, .daily-log-controls input[type=text] {
-  font-size: 12px; font-family: var(--font);
+  font-size: .75rem; font-family: var(--font);
   border: 1px solid var(--border-strong); border-radius: var(--radius-sm);
   padding: 6px 10px; background: var(--bg-base); color: var(--text-primary);
   cursor: pointer;
@@ -623,11 +700,11 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
 }
 .dl-table-wrap { overflow-x: auto; }
 .dl-table {
-  width: 100%; border-collapse: collapse; font-size: 12px;
+  width: 100%; border-collapse: collapse; font-size: .75rem;
 }
 .dl-table th {
   text-align: left; padding: 7px 10px;
-  font-size: 11px; font-weight: 600; color: var(--text-muted);
+  font-size: .6875rem; font-weight: 600; color: var(--text-muted);
   text-transform: uppercase; letter-spacing: .04em;
   border-bottom: 2px solid var(--border); white-space: nowrap;
   background: var(--bg-base);
@@ -640,15 +717,15 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
 .dl-table tr:hover td { background: var(--bg-base); }
 .dl-ts { font-family: var(--mono); color: var(--text-muted); white-space: nowrap; }
 .dl-market { font-family: var(--mono); font-weight: 600; }
-.dl-issues { font-family: var(--mono); font-size: 11px; color: var(--text-secondary); }
-.dl-depth  { font-family: var(--mono); font-size: 11px; color: var(--text-muted); }
+.dl-issues { font-family: var(--mono); font-size: .6875rem; color: var(--text-secondary); }
+.dl-depth  { font-family: var(--mono); font-size: .6875rem; color: var(--text-muted); }
 .dl-pagination {
   display: flex; align-items: center; justify-content: space-between;
-  margin-top: 14px; font-size: 12px; color: var(--text-muted);
+  margin-top: 14px; font-size: .75rem; color: var(--text-muted);
 }
 .dl-pagination-btns { display: flex; gap: 6px; }
 .dl-issue-badge {
-  display: inline-block; font-size: 10px; padding: 1px 6px;
+  display: inline-block; font-size: .625rem; padding: 1px 6px;
   border-radius: 4px; font-weight: 600; margin-right: 3px; margin-bottom: 2px;
 }
 .dl-issue-badge.CRITICAL { background: var(--red-bg);   color: var(--red-text); }
@@ -661,9 +738,11 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
    comes back empty. Distinct from the config drawer's Suspend, which mutes a
    whole pair on a fixed 30-minute clock. */
 .check-row { position: relative; }
+/* The box is 15px but the label around it is the hit target: padding grows the
+   tappable area to ~27px and the negative margin keeps the row layout unchanged. */
 .check-ack {
   display: flex; align-items: flex-start; flex-shrink: 0;
-  margin-left: 2px; margin-top: 1px;
+  padding: 6px; margin: -5px -6px -6px -4px; cursor: pointer;
 }
 .check-ack input[type=checkbox] {
   appearance: none; -webkit-appearance: none;
@@ -690,7 +769,7 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
    dashboard; only its Telegram delivery is muted. Hence a badge, not a hide. */
 .check-row.acked { opacity: .62; }
 .check-ack-badge {
-  font-size: 9px; font-weight: 700; letter-spacing: .04em;
+  font-size: .625rem; font-weight: 700; letter-spacing: .04em;
   padding: 1px 5px; border-radius: 4px; margin-left: 6px;
   background: rgba(0,0,0,.10); text-transform: uppercase;
   white-space: nowrap;
@@ -700,14 +779,14 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
    disclose one. Expansion is keyed by check id in _expandedChecks, so it
    survives the re-render an ack toggle triggers and carries across markets. */
 .check-note {
-  font-size: 10.5px; opacity: .62; margin-top: 4px; line-height: 1.45;
+  font-size: .6875rem; opacity: .62; margin-top: 4px; line-height: 1.45;
   display: none;
 }
 .check-row.expanded .check-note { display: block; }
 .check-row[role="button"] { cursor: pointer; }
 .check-row[role="button"]:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .check-chev {
-  margin-left: auto; font-size: 13px; opacity: .4; flex-shrink: 0;
+  margin-left: auto; font-size: .8125rem; opacity: .4; flex-shrink: 0;
   transition: transform .12s ease;
 }
 .check-row.expanded .check-chev { transform: rotate(90deg); opacity: .7; }
@@ -717,7 +796,7 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
   display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
 }
 .log-controls select {
-  font-size: 12px; font-family: var(--font);
+  font-size: .75rem; font-family: var(--font);
   border: 1px solid var(--border-strong); border-radius: var(--radius-sm);
   padding: 5px 9px; background: var(--bg-base); color: var(--text-primary);
   cursor: pointer;
@@ -725,7 +804,7 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
 .log-controls select:focus { outline: none; border-color: var(--accent); }
 .log-ids { display: inline-flex; gap: 4px; flex-wrap: wrap; margin-right: 2px; }
 .log-id {
-  font-size: 10px; font-weight: 700; font-family: var(--mono);
+  font-size: .625rem; font-weight: 700; font-family: var(--mono);
   padding: 1px 5px; border-radius: 4px; white-space: nowrap;
   background: var(--blue-bg); color: var(--blue-text);
 }
@@ -735,12 +814,12 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
 /* ─── Depth-walk feed staleness banner ──────────── */
 .feed-stale {
   display: none; align-items: flex-start; gap: 8px;
-  font-size: 12px; color: var(--amber-text);
+  font-size: .75rem; color: var(--amber-text);
   background: var(--amber-bg); border-left: 3px solid var(--amber);
   border-radius: var(--radius-sm); padding: 10px 13px; margin-bottom: 16px;
 }
 .feed-stale.show { display: flex; }
-.feed-stale i { font-size: 15px; margin-top: 1px; flex-shrink: 0; }
+.feed-stale i { font-size: .9375rem; margin-top: 1px; flex-shrink: 0; }
 .feed-stale b { color: var(--amber-text); }
 
 /* ─── Alert analysis tab ────────────────────────── */
@@ -749,10 +828,10 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
 
 /* Tables reuse the daily-log table look so the two read as one system. */
 .aa-table-wrap { overflow-x: auto; max-height: 420px; overflow-y: auto; }
-.aa-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.aa-table { width: 100%; border-collapse: collapse; font-size: .75rem; }
 .aa-table th {
   text-align: left; padding: 7px 10px; position: sticky; top: 0; z-index: 1;
-  font-size: 11px; font-weight: 600; color: var(--text-muted);
+  font-size: .6875rem; font-weight: 600; color: var(--text-muted);
   text-transform: uppercase; letter-spacing: .04em;
   border-bottom: 2px solid var(--border); white-space: nowrap;
   background: var(--bg-card);
@@ -762,10 +841,10 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
 .aa-table tr:hover td { background: var(--bg-base); }
 .aa-table .num { font-family: var(--mono); text-align: right; }
 .aa-table .mkt { font-family: var(--mono); font-weight: 600; }
-.aa-table .ts  { font-family: var(--mono); color: var(--text-muted); font-size: 11px; }
+.aa-table .ts  { font-family: var(--mono); color: var(--text-muted); font-size: .6875rem; }
 
 .aa-pill-badge {
-  display: inline-block; font-size: 10px; padding: 1px 6px;
+  display: inline-block; font-size: .625rem; padding: 1px 6px;
   border-radius: 4px; font-weight: 700; font-family: var(--mono);
 }
 .aa-pill-badge.CRITICAL { background: var(--red-bg);   color: var(--red-text); }
@@ -774,7 +853,7 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
 .aa-pill-badge.UNKNOWN  { background: var(--bg-base);  color: var(--text-muted); }
 
 .aa-tag {
-  display: inline-block; font-size: 10px; font-weight: 700;
+  display: inline-block; font-size: .625rem; font-weight: 700;
   padding: 1px 6px; border-radius: 4px; margin-left: 5px;
 }
 .aa-tag.open    { background: var(--red-bg);   color: var(--red-text); }
@@ -784,9 +863,9 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
    the only matrix renderer for Chart.js is a separate CDN dependency, and a
    table of tinted cells is both lighter and directly readable. */
 .aa-heat { overflow-x: auto; }
-.aa-heat table { border-collapse: separate; border-spacing: 2px; font-size: 10px; }
+.aa-heat table { border-collapse: separate; border-spacing: 2px; font-size: .625rem; }
 .aa-heat th {
-  font-size: 10px; font-weight: 600; color: var(--text-muted);
+  font-size: .625rem; font-weight: 600; color: var(--text-muted);
   padding: 2px 4px; text-align: center; white-space: nowrap;
 }
 .aa-heat th.row-label {
@@ -795,25 +874,25 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
 }
 .aa-heat td {
   width: 30px; height: 22px; text-align: center; border-radius: 3px;
-  font-family: var(--mono); font-size: 10px; color: var(--text-primary);
+  font-family: var(--mono); font-size: .625rem; color: var(--text-primary);
 }
 .aa-heat td.zero { color: var(--text-muted); opacity: .45; }
 
 .aa-empty {
-  font-size: 13px; color: var(--text-muted);
+  font-size: .8125rem; color: var(--text-muted);
   padding: 28px 0; text-align: center;
 }
-.aa-coverage { font-size: 11px; color: var(--text-muted); }
+.aa-coverage { font-size: .6875rem; color: var(--text-muted); }
 /* A range wider than AA_MAX_DAYS hides the whole tab body behind the download card. */
 .aa-too-wide { display: none; }
 #tab-alerts.aa-range-too-wide > .aa-too-wide { display: block; }
 #tab-alerts.aa-range-too-wide > :not(.slippage-controls):not(.aa-too-wide) { display: none !important; }
-.aa-sub { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+.aa-sub { font-size: .6875rem; color: var(--text-muted); margin-top: 2px; }
 
 /* ─── Accountability ledger ─────────────────────── */
 .led-check { width: 15px; height: 15px; cursor: pointer; accent-color: var(--accent); }
 .led-select, .led-note {
-  font-size: 11px; padding: 3px 6px; border-radius: var(--radius-sm);
+  font-size: .6875rem; padding: 3px 6px; border-radius: var(--radius-sm);
   border: 1px solid var(--border); background: var(--bg-card);
   color: var(--text-primary); font-family: inherit;
 }
@@ -827,20 +906,20 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
 .dl-table tr.led-msg-b td:first-child { border-left-color: var(--amber); }
 .led-open { color: var(--amber); font-weight: 600; }
 .led-clear-btn {
-  margin-left: 6px; padding: 1px 6px; font-size: 10px; cursor: pointer;
+  margin-left: 6px; padding: 1px 6px; font-size: .625rem; cursor: pointer;
   border-radius: 8px; border: 1px solid var(--border);
   background: var(--bg-card); color: var(--text-muted); font-family: inherit;
 }
 .led-clear-btn:hover { color: var(--text-primary); border-color: var(--accent); }
 .led-manual {
   display: inline-block; margin-left: 5px; padding: 0 5px;
-  font-size: 10px; font-weight: 600; border-radius: 8px;
+  font-size: .625rem; font-weight: 600; border-radius: 8px;
   background: var(--bg-base); color: var(--text-muted);
   border: 1px dashed var(--border);
 }
 .led-repeat {
   display: inline-block; margin-left: 6px; padding: 0 5px;
-  font-size: 10px; font-weight: 600; border-radius: 8px;
+  font-size: .625rem; font-weight: 600; border-radius: 8px;
   background: var(--bg-base); color: var(--text-muted);
   border: 1px solid var(--border);
 }
@@ -850,7 +929,7 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
   background: var(--bg-base); border: 1px solid var(--accent);
 }
 .led-bulk.show { display: flex; }
-.led-bulk-count { font-size: 12px; font-weight: 600; color: var(--text-primary); }
+.led-bulk-count { font-size: .75rem; font-weight: 600; color: var(--text-primary); }
 .led-grouped { cursor: pointer; }
 </style>
 </head>
@@ -868,52 +947,52 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
 
   <nav class="sidebar-nav">
     <div class="nav-section-label">Monitor</div>
-    <div class="nav-item active" data-tab="overview" onclick="showTab('overview')">
+    <button type="button" class="nav-item active" data-tab="overview" onclick="showTab('overview')">
       <i class="ti ti-layout-dashboard"></i>
       <span>Overview</span>
-    </div>
-    <div class="nav-item" data-tab="overview" onclick="showTab('overview', 'markets')">
+    </button>
+    <button type="button" class="nav-item" data-tab="overview" onclick="showTab('overview', 'markets')">
       <i class="ti ti-currency-bitcoin"></i>
       <span>Markets</span>
       <span class="nav-badge" id="nav-warn-count" style="display:none">0</span>
-    </div>
-    <div class="nav-item" data-tab="overview" onclick="showTab('overview', 'chart-section')">
+    </button>
+    <button type="button" class="nav-item" data-tab="overview" onclick="showTab('overview', 'chart-section')">
       <i class="ti ti-chart-line"></i>
       <span>Spread chart</span>
-    </div>
-    <div class="nav-item" data-tab="overview" onclick="showTab('overview', 'log-section')">
+    </button>
+    <button type="button" class="nav-item" data-tab="overview" onclick="showTab('overview', 'log-section')">
       <i class="ti ti-bell"></i>
       <span>Alert log</span>
-    </div>
+    </button>
 
     <div class="nav-section-label" style="margin-top:8px">USDT/NGN</div>
-    <div class="nav-item" data-tab="slippage" onclick="showTab('slippage')">
+    <button type="button" class="nav-item" data-tab="slippage" onclick="showTab('slippage')">
       <i class="ti ti-arrows-diff"></i>
       <span>Depth-walk slippage</span>
-    </div>
+    </button>
 
     <div class="nav-section-label" style="margin-top:8px">Analysis</div>
-    <div class="nav-item" data-tab="alerts" onclick="showTab('alerts')">
+    <button type="button" class="nav-item" data-tab="alerts" onclick="showTab('alerts')">
       <i class="ti ti-chart-histogram"></i>
       <span>Alert analysis</span>
-    </div>
-    <div class="nav-item" data-tab="alerts" onclick="showTab('alerts', 'aa-log-section')">
+    </button>
+    <button type="button" class="nav-item" data-tab="alerts" onclick="showTab('alerts', 'aa-log-section')">
       <i class="ti ti-table"></i>
       <span>Daily log</span>
-    </div>
+    </button>
 
     <div class="nav-section-label" style="margin-top:8px">Accountability</div>
-    <div class="nav-item" data-tab="ledger" onclick="showTab('ledger')">
+    <button type="button" class="nav-item" data-tab="ledger" onclick="showTab('ledger')">
       <i class="ti ti-checkbox"></i>
       <span>Alert sign-off</span>
       <span class="nav-badge" id="led-nav-badge" style="display:none">0</span>
-    </div>
+    </button>
 
     <div class="nav-section-label" style="margin-top:8px">Settings</div>
-    <div class="nav-item" onclick="toggleConfigPanel()">
+    <button type="button" class="nav-item" onclick="toggleConfigPanel()">
       <i class="ti ti-adjustments-horizontal"></i>
       <span>Configuration</span>
-    </div>
+    </button>
   </nav>
 
   <div class="sidebar-bottom">
@@ -921,7 +1000,7 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
       <span class="pulse" id="pulse"></span>
       <div class="sidebar-status-text">
         <b id="sidebar-status-text">Live</b>
-        <div id="sidebar-ts" style="font-size:10px;color:var(--text-muted)">—</div>
+        <div id="sidebar-ts" style="font-size:.625rem;color:var(--text-muted)">—</div>
       </div>
     </div>
   </div>
@@ -929,7 +1008,7 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
 
 <!-- ═══ Main ══════════════════════════════════════════════════════════════════ -->
 <div class="main">
-  <header class="topbar">
+  <header class="topbar" id="topbar">
     <div class="topbar-title">Market Overview</div>
     <div class="topbar-right">
       <div class="topbar-clock" id="clock">—</div>
@@ -997,7 +1076,7 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
       <div>
         <div class="section-header">
           <div class="section-title">
-            <i class="ti ti-currency-bitcoin" style="font-size:16px;color:var(--accent)"></i>
+            <i class="ti ti-currency-bitcoin" style="font-size:1rem;color:var(--accent)"></i>
             Markets
             <span class="count" id="pairs-count-label">—</span>
           </div>
@@ -1037,7 +1116,7 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
     <div id="log-section">
       <div class="section-header">
         <div class="section-title">
-          <i class="ti ti-bell" style="font-size:16px;color:var(--accent)"></i>
+          <i class="ti ti-bell" style="font-size:1rem;color:var(--accent)"></i>
           Alert log
           <span class="count" id="al-count-label">—</span>
         </div>
@@ -1082,7 +1161,7 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
         <div class="divider"></div>
         <label for="slippage-date-start">Archive:</label>
         <input type="date" id="slippage-date-start" onchange="setSlippageDateRange()" />
-        <span style="font-size:11px;color:var(--text-muted)">to</span>
+        <span style="font-size:.6875rem;color:var(--text-muted)">to</span>
         <input type="date" id="slippage-date-end" onchange="setSlippageDateRange()" />
         <button class="btn" onclick="clearSlippageDateRange()" title="Clear date filter, back to range preset">
           <i class="ti ti-x"></i>
@@ -1103,7 +1182,7 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
           <div class="stat-body">
             <div class="stat-label">Avg buy slippage</div>
             <div class="stat-value green" id="slip-avg-buy">—</div>
-            <div style="font-size:11px;color:var(--text-muted);margin-top:2px" id="slip-avg-buy-sub">weighted‑avg buy vs mid</div>
+            <div style="font-size:.6875rem;color:var(--text-muted);margin-top:2px" id="slip-avg-buy-sub">weighted‑avg buy vs mid</div>
           </div>
         </div>
         <div class="stat-card">
@@ -1111,7 +1190,7 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
           <div class="stat-body">
             <div class="stat-label">Avg sell slippage</div>
             <div class="stat-value red" id="slip-avg-sell">—</div>
-            <div style="font-size:11px;color:var(--text-muted);margin-top:2px" id="slip-avg-sell-sub">weighted‑avg sell vs mid</div>
+            <div style="font-size:.6875rem;color:var(--text-muted);margin-top:2px" id="slip-avg-sell-sub">weighted‑avg sell vs mid</div>
           </div>
         </div>
         <div class="stat-card">
@@ -1119,7 +1198,7 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
           <div class="stat-body">
             <div class="stat-label">G1 partial-fill points</div>
             <div class="stat-value amber" id="slip-g1-count">—</div>
-            <div style="font-size:11px;color:var(--text-muted);margin-top:2px" id="slip-g1-sub">book couldn't fill weight</div>
+            <div style="font-size:.6875rem;color:var(--text-muted);margin-top:2px" id="slip-g1-sub">book couldn't fill weight</div>
           </div>
         </div>
         <div class="stat-card">
@@ -1127,7 +1206,7 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
           <div class="stat-body">
             <div class="stat-label">Samples in window</div>
             <div class="stat-value purple" id="slip-samples">—</div>
-            <div style="font-size:11px;color:var(--text-muted);margin-top:2px" id="slip-samples-sub">raw + condensed</div>
+            <div style="font-size:.6875rem;color:var(--text-muted);margin-top:2px" id="slip-samples-sub">raw + condensed</div>
           </div>
         </div>
         <div class="stat-card">
@@ -1135,7 +1214,7 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
           <div class="stat-body">
             <div class="stat-label">Ask uptime · <span id="uptime-ask-1n-label">1₦</span></div>
             <div class="stat-value green" id="uptime-ask-1n">—</div>
-            <div style="font-size:11px;color:var(--text-muted);margin-top:2px" id="uptime-ask-1n-sub">this hour · graphed</div>
+            <div style="font-size:.6875rem;color:var(--text-muted);margin-top:2px" id="uptime-ask-1n-sub">this hour · graphed</div>
           </div>
         </div>
         <div class="stat-card">
@@ -1143,7 +1222,7 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
           <div class="stat-body">
             <div class="stat-label">Bid uptime · <span id="uptime-bid-1n-label">1₦</span></div>
             <div class="stat-value red" id="uptime-bid-1n">—</div>
-            <div style="font-size:11px;color:var(--text-muted);margin-top:2px" id="uptime-bid-1n-sub">this hour · graphed</div>
+            <div style="font-size:.6875rem;color:var(--text-muted);margin-top:2px" id="uptime-bid-1n-sub">this hour · graphed</div>
           </div>
         </div>
         <div class="stat-card">
@@ -1151,7 +1230,7 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
           <div class="stat-body">
             <div class="stat-label">Spread ≤ ₦1 compliance</div>
             <div class="stat-value blue" id="spread-gap-1n">—</div>
-            <div style="font-size:11px;color:var(--text-muted);margin-top:2px" id="spread-gap-1n-sub">this hour · graphed</div>
+            <div style="font-size:.6875rem;color:var(--text-muted);margin-top:2px" id="spread-gap-1n-sub">this hour · graphed</div>
           </div>
         </div>
         <div class="stat-card">
@@ -1159,7 +1238,7 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
           <div class="stat-body">
             <div class="stat-label" id="vol-rolling-label">Volume · trailing 60m</div>
             <div class="stat-value purple" id="vol-rolling">—</div>
-            <div style="font-size:11px;color:var(--text-muted);margin-top:2px" id="vol-rolling-sub">USDT traded</div>
+            <div style="font-size:.6875rem;color:var(--text-muted);margin-top:2px" id="vol-rolling-sub">USDT traded</div>
           </div>
         </div>
       </div>
@@ -1177,7 +1256,7 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
         <div style="position:relative;height:320px">
           <canvas id="slippageChart" role="img" aria-label="USDTNGN slippage over time"></canvas>
         </div>
-        <div style="font-size:11px;color:var(--text-muted);margin-top:10px;line-height:1.5">
+        <div style="font-size:.6875rem;color:var(--text-muted);margin-top:10px;line-height:1.5">
           Buy slip % = ((weighted avg buy price ÷ mid) − 1) × 100.
           Sell slip % = ((weighted avg sell price ÷ mid) − 1) × 100.
           Each point walks the visible orderbook cumulatively until <b><span id="slip-explainer-weight">100k USDT</span></b>
@@ -1191,7 +1270,7 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
       <!-- Liquidity uptime chart -->
       <div class="chart-card">
         <div class="chart-header">
-          <div class="chart-title">USDTNGN — liquidity uptime &amp; spread compliance <span style="font-size:11px;font-weight:500;color:var(--text-muted)">(trading hours Mon–Fri 9am–6pm NGT)</span></div>
+          <div class="chart-title">USDTNGN — liquidity uptime &amp; spread compliance <span style="font-size:.6875rem;font-weight:500;color:var(--text-muted)">(trading hours Mon–Fri 9am–6pm NGT)</span></div>
           <button class="btn" onclick="downloadUptimeCsv()" title="Download completed hourly buckets in the selected window as CSV (trading hours only)">
             <i class="ti ti-download"></i> Download CSV
           </button>
@@ -1204,7 +1283,7 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
         <div style="position:relative;height:280px">
           <canvas id="uptimeChart" role="img" aria-label="USDTNGN liquidity uptime over time"></canvas>
         </div>
-        <div style="font-size:11px;color:var(--text-muted);margin-top:10px;line-height:1.5">
+        <div style="font-size:.6875rem;color:var(--text-muted);margin-top:10px;line-height:1.5">
           The graph is the <b>persisted</b> series: a <b>±<span id="uptime-explainer-pct">0.071</span>%</b> band
           around live mid — that percent is <b>1₦ ÷ <span id="uptime-explainer-ref">1400</span>₦</b> target price,
           applied multiplicatively so the band tracks mid. Per 5-second poll, a side scores 1 if at least
@@ -1223,7 +1302,7 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
       <!-- Hourly traded volume -->
       <div class="chart-card">
         <div class="chart-header">
-          <div class="chart-title">USDTNGN — hourly traded volume <span style="font-size:11px;font-weight:500;color:var(--text-muted)">(USDT, all hours)</span></div>
+          <div class="chart-title">USDTNGN — hourly traded volume <span style="font-size:.6875rem;font-weight:500;color:var(--text-muted)">(USDT, all hours)</span></div>
           <button class="btn" onclick="downloadVolumeCsv()" title="Download the hourly volume series for the selected window as CSV">
             <i class="ti ti-download"></i> Download CSV
           </button>
@@ -1235,7 +1314,7 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
         <div style="position:relative;height:280px">
           <canvas id="volumeChart" role="img" aria-label="USDTNGN hourly traded volume"></canvas>
         </div>
-        <div style="font-size:11px;color:var(--text-muted);margin-top:10px;line-height:1.5">
+        <div style="font-size:.6875rem;color:var(--text-muted);margin-top:10px;line-height:1.5">
           Each bar is one <b>closed</b> NGT hour of <b>base</b> volume — USDT traded, straight from the
           exchange's hourly candle. This is <i>not</i> the naira turnover the D1 volume-spike alert
           thresholds on (that one multiplies by the candle close); it's the raw quantity.
@@ -1290,7 +1369,7 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
         <div class="divider"></div>
         <label for="aa-date-start">Range:</label>
         <input type="date" id="aa-date-start" onchange="setAaDateRange()" />
-        <span style="font-size:11px;color:var(--text-muted)">to</span>
+        <span style="font-size:.6875rem;color:var(--text-muted)">to</span>
         <input type="date" id="aa-date-end" onchange="setAaDateRange()" />
         <div class="divider"></div>
         <button class="btn" onclick="reloadAlertTab()">
@@ -1303,7 +1382,7 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
            dashboard will load (AA_MAX_DAYS); see reloadAlertTab. -->
       <div class="chart-card aa-too-wide" id="aa-too-wide">
         <div class="section-title">
-          <i class="ti ti-file-spreadsheet" style="font-size:16px;color:var(--accent)"></i>
+          <i class="ti ti-file-spreadsheet" style="font-size:1rem;color:var(--accent)"></i>
           This range is too wide to show here
         </div>
         <div class="aa-sub" style="margin:8px 0 14px">
@@ -1398,7 +1477,7 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
       <div class="chart-card">
         <div class="section-header">
           <div class="section-title">
-            <i class="ti ti-hourglass" style="font-size:16px;color:var(--amber)"></i>
+            <i class="ti ti-hourglass" style="font-size:1rem;color:var(--amber)"></i>
             Longest episodes
             <span class="count" id="aa-longest-count">—</span>
           </div>
@@ -1414,7 +1493,7 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
         <div class="chart-card" style="margin-bottom:0">
           <div class="section-header">
             <div class="section-title">
-              <i class="ti ti-wave-saw-tool" style="font-size:16px;color:var(--accent)"></i>
+              <i class="ti ti-wave-saw-tool" style="font-size:1rem;color:var(--accent)"></i>
               Noisiest (market, alert) pairs
               <span class="count" id="aa-flap-count">—</span>
             </div>
@@ -1429,7 +1508,7 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
         <div class="chart-card" style="margin-bottom:0">
           <div class="section-header">
             <div class="section-title">
-              <i class="ti ti-player-record" style="font-size:16px;color:var(--red)"></i>
+              <i class="ti ti-player-record" style="font-size:1rem;color:var(--red)"></i>
               Still open at range end
               <span class="count" id="aa-open-count">—</span>
             </div>
@@ -1455,7 +1534,7 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
       <div id="aa-log-section" class="chart-card">
         <div class="section-header">
           <div class="section-title">
-            <i class="ti ti-table" style="font-size:16px;color:var(--accent)"></i>
+            <i class="ti ti-table" style="font-size:1rem;color:var(--accent)"></i>
             Daily log
             <span class="count" id="log-count">—</span>
           </div>
@@ -1491,7 +1570,7 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
             <option value="200">200 rows</option>
             <option value="500">500 rows</option>
           </select>
-          <span style="font-size:12px;color:var(--text-muted);margin-left:auto" id="log-tier-counts">—</span>
+          <span style="font-size:.75rem;color:var(--text-muted);margin-left:auto" id="log-tier-counts">—</span>
         </div>
 
         <div class="dl-table-wrap">
@@ -1544,7 +1623,7 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
         <div class="divider"></div>
         <label for="led-date-start">Range:</label>
         <input type="date" id="led-date-start" onchange="setLedDateRange()" />
-        <span style="font-size:11px;color:var(--text-muted)">to</span>
+        <span style="font-size:.6875rem;color:var(--text-muted)">to</span>
         <input type="date" id="led-date-end" onchange="setLedDateRange()" />
         <div class="divider"></div>
         <button class="btn" onclick="fetchLedger()">
@@ -1556,7 +1635,7 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
       <div class="log-card chart-card">
         <div class="section-header">
           <div class="section-title">
-            <i class="ti ti-checkbox" style="font-size:16px;color:var(--accent)"></i>
+            <i class="ti ti-checkbox" style="font-size:1rem;color:var(--accent)"></i>
             Alert sign-off
             <span class="count" id="led-count">—</span>
           </div>
@@ -1629,7 +1708,7 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
             <option value="200">200 rows</option>
             <option value="500">500 rows</option>
           </select>
-          <span style="font-size:12px;color:var(--text-muted);margin-left:auto" id="led-counts">—</span>
+          <span style="font-size:.75rem;color:var(--text-muted);margin-left:auto" id="led-counts">—</span>
         </div>
 
         <div class="dl-table-wrap">
@@ -1675,13 +1754,13 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
 
 <!-- ═══ Config drawer ═══════════════════════════════════════════════════════ -->
 <div class="config-overlay" id="config-overlay" onclick="handleOverlayClick(event)">
-  <div class="config-drawer" id="config-drawer">
+  <div class="config-drawer" id="config-drawer" role="dialog" aria-modal="true" aria-labelledby="config-drawer-title" tabindex="-1">
     <div class="config-drawer-header">
-      <div class="config-drawer-title">
-        <i class="ti ti-adjustments-horizontal" style="font-size:18px;color:var(--accent)"></i>
+      <div class="config-drawer-title" id="config-drawer-title">
+        <i class="ti ti-adjustments-horizontal" style="font-size:1.125rem;color:var(--accent)"></i>
         Monitor configuration
       </div>
-      <button class="btn" onclick="toggleConfigPanel()" style="padding:5px 10px">
+      <button class="btn" onclick="toggleConfigPanel()" style="padding:5px 10px" aria-label="Close configuration">
         <i class="ti ti-x"></i>
       </button>
     </div>
@@ -1691,7 +1770,7 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
       <!-- Timing -->
       <div class="config-section">
         <div class="config-section-title">
-          <i class="ti ti-clock" style="font-size:14px"></i>
+          <i class="ti ti-clock" style="font-size:.875rem"></i>
           Timing
         </div>
         <div class="config-grid">
@@ -1706,7 +1785,7 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
       <!-- Order book thresholds -->
       <div class="config-section">
         <div class="config-section-title">
-          <i class="ti ti-book" style="font-size:14px"></i>
+          <i class="ti ti-book" style="font-size:.875rem"></i>
           Order book thresholds
         </div>
         <div class="config-grid">
@@ -1751,7 +1830,7 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
       <!-- Pricing & circuit breaker -->
       <div class="config-section">
         <div class="config-section-title">
-          <i class="ti ti-currency-dollar" style="font-size:14px"></i>
+          <i class="ti ti-currency-dollar" style="font-size:.875rem"></i>
           Pricing &amp; circuit breaker
         </div>
         <div class="config-grid">
@@ -1806,7 +1885,7 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
            G2's window. -->
       <div class="config-section">
         <div class="config-section-title">
-          <i class="ti ti-chart-candle" style="font-size:14px"></i>
+          <i class="ti ti-chart-candle" style="font-size:.875rem"></i>
           K-line (circuit breaker · B4 &amp; candle wicks · G2)
         </div>
         <div class="config-grid">
@@ -1826,7 +1905,7 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
       <!-- Volume spike (D1) -->
       <div class="config-section">
         <div class="config-section-title">
-          <i class="ti ti-flame" style="font-size:14px"></i>
+          <i class="ti ti-flame" style="font-size:.875rem"></i>
           Volume spike (D1)
         </div>
         <div class="config-grid">
@@ -1895,7 +1974,7 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
       <!-- Layer churn (A6) -->
       <div class="config-section">
         <div class="config-section-title">
-          <i class="ti ti-refresh" style="font-size:14px"></i>
+          <i class="ti ti-refresh" style="font-size:.875rem"></i>
           Layer churn (A6)
         </div>
         <div class="config-grid">
@@ -1920,7 +1999,7 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
       <!-- Fill rate (D2) -->
       <div class="config-section">
         <div class="config-section-title">
-          <i class="ti ti-activity-heartbeat" style="font-size:14px"></i>
+          <i class="ti ti-activity-heartbeat" style="font-size:.875rem"></i>
           Fill rate (D2)
         </div>
         <div class="config-grid">
@@ -1973,7 +2052,7 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
       <!-- Depth-walk (G1) -->
       <div class="config-section">
         <div class="config-section-title">
-          <i class="ti ti-arrows-diff" style="font-size:14px"></i>
+          <i class="ti ti-arrows-diff" style="font-size:.875rem"></i>
           Depth-walk slippage (G1) — USDTNGN only
         </div>
         <div class="config-grid">
@@ -2008,7 +2087,7 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
       <!-- Liquidity uptime (rides the G1 depth-walk task) -->
       <div class="config-section">
         <div class="config-section-title">
-          <i class="ti ti-heartbeat" style="font-size:14px"></i>
+          <i class="ti ti-heartbeat" style="font-size:.875rem"></i>
           Liquidity uptime — USDTNGN only
         </div>
         <div class="config-grid">
@@ -2028,7 +2107,7 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
       <!-- Alerts -->
       <div class="config-section">
         <div class="config-section-title">
-          <i class="ti ti-bell-off" style="font-size:14px"></i>
+          <i class="ti ti-bell-off" style="font-size:.875rem"></i>
           Alerts
         </div>
         <div class="config-grid">
@@ -2043,9 +2122,9 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
       <!-- Pairs -->
       <div class="config-section">
         <div class="config-section-title">
-          <i class="ti ti-currency-bitcoin" style="font-size:14px"></i>
+          <i class="ti ti-currency-bitcoin" style="font-size:.875rem"></i>
           Pairs &amp; spread targets
-          <span style="margin-left:auto;font-size:10px;font-weight:400;color:var(--text-muted);text-transform:none;letter-spacing:0" id="pairs-count-cfg">— pairs</span>
+          <span style="margin-left:auto;font-size:.625rem;font-weight:400;color:var(--text-muted);text-transform:none;letter-spacing:0" id="pairs-count-cfg">— pairs</span>
         </div>
         <table class="pairs-table" id="pairs-cfg-table">
           <thead>
@@ -2061,7 +2140,7 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
           </thead>
           <tbody id="pairs-cfg-tbody"></tbody>
         </table>
-        <div style="font-size:11px;color:var(--text-muted);margin-top:6px;line-height:1.4">
+        <div style="font-size:.6875rem;color:var(--text-muted);margin-top:6px;line-height:1.4">
           MEXC/KuCoin aliases are optional — only needed when a USDT-quoted asset's ticker on that
           exchange differs from Quidax's (e.g. RNDR is listed as RENDER on MEXC but still RNDR on
           KuCoin). Leave blank to use the symbol's base ticker as-is.
@@ -2070,11 +2149,11 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
           for thin low-caps that legitimately differ between exchanges.
         </div>
         <div class="add-pair-row">
-          <input type="text" id="new-pair-sym" placeholder="symbol (e.g. solusdt)" style="font-family:var(--mono);font-size:12px;border:1px solid var(--border-strong);border-radius:6px;padding:6px 10px;background:var(--bg-base);color:var(--text-primary)" />
-          <input type="number" id="new-pair-target" placeholder="target % (blank = monitor only)" min="0" step="0.01" style="font-family:var(--mono);font-size:12px;border:1px solid var(--border-strong);border-radius:6px;padding:6px 10px;background:var(--bg-base);color:var(--text-primary)" />
-          <input type="number" id="new-pair-b2div" placeholder="B2 div % (blank = global)" min="0" step="0.01" style="font-family:var(--mono);font-size:12px;border:1px solid var(--border-strong);border-radius:6px;padding:6px 10px;background:var(--bg-base);color:var(--text-primary)" />
-          <input type="text" id="new-pair-mexc-alias" placeholder="MEXC alias (optional)" style="font-family:var(--mono);font-size:12px;border:1px solid var(--border-strong);border-radius:6px;padding:6px 10px;background:var(--bg-base);color:var(--text-primary)" />
-          <input type="text" id="new-pair-kucoin-alias" placeholder="KuCoin alias (optional)" style="font-family:var(--mono);font-size:12px;border:1px solid var(--border-strong);border-radius:6px;padding:6px 10px;background:var(--bg-base);color:var(--text-primary)" />
+          <input type="text" id="new-pair-sym" placeholder="symbol (e.g. solusdt)" style="font-family:var(--mono);font-size:.75rem;border:1px solid var(--border-strong);border-radius:6px;padding:6px 10px;background:var(--bg-base);color:var(--text-primary)" />
+          <input type="number" id="new-pair-target" placeholder="target % (blank = monitor only)" min="0" step="0.01" style="font-family:var(--mono);font-size:.75rem;border:1px solid var(--border-strong);border-radius:6px;padding:6px 10px;background:var(--bg-base);color:var(--text-primary)" />
+          <input type="number" id="new-pair-b2div" placeholder="B2 div % (blank = global)" min="0" step="0.01" style="font-family:var(--mono);font-size:.75rem;border:1px solid var(--border-strong);border-radius:6px;padding:6px 10px;background:var(--bg-base);color:var(--text-primary)" />
+          <input type="text" id="new-pair-mexc-alias" placeholder="MEXC alias (optional)" style="font-family:var(--mono);font-size:.75rem;border:1px solid var(--border-strong);border-radius:6px;padding:6px 10px;background:var(--bg-base);color:var(--text-primary)" />
+          <input type="text" id="new-pair-kucoin-alias" placeholder="KuCoin alias (optional)" style="font-family:var(--mono);font-size:.75rem;border:1px solid var(--border-strong);border-radius:6px;padding:6px 10px;background:var(--bg-base);color:var(--text-primary)" />
           <button class="btn btn-accent" onclick="addPairRow()" style="white-space:nowrap">
             <i class="ti ti-plus"></i> Add pair
           </button>
@@ -2084,7 +2163,7 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
     </div><!-- end body -->
 
     <div class="config-drawer-footer">
-      <div style="font-size:12px;color:var(--text-muted)" id="cfg-save-status">Changes take effect on the next monitor cycle.</div>
+      <div style="font-size:.75rem;color:var(--text-muted)" id="cfg-save-status">Changes take effect on the next monitor cycle.</div>
       <div style="display:flex;gap:8px">
         <button class="btn" onclick="resetConfigToDefaults()">Reset to defaults</button>
         <button class="btn btn-accent" onclick="saveConfig()">
@@ -2095,7 +2174,7 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
   </div>
 </div>
 
-<div class="config-toast" id="config-toast"></div>
+<div class="config-toast" id="config-toast" role="status" aria-live="polite"></div>
 
 <script>
 const API_BASE = "";
@@ -2219,10 +2298,33 @@ setInterval(() => {
 const clockEl = document.getElementById("clock");
 if (clockEl) clockEl.textContent = ngtTime() + " WAT";
 
+// ── Motion preferences ────────────────────────────────────────────────────────
+// CSS media queries can't reach canvas charts or JS-driven scrolling, so both
+// read this instead. Kept live: toggling the OS setting applies without reload.
+const _reducedMotionMq = window.matchMedia
+  ? window.matchMedia("(prefers-reduced-motion: reduce)") : null;
+function prefersReducedMotion() { return !!(_reducedMotionMq && _reducedMotionMq.matches); }
+function scrollBehavior() { return prefersReducedMotion() ? "auto" : "smooth"; }
+// Chart.js update mode. Poll-driven refreshes (`quiet`) redraw in place: a line
+// that re-animates every 5s is motion with no meaning. Only a change the user
+// made (range, symbol) animates, and never under reduced motion.
+function chartMode(quiet) { return quiet || prefersReducedMotion() ? "none" : undefined; }
+if (window.Chart) Chart.defaults.animation = prefersReducedMotion() ? false : Chart.defaults.animation;
+
 function scrollToSection(id) {
   const el = document.getElementById(id);
-  if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+  if (el) el.scrollIntoView({ behavior: scrollBehavior(), block: "start" });
 }
+
+// Scroll edge: the translucent topbar gets its divider only once content is
+// actually scrolled underneath it.
+(function () {
+  const bar = document.getElementById("topbar");
+  if (!bar) return;
+  const sync = () => bar.classList.toggle("scrolled", window.scrollY > 0);
+  window.addEventListener("scroll", sync, { passive: true });
+  sync();
+})();
 
 // ── Tab switching ─────────────────────────────────────────────────────────────
 // Nav items opt into a tab via data-tab="…"; items without data-tab (like the
@@ -2290,7 +2392,7 @@ function showTab(tab, anchor) {
     // Wait one frame so the newly-visible panel has laid out before scrolling
     requestAnimationFrame(() => scrollToSection(anchor));
   } else {
-    window.scrollTo({ top: 0, behavior: "smooth" });
+    window.scrollTo({ top: 0, behavior: scrollBehavior() });
   }
 }
 
@@ -2412,7 +2514,7 @@ function setProgress(pct, { error = false } = {}) {
   if (!wrap || !bar) return;
   wrap.classList.add("active");
   wrap.classList.toggle("error", error);
-  bar.style.width = `${pct}%`;
+  bar.style.transform = `scaleX(${pct / 100})`;
 }
 
 function endProgress({ error = false } = {}) {
@@ -2424,7 +2526,7 @@ function endProgress({ error = false } = {}) {
   // is invisible — snapping back to 0% while still on screen looks like a failure.
   setTimeout(() => {
     wrap.classList.remove("active");
-    setTimeout(() => { bar.style.width = "0%"; wrap.classList.remove("error"); }, 300);
+    setTimeout(() => { bar.style.transform = "scaleX(0)"; wrap.classList.remove("error"); }, 300);
   }, 350);
 }
 
@@ -2618,13 +2720,14 @@ function buildSpreadHistory(rows, statusData) {
     });
   }
   rebuildChartSelector(statusData);
+  // Poll-driven: redraw in place (see chartMode).
   if (selectedSym && spreadHistoryMap[selectedSym]) {
-    updateChart(selectedSym);
+    updateChart(selectedSym, { quiet: true });
   } else {
     const first = statusData && statusData.pairs
       ? (statusData.pairs.find(p => !p.monitor_only && spreadHistoryMap[p.symbol]) || statusData.pairs[0] || {}).symbol
       : Object.keys(spreadHistoryMap)[0];
-    if (first) updateChart(first);
+    if (first) updateChart(first, { quiet: true });
   }
 }
 
@@ -2688,7 +2791,7 @@ function renderPairs(pairs) {
     : pairs.filter(p => (p.alert_tier === 1 || p.alert_tier === 2));
   document.getElementById("pairs-count-label").textContent = visible.length + " of " + pairs.length;
   if (!visible.length) {
-    container.innerHTML = `<p class="empty-state empty-state-green"><i class="ti ti-circle-check" style="font-size:15px"></i> All ${pairs.length} pairs healthy or flagged only</p>`;
+    container.innerHTML = `<p class="empty-state empty-state-green"><i class="ti ti-circle-check" style="font-size:.9375rem"></i> All ${pairs.length} pairs healthy or flagged only</p>`;
     return;
   }
   container.innerHTML = visible.map(p => renderMarketRow(p)).join("");
@@ -2761,6 +2864,19 @@ function selectMarket(symbol) {
     if (pair) renderDetailPanel(pair);
   }
   if (spreadHistoryMap[symbol]) updateChart(symbol);
+
+  // Below 900px the detail panel stacks under the whole market list, so the
+  // click would otherwise change something off-screen and read as a dead tap.
+  // Bring it into view only if it isn't already.
+  if (window.matchMedia && window.matchMedia("(max-width: 900px)").matches) {
+    const panel = document.querySelector(".detail-panel");
+    if (panel) {
+      const r = panel.getBoundingClientRect();
+      if (r.top > window.innerHeight - 80 || r.bottom < 0) {
+        panel.scrollIntoView({ behavior: scrollBehavior(), block: "start" });
+      }
+    }
+  }
 }
 
 function formatTelegramDetail(detail) {
@@ -3204,14 +3320,14 @@ function renderDetailPanel(p) {
         <div class="detail-time">${p.timestamp ? p.timestamp.split(" ").pop() : ngtTime()} WAT</div>
       </div>
       <div style="display:flex;align-items:center;gap:8px">
-        <span class="mr-badge ${statusBadgeCls}" style="font-size:12px;padding:4px 12px">${statusText}</span>
+        <span class="mr-badge ${statusBadgeCls}" style="font-size:.75rem;padding:4px 12px">${statusText}</span>
         <a class="btn" href="${quidaxTradeUrl(p.symbol)}" target="_blank" rel="noopener noreferrer"
            style="text-decoration:none" title="Open ${base} order book on Quidax">
           <i class="ti ti-external-link"></i> Order book
         </a>
       </div>
     </div>
-    ${telegramCaption ? `<div style="font-size:11px;color:var(--text-muted);margin:-6px 0 14px">${telegramCaption}</div>` : ""}
+    ${telegramCaption ? `<div style="font-size:.6875rem;color:var(--text-muted);margin:-6px 0 14px">${telegramCaption}</div>` : ""}
     <div class="detail-metrics">
       <div class="dm"><div class="k">Mid price</div><div class="v muted">${fmtPrice(p.mid_price)}</div></div>
       <div class="dm"><div class="k">Spread</div><div class="v ${(p.status||"").toLowerCase() === "warning" ? "warn" : "ok"}">${fmt(p.current_spread, 4)}</div></div>
@@ -3378,13 +3494,14 @@ function rebuildChartSelector(statusData) {
   const active = selectedSym && syms.includes(selectedSym) ? selectedSym : syms[0];
   container.innerHTML = syms.slice(0, 6).map(s => {
     const { base } = symParts(s);
-    return `<div class="chart-pill${s === active ? " active" : ""}" data-symbol="${s}" onclick="selectChartSym('${s}')">${base}</div>`;
+    return `<button type="button" class="chart-pill${s === active ? " active" : ""}" data-symbol="${s}" aria-pressed="${s === active}" onclick="selectChartSym('${s}')">${base}</button>`;
   }).join("");
 }
 
 function selectChartSym(sym) {
   document.querySelectorAll(".chart-pill").forEach(el => {
     el.classList.remove("active");
+    el.setAttribute("aria-pressed", "false");
   });
 
   const activePill = [...document.querySelectorAll(".chart-pill")]
@@ -3392,12 +3509,13 @@ function selectChartSym(sym) {
 
   if (activePill) {
     activePill.classList.add("active");
+    activePill.setAttribute("aria-pressed", "true");
   }
 
   updateChart(sym);
 }
 
-function updateChart(sym) {
+function updateChart(sym, { quiet = false } = {}) {
   if (!spreadChart || !spreadHistoryMap[sym]) return;
   const history = spreadHistoryMap[sym];
   const target  = targetMap[sym] ?? null;
@@ -3405,7 +3523,7 @@ function updateChart(sym) {
   spreadChart.data.labels = history.map((_, i) => `C${i + 1}`);
   spreadChart.data.datasets[0].data = history;
   spreadChart.data.datasets[1].data = target !== null ? history.map(() => target) : [];
-  spreadChart.update();
+  spreadChart.update(chartMode(quiet));
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -3582,7 +3700,7 @@ async function fetchSlippageData(opts) {
       return true;
     }).sort((a, b) => new Date(a.ts) - new Date(b.ts));
 
-    renderSlippageCharts(filtered);
+    renderSlippageCharts(filtered, opts.silent);
     renderSlippageStats(filtered);
 
     // ── Liquidity uptime — hourly-only series ────────────────────────────────
@@ -3649,7 +3767,7 @@ async function fetchSlippageData(opts) {
     _lastUptimeCsvRows   = uptimeForChart.filter(p => !p.live);
     _lastUptimeCsvWindow = { start, end };
 
-    renderUptimeChart(uptimeForChart);
+    renderUptimeChart(uptimeForChart, opts.silent);
     // 1h preset with no archive override → current in-progress hour's running
     // fraction, same behaviour as before. Every other range (24h/7d/30d) or an
     // archive date range instead shows the pooled average over completed,
@@ -3664,6 +3782,8 @@ async function fetchSlippageData(opts) {
     // Feed health first: it decides whether the live cards below are allowed to
     // claim they describe "this hour".
     const feedStale = renderSlippageFeedHealth(raw.samples || []);
+    const liveDot = document.querySelector("#slippage-live-badge .dot");
+    if (liveDot) liveDot.classList.toggle("stale", !!feedStale);
 
     const isLiveHourView = mode !== "archive" && slippageRange === "1h";
     if (isLiveHourView) {
@@ -3691,7 +3811,7 @@ async function fetchSlippageData(opts) {
   // deliberately outside the try above and un-awaited: a slippage failure
   // shouldn't blank the volume widgets, and a volume failure (handled inside
   // fetchVolumeData) shouldn't delay or break the slippage render.
-  fetchVolumeData();
+  fetchVolumeData({ silent: opts.silent });
 }
 
 // ── Trading-hours + CSV export helpers ─────────────────────────────────────
@@ -4243,7 +4363,7 @@ function _labelForUptimePoint(p) {
   return `${hh}:00`;
 }
 
-function renderUptimeChart(points) {
+function renderUptimeChart(points, quiet = false) {
   initSlippageCharts();
   const labels = points.map(_labelForUptimePoint);
   // Per-point radius: highlight the single live in-progress-hour point.
@@ -4262,7 +4382,7 @@ function renderUptimeChart(points) {
   uptimeChart.data.datasets[0].pointStyle = styles;
   uptimeChart.data.datasets[1].pointStyle = styles;
   uptimeChart.data.datasets[2].pointStyle = styles;
-  uptimeChart.update();
+  uptimeChart.update(chartMode(quiet));
 }
 
 function _labelForPoint(p) {
@@ -4279,7 +4399,7 @@ function _labelForPoint(p) {
   return `${hh}:${mm}`;
 }
 
-function renderSlippageCharts(points) {
+function renderSlippageCharts(points, quiet = false) {
   initSlippageCharts();
 
   const labels    = points.map(_labelForPoint);
@@ -4293,13 +4413,13 @@ function renderSlippageCharts(points) {
   slippageChart.data.datasets[0].data = buySeries;
   slippageChart.data.datasets[1].data = sellSeries;
   slippageChart.data.datasets[2].data = g1Series;
-  slippageChart.update();
+  slippageChart.update(chartMode(quiet));
 
   slippagePriceChart.data.labels = labels;
   slippagePriceChart.data.datasets[0].data = points.map(p => p.mid);
   slippagePriceChart.data.datasets[1].data = points.map(p => p.weighted_avg_buy);
   slippagePriceChart.data.datasets[2].data = points.map(p => p.weighted_avg_sell);
-  slippagePriceChart.update();
+  slippagePriceChart.update(chartMode(quiet));
 
   // Chart title reflects the current window
   const titleEl = document.getElementById("slippage-chart-title");
@@ -4366,7 +4486,7 @@ function _ngtHhMm(iso) {
   } catch { return "—"; }
 }
 
-async function fetchVolumeData() {
+async function fetchVolumeData({ silent = false } = {}) {
   const { start, end, mode } = computeSlippageWindow();
 
   // The stat card tracks the range selector, same rule the uptime and spread
@@ -4401,7 +4521,7 @@ async function fetchVolumeData() {
     } else {
       renderVolumeWindowTotal(win);
     }
-    renderVolumeChart(win);
+    renderVolumeChart(win, silent);
   } catch (err) {
     // Non-fatal: the rest of the tab (slippage, uptime) is independent, so a
     // volume outage blanks these two widgets rather than breaking the page.
@@ -4463,7 +4583,7 @@ function renderVolumeStat(roll) {
     : `USDT · ${window}`;
 }
 
-function renderVolumeChart(win) {
+function renderVolumeChart(win, quiet = false) {
   initSlippageCharts();
   const points = (win && win.points) || [];
   // CSV keeps the raw HOURLY rows regardless of how the chart is bucketed —
@@ -4541,7 +4661,7 @@ function renderVolumeChart(win) {
   volumeChart._archivedFlags = archivedFlags;
   volumeChart._bucketMeta    = bucketMeta;
   volumeChart._daily         = daily;
-  volumeChart.update();
+  volumeChart.update(chartMode(quiet));
 
   const legendEl = document.getElementById("vol-legend-label");
   if (legendEl) legendEl.textContent = daily ? "Volume per day (USDT)" : "Volume per hour (USDT)";
@@ -4711,9 +4831,22 @@ async function resumePair(sym) {
   }
 }
 
+// Element that opened the drawer, so focus can return there on close.
+let _configReturnFocus = null;
+
 function toggleConfigPanel() {
   configOpen = !configOpen;
   document.getElementById("config-overlay").classList.toggle("open", configOpen);
+  const drawer = document.getElementById("config-drawer");
+  if (configOpen) {
+    _configReturnFocus = document.activeElement;
+    // The overlay is visibility:hidden until the class lands, so focus on the
+    // next frame once it is focusable.
+    requestAnimationFrame(() => drawer && drawer.focus({ preventScroll: true }));
+  } else if (_configReturnFocus && document.contains(_configReturnFocus)) {
+    _configReturnFocus.focus({ preventScroll: true });
+    _configReturnFocus = null;
+  }
   if (configOpen) {
     loadConfigIntoPanel();
     // Refresh the muted-countdown labels once a minute while the drawer is open.
@@ -4728,6 +4861,28 @@ function toggleConfigPanel() {
 function handleOverlayClick(e) {
   if (e.target === document.getElementById("config-overlay")) toggleConfigPanel();
 }
+
+// Esc closes the drawer; Tab cycles inside it while it is open (aria-modal).
+document.addEventListener("keydown", (e) => {
+  if (!configOpen) return;
+  if (e.key === "Escape") {
+    e.preventDefault();
+    toggleConfigPanel();
+    return;
+  }
+  if (e.key !== "Tab") return;
+  const drawer = document.getElementById("config-drawer");
+  const focusable = [...drawer.querySelectorAll(
+    'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])'
+  )].filter(el => el.offsetParent !== null);
+  if (!focusable.length) return;
+  const first = focusable[0], last = focusable[focusable.length - 1];
+  if (e.shiftKey && (document.activeElement === first || document.activeElement === drawer)) {
+    e.preventDefault(); last.focus();
+  } else if (!e.shiftKey && document.activeElement === last) {
+    e.preventDefault(); first.focus();
+  }
+});
 
 async function loadConfigIntoPanel() {
   try {
@@ -4835,7 +4990,7 @@ function renderPairsTable(pairs, overrides) {
     const ovVal = (ovRaw !== null && ovRaw !== undefined) ? ovRaw : "";
     const b2Cell = isUsdt
       ? `<input type="number" value="${ovVal}" placeholder="global" min="0" step="0.01" data-row="${i}" data-col="b2div" />`
-      : `<span style="color:var(--text-muted);font-size:12px">—</span>`;
+      : `<span style="color:var(--text-muted);font-size:.75rem">—</span>`;
     return `<tr>
       <td><input type="text" value="${sym}" data-row="${i}" data-col="sym" /></td>
       <td><input type="number" value="${tgtVal}" placeholder="monitor only" min="0" step="0.01" data-row="${i}" data-col="tgt" /></td>
@@ -5056,12 +5211,16 @@ async function resetConfigToDefaults() {
   }
 }
 
+// Each toast owns the full 3.5s: a newer one cancels the older timer, which
+// would otherwise hide the new message early.
+let _toastTimer = null;
 function showToast(msg, isError = false) {
   const el = document.getElementById("config-toast");
   el.textContent = msg;
   el.className = "config-toast" + (isError ? " error-toast" : "");
   el.classList.add("show");
-  setTimeout(() => el.classList.remove("show"), 3500);
+  clearTimeout(_toastTimer);
+  _toastTimer = setTimeout(() => el.classList.remove("show"), 3500);
 }
 
 // ── Theme toggle ───────────────────────────────────────────────────────────────
@@ -5071,9 +5230,15 @@ function syncThemeIcon() {
   if (icon) icon.className = "ti " + (dark ? "ti-sun" : "ti-moon");
 }
 
+let _themeFadeTimer = null;
 function toggleTheme() {
   const root = document.documentElement;
   const dark = root.getAttribute("data-theme") === "dark";
+  // Ease every surface together rather than letting the brightness jump.
+  // Colour fades stay under reduced motion: nothing moves, only shade changes.
+  root.classList.add("theme-fading");
+  clearTimeout(_themeFadeTimer);
+  _themeFadeTimer = setTimeout(() => root.classList.remove("theme-fading"), 250);
   if (dark) root.removeAttribute("data-theme");
   else      root.setAttribute("data-theme", "dark");
   try { localStorage.setItem("ohm-theme", dark ? "light" : "dark"); } catch (e) {}
