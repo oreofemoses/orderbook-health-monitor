@@ -5,15 +5,17 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
 <title>Market Monitor — sample redesign</title>
 <!--
-  SAMPLE REDESIGN of dashboard.html: Overview, USDT/NGN depth (the Slippage
-  tab) and the configuration drawer. It does not replace the live dashboard;
-  nothing links to it. It talks to the same API: served from the API it uses
-  relative URLs, opened as a file it calls http://localhost:8765 (override with
-  ?api=http://host:port). If the API is unreachable the Overview renders a
-  saved snapshot; the depth view and configuration need the API.
+  SAMPLE REDESIGN of dashboard.html: every tab (Overview, USDT/NGN depth,
+  Alert analysis, Sign-off) plus the configuration drawer. It does not
+  replace the live dashboard; nothing links to it.
 
-  The configuration drawer and the per-pair Mute buttons WRITE to the API
-  exactly like the current dashboard does.
+  Data: reads the production API (https://quidax-monitor.fly.dev) by default;
+  ?api=http://host:port points it elsewhere. If the API is unreachable the
+  Overview renders a saved snapshot; the other views need the API.
+
+  Writes (config save/reset, per-pair mutes, sign-offs) are DISABLED unless
+  the API is local (localhost / 127.0.0.1) or ?writes=1 is passed. Against a
+  local API they behave exactly like the current dashboard.
 
   Motion rules this page follows (emil-design-eng):
   - Keyboard actions (↑/↓, j/k, /, 1/2, Esc) never animate.
@@ -102,6 +104,10 @@
   --scrim: rgba(0, 0, 0, 0.55);
 }
 
+/* Native scrollbars, date pickers and selects follow the theme. */
+:root[data-theme="light"] { color-scheme: light; }
+:root[data-theme="dark"] { color-scheme: dark; }
+
 /* Theme switches must not run every element's colour transition at once. */
 .no-transitions *, .no-transitions *::before, .no-transitions *::after { transition: none !important; }
 
@@ -176,7 +182,8 @@ svg { display: block; flex-shrink: 0; }
 .brand-name { font-weight: 600; font-size: 0.875rem; letter-spacing: -0.01em; white-space: nowrap; }
 
 .tabs { --seg-radius: 7px; --seg-on-bg: var(--surface); --seg-on-fg: var(--text); --seg-on-ring: var(--shadow-card); background: var(--gray-soft); border-radius: 9px; padding: 3px; }
-.tabs .seg-btn { height: 28px; padding: 0 12px; font-weight: 500; color: var(--text-2); }
+.tabs .seg-btn { height: 28px; padding: 0 12px; font-weight: 500; }
+.tabs .seg-base .seg-btn, .range .seg-base .seg-btn { color: var(--text-2); }  /* base layer only, or it beats the active layer's colour */
 .tabs .seg-btn .k { margin-left: 6px; color: var(--text-3); font-size: 0.6875rem; }
 
 .header-right { margin-left: auto; display: flex; align-items: center; gap: 8px; }
@@ -206,6 +213,7 @@ svg { display: block; flex-shrink: 0; }
   background: var(--surface); box-shadow: var(--shadow-card);
   white-space: nowrap;
 }
+a.btn { text-decoration: none; }
 .btn.sm { height: 28px; padding: 0 10px; font-size: 0.75rem; }
 .btn.primary { background: var(--text); color: var(--bg); box-shadow: none; }
 .btn:disabled { opacity: .45; }
@@ -384,14 +392,13 @@ svg { display: block; flex-shrink: 0; }
 /* ─── Depth view ─────────────────────────────────────────── */
 .toolbar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 8px; margin-bottom: 16px; }
 .range { --seg-radius: 7px; --seg-on-bg: var(--text); --seg-on-fg: var(--bg); }
-.range .seg-btn { height: 30px; min-width: 44px; padding: 0 10px; font-weight: 500; color: var(--text-2); }
+.range .seg-btn { height: 30px; min-width: 44px; padding: 0 10px; font-weight: 500; }
 .vsep { width: 1px; height: 20px; background: var(--hairline-strong); }
 .dates { display: flex; align-items: center; gap: 6px; color: var(--text-3); font-size: 0.75rem; }
 .dates input {
   height: 30px; padding: 0 8px; border: 0; border-radius: 7px;
   background: var(--surface-2); color: var(--text); font: inherit; font-size: 0.75rem;
 }
-:root[data-theme="dark"] .dates input { color-scheme: dark; }
 .dates input:focus { outline: none; box-shadow: 0 0 0 2px var(--accent-line); }
 .dates .icon-btn { width: 28px; height: 28px; }
 .live { margin-left: auto; display: inline-flex; align-items: center; gap: 7px; padding-right: 6px; color: var(--text-3); font-size: 0.75rem; white-space: nowrap; }
@@ -429,6 +436,99 @@ svg { display: block; flex-shrink: 0; }
 .explain p { color: var(--text-2); font-size: 0.75rem; margin-top: 8px; max-width: 80ch; }
 .explain p + p { margin-top: 6px; }
 @media (hover: hover) and (pointer: fine) { .explain summary:hover { color: var(--text); } }
+
+/* ─── Shared: selects, data tables, pager ────────────────── */
+.select {
+  height: 30px; padding: 0 28px 0 10px; border: 0; border-radius: 7px;
+  -webkit-appearance: none; appearance: none;
+  background: var(--surface-2) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 24 24' fill='none' stroke='%238b8b94' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E") no-repeat right 10px center;
+  color: var(--text); font: inherit; font-size: 0.75rem; cursor: pointer; max-width: 100%;
+}
+.select:focus { outline: none; box-shadow: 0 0 0 2px var(--accent-line); }
+.select:disabled { cursor: not-allowed; opacity: .55; }
+.filters { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; padding: 0 14px 12px; }
+.filters .muted { margin-left: auto; font-size: 0.75rem; }
+
+.dt-wrap { overflow: auto; }
+.dt-wrap.capped { max-height: 380px; }
+.dt { width: 100%; border-collapse: collapse; font-size: 0.75rem; }
+.dt th {
+  position: sticky; top: 0; z-index: 1; background: var(--surface);
+  text-align: left; font-weight: 500; font-size: 0.6875rem; color: var(--text-3);
+  padding: 8px 12px; box-shadow: inset 0 -1px 0 var(--hairline); white-space: nowrap;
+}
+.dt td { padding: 0 12px; height: 38px; box-shadow: inset 0 -1px 0 var(--hairline); white-space: nowrap; vertical-align: middle; }
+.dt tr:last-child td { box-shadow: none; }
+.dt .r { text-align: right; }
+.dt .m { font-weight: 600; }
+.dt .t { color: var(--text-3); }
+.dt td.empty-cell { height: auto; padding: 28px 12px; text-align: center; color: var(--text-3); white-space: normal; }
+@media (hover: hover) and (pointer: fine) { .dt tbody tr:hover td { background: var(--surface-hover); } }
+.sev { display: inline-flex; align-items: center; height: 18px; padding: 0 6px; border-radius: 5px; font-size: 0.625rem; font-weight: 650; letter-spacing: .02em; background: var(--gray-soft); color: var(--text-2); }
+.sev.CRITICAL { background: var(--red-soft); color: var(--red-text); }
+.sev.HIGH { background: var(--amber-soft); color: var(--amber-text); }
+.tag { display: inline-flex; align-items: center; height: 16px; padding: 0 5px; margin-left: 6px; border-radius: 4px; font-size: 0.625rem; font-weight: 600; background: var(--gray-soft); color: var(--text-2); vertical-align: 1px; }
+.tag.open { background: var(--red-soft); color: var(--red-text); }
+.pager { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 10px 14px; color: var(--text-3); font-size: 0.75rem; box-shadow: inset 0 1px 0 var(--hairline); }
+.pager div { display: flex; gap: 6px; }
+
+.card-head { display: flex; align-items: flex-start; gap: 12px; padding: 14px 14px 10px 16px; }
+.card-head .btn { margin-left: auto; }
+.card-head .sub { color: var(--text-3); font-size: 0.75rem; margin-top: 1px; max-width: 70ch; }
+.stack { display: grid; gap: 16px; }
+.two { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.too-wide { padding: 20px; }
+.too-wide p { color: var(--text-2); margin: 4px 0 14px; }
+.btn[aria-disabled="true"] { opacity: .45; pointer-events: none; }
+
+/* ─── Alert analysis: hour-of-day heatmap ────────────────
+   Shaded per row, so a quiet alert's own peak hour is still visible next to
+   a noisy one. */
+.heat { overflow-x: auto; padding: 0 14px 14px; }
+.heat table { border-collapse: separate; border-spacing: 2px; width: 100%; min-width: 760px; font-size: 0.6875rem; }
+.heat th { color: var(--text-3); font-weight: 500; padding-bottom: 4px; text-align: center; }
+.heat th.rl { text-align: left; color: var(--text-2); font-weight: 600; padding-right: 8px; }
+.heat th.tot { text-align: right; padding-left: 8px; }
+.heat td { height: 24px; min-width: 22px; border-radius: 4px; text-align: center; color: var(--text-2); background: var(--gray-soft); font-variant-numeric: tabular-nums; }
+.heat td.z { color: transparent; background: transparent; box-shadow: inset 0 0 0 1px var(--hairline); }
+:root[data-theme="light"] { --heat-ink: #ffffff; }
+:root[data-theme="dark"] { --heat-ink: #18181b; }
+
+/* ─── Sign-off ───────────────────────────────────────────── */
+.status-seg { --cols: 4; --seg-gap: 0px; --seg-radius: 9px; --seg-on-bg: var(--accent-soft); --seg-on-fg: var(--accent); --seg-on-ring: inset 0 0 0 1px var(--accent-line); padding: 4px; margin-bottom: 16px; }
+.status-seg .seg-btn { flex-direction: column; align-items: flex-start; gap: 2px; padding: 9px 14px 10px; }
+.status-seg .seg-active .f-label, .status-seg .seg-active .f-value { color: var(--accent); }
+@media (hover: hover) and (pointer: fine) { .status-seg .seg-base .seg-btn:hover { background: var(--surface-hover); } }
+.bulk { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 0 14px 12px; padding: 8px 10px; border-radius: 10px; background: var(--accent-soft); box-shadow: inset 0 0 0 1px var(--accent-line); font-size: 0.75rem; }
+.bulk b { font-weight: 600; margin-right: auto; }
+.bulk .select { background-color: var(--surface); }
+.led tr.ga td:first-child { box-shadow: inset 2px 0 0 var(--accent), inset 0 -1px 0 var(--hairline); }
+.led tr.gb td:first-child { box-shadow: inset 2px 0 0 var(--amber), inset 0 -1px 0 var(--hairline); }
+.ck-wrap { display: inline-flex; padding: 6px; margin: -6px; cursor: pointer; }
+.ck {
+  -webkit-appearance: none; appearance: none; width: 16px; height: 16px; margin: 0; flex-shrink: 0;
+  border-radius: 5px; box-shadow: inset 0 0 0 1.5px var(--hairline-strong); background: var(--surface);
+  display: grid; place-items: center; cursor: pointer;
+  transition: background-color 120ms ease, box-shadow 120ms ease, transform 120ms var(--ease-out);
+}
+.ck:active:not(:disabled) { transform: scale(0.9); }
+.ck:checked { background: var(--accent); box-shadow: none; }
+.ck:checked::after { content: ""; width: 4px; height: 8px; margin-top: -2px; border: solid var(--surface); border-width: 0 2px 2px 0; transform: rotate(45deg); }
+.ck:disabled { cursor: not-allowed; opacity: .6; }
+.ck:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.cell-in { height: 28px; border: 0; border-radius: 6px; background: transparent; color: var(--text); font: inherit; font-size: 0.75rem; padding: 0 8px; min-width: 140px; }
+.cell-in:hover:not(:disabled), .cell-in:focus { background: var(--surface-2); }
+.cell-in:focus { outline: none; box-shadow: 0 0 0 2px var(--accent-line); }
+.cell-in:disabled { color: var(--text-3); cursor: not-allowed; }
+.led .select { height: 28px; background-color: transparent; }
+.led .select:hover:not(:disabled), .led .select:focus { background-color: var(--surface-2); }
+.rep { display: inline-flex; height: 16px; padding: 0 5px; margin-left: 6px; border-radius: 4px; font-size: 0.625rem; font-weight: 650; background: var(--gray-soft); color: var(--text-2); vertical-align: 1px; }
+.open-txt { color: var(--amber-text); font-weight: 500; }
+.ghost { margin-left: 6px; height: 22px; padding: 0 7px; border-radius: 5px; font-size: 0.6875rem; color: var(--text-3); box-shadow: 0 0 0 1px var(--hairline-strong); }
+@media (hover: hover) and (pointer: fine) { .ghost:hover:not(:disabled) { color: var(--text); } }
+.ghost:disabled { opacity: .5; }
+.ro-pill { display: inline-flex; align-items: center; height: 28px; padding: 0 10px; border-radius: 999px; font-size: 0.75rem; font-weight: 500; color: var(--text-2); box-shadow: inset 0 0 0 1px var(--hairline-strong); white-space: nowrap; }
+.tabs .cnt { margin-left: 6px; padding: 0 5px; min-width: 18px; height: 16px; border-radius: 5px; font-size: 0.625rem; font-weight: 650; background: var(--amber-soft); color: var(--amber-text); display: inline-flex; align-items: center; justify-content: center; }
 
 /* ─── Tooltip ────────────────────────────────────────────
    Delayed the first time, instant on neighbours while one is showing.
@@ -558,7 +658,7 @@ svg { display: block; flex-shrink: 0; }
 @media (max-width: 1360px) { .col-depth { display: none; } }
 .scrim { display: none; }
 @media (max-width: 1100px) {
-  .charts { grid-template-columns: minmax(0, 1fr); }
+  .charts, .two { grid-template-columns: minmax(0, 1fr); }
   .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 @media (max-width: 960px) {
@@ -585,7 +685,13 @@ svg { display: block; flex-shrink: 0; }
   .hint, .clock, .tabs .k { display: none; }
 }
 @media (max-width: 720px) {
-  .header { padding: 0 12px; gap: 8px; }
+  /* Four views don't fit beside the controls: tabs take their own row. */
+  :root { --header-h: 92px; }
+  .header { padding: 8px 12px; gap: 8px; height: auto; flex-wrap: wrap; }
+  .tabs { order: 3; width: 100%; overflow-x: auto; scrollbar-width: none; }
+  .tabs::-webkit-scrollbar { display: none; }
+  .ro-pill { padding: 0 8px; }
+  .status-seg { --cols: 2; }
   .brand-name, .status-pill #status-text { display: none; }
   .status-pill { padding: 0 9px; }
   .t-long { display: none; }
@@ -641,6 +747,7 @@ svg { display: block; flex-shrink: 0; }
   </div>
   <nav class="tabs" id="tabs" aria-label="Views"></nav>
   <div class="header-right">
+    <span class="ro-pill" id="ro-pill" hidden>Read-only</span>
     <span class="status-pill" id="status-pill" role="status"><span class="status-dot"></span><span id="status-text">Connecting…</span></span>
     <span class="clock num" id="clock">—</span>
     <button class="icon-btn pressable" id="theme-btn" type="button" aria-label="Switch theme"></button>
@@ -793,6 +900,137 @@ svg { display: block; flex-shrink: 0; }
       </section>
     </div>
   </section>
+
+  <!-- ═══ Alert analysis ═════════════════════════════════════════════════ -->
+  <section id="view-alerts" hidden>
+    <div class="card toolbar">
+      <div class="range" id="aa-range"></div>
+      <div class="vsep" aria-hidden="true"></div>
+      <div class="dates">
+        <input type="date" id="aa-start" aria-label="Analysis start date" />
+        <span>to</span>
+        <input type="date" id="aa-end" aria-label="Analysis end date" />
+      </div>
+      <span class="live" id="aa-coverage">—</span>
+    </div>
+
+    <div class="card too-wide" id="aa-too-wide" hidden>
+      <div class="card-title">This range is too wide to show here</div>
+      <p>The analysis covers up to 30 days at a time. For <b id="aa-too-wide-days">—</b> days, download the raw daily log as one CSV instead.</p>
+      <a class="btn pressable" id="aa-too-wide-link" href="#" download>Download daily log (.csv)</a>
+    </div>
+
+    <div id="aa-body">
+      <div class="kpis">
+        <div class="kpi"><div class="kpi-k">Alert episodes</div><div class="kpi-v num" id="a-ep">—</div><div class="kpi-s" id="a-ep-s">distinct runs</div></div>
+        <div class="kpi"><div class="kpi-k">Detections</div><div class="kpi-v num" id="a-det">—</div><div class="kpi-s" id="a-det-s">issue × market × cycle</div></div>
+        <div class="kpi"><div class="kpi-k">Markets affected</div><div class="kpi-v num" id="a-mk">—</div><div class="kpi-s" id="a-mk-s">—</div></div>
+        <div class="kpi"><div class="kpi-k">Critical episodes</div><div class="kpi-v num sell" id="a-crit">—</div><div class="kpi-s" id="a-crit-s">—</div></div>
+        <div class="kpi"><div class="kpi-k">Median duration</div><div class="kpi-v num" id="a-med">—</div><div class="kpi-s" id="a-med-s">—</div></div>
+        <div class="kpi"><div class="kpi-k">Longest episode</div><div class="kpi-v num" id="a-long">—</div><div class="kpi-s" id="a-long-s">—</div></div>
+        <div class="kpi"><div class="kpi-k">Escalations</div><div class="kpi-v num" id="a-esc">—</div><div class="kpi-s">severity rose mid-episode</div></div>
+        <div class="kpi"><div class="kpi-k">Open at range end</div><div class="kpi-v num" id="a-open">—</div><div class="kpi-s">unresolved when the log ends</div></div>
+      </div>
+
+      <div class="stack">
+        <section class="card">
+          <div class="card-head"><div><div class="card-title">Hour of day</div><div class="sub">Detections per hour (WAT) for each alert type. Shaded within each row, so a quiet alert’s own peak still shows next to a noisy one.</div></div></div>
+          <div class="heat" id="aa-heat"></div>
+        </section>
+
+        <section class="card">
+          <div class="card-head"><div><div class="card-title">Longest episodes <span class="muted num" id="aa-long-n"></span></div><div class="sub">Cycles is how often the issue was actually seen; where it’s short of the duration, the run was stitched over brief gaps.</div></div></div>
+          <div class="dt-wrap capped"><table class="dt" id="aa-long-t"></table></div>
+        </section>
+
+        <div class="two">
+          <section class="card">
+            <div class="card-head"><div><div class="card-title">Noisiest pairs <span class="muted num" id="aa-flap-n"></span></div><div class="sub">Fires often, clears fast: episodes ÷ median duration. A high score is a threshold worth revisiting, not an incident. Needs 3+ episodes.</div></div></div>
+            <div class="dt-wrap capped"><table class="dt" id="aa-flap-t"></table></div>
+          </section>
+          <section class="card">
+            <div class="card-head"><div><div class="card-title">Still open at range end <span class="muted num" id="aa-open-n"></span></div><div class="sub">Episodes whose last detection is the final cycle in the log.</div></div></div>
+            <div class="dt-wrap capped"><table class="dt" id="aa-open-t"></table></div>
+          </section>
+        </div>
+
+        <section class="card" id="aa-log">
+          <div class="card-head">
+            <div><div class="card-title">Daily log <span class="muted num" id="log-n"></span></div><div class="sub">One row per detection. Market and alert options only list what the filters to their left actually contain, so no combination lands on an empty table.</div></div>
+            <a class="btn sm pressable" id="log-csv" href="#" download>Export CSV</a>
+          </div>
+          <div class="filters">
+            <select class="select" id="log-tier" aria-label="Tier">
+              <option value="1" selected>Tier 1 · pages immediately</option>
+              <option value="2">Tier 2 · needs 3 cycles</option>
+              <option value="3">Tier 3 · dashboard only</option>
+              <option value="0">All tiers</option>
+            </select>
+            <select class="select" id="log-market" aria-label="Market"><option value="">All markets</option></select>
+            <select class="select" id="log-alert" aria-label="Alert type"><option value="">All alert types</option></select>
+            <select class="select" id="log-size" aria-label="Rows per page"><option value="50">50 rows</option><option value="100">100 rows</option><option value="200">200 rows</option></select>
+            <span class="muted num" id="log-tiers">—</span>
+          </div>
+          <div class="dt-wrap"><table class="dt">
+            <thead><tr><th>Time (WAT)</th><th>Market</th><th>Alert</th><th>Severity</th><th>Tier</th><th class="r">Depth bid / ask</th></tr></thead>
+            <tbody id="log-body"><tr><td class="empty-cell" colspan="6">Loading…</td></tr></tbody>
+          </table></div>
+          <div class="pager"><span class="num" id="log-info">—</span><div>
+            <button class="btn sm pressable" id="log-prev" type="button" disabled>Previous</button>
+            <button class="btn sm pressable" id="log-next" type="button" disabled>Next</button>
+          </div></div>
+        </section>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══ Sign-off ═══════════════════════════════════════════════════════ -->
+  <section id="view-signoff" hidden>
+    <div class="notice neutral" id="so-ro" hidden></div>
+    <div class="card toolbar">
+      <div class="range" id="so-range"></div>
+      <div class="vsep" aria-hidden="true"></div>
+      <div class="dates">
+        <input type="date" id="so-start" aria-label="Sign-off start date" />
+        <span>to</span>
+        <input type="date" id="so-end" aria-label="Sign-off end date" />
+      </div>
+      <span class="live" id="so-coverage">—</span>
+    </div>
+
+    <div class="card status-seg" id="so-status"></div>
+
+    <section class="card">
+      <div class="card-head">
+        <div><div class="card-title">Alerts delivered to Telegram <span class="muted num" id="so-n"></span></div>
+          <div class="sub">One row per incident: an issue that keeps paging folds into its row as ×n. Ticking records that it was dealt with; it never mutes or resolves anything. <b>Resolved at</b> is stamped by the monitor when it sees the issue clear. Rows sharing a coloured edge arrived in one message.</div></div>
+        <a class="btn sm pressable" id="so-csv" href="#" download title="Rows that closed in under 2 minutes are left out as noise; open ones are always included">Export for sheet</a>
+      </div>
+      <div class="bulk" id="so-bulk" hidden>
+        <b id="so-bulk-n">—</b>
+        <select class="select" id="so-bulk-action" aria-label="Action for all"></select>
+        <button class="btn sm primary pressable" id="so-bulk-go" type="button">Sign off all on this page</button>
+      </div>
+      <div class="filters">
+        <select class="select" id="so-market" aria-label="Market"><option value="">All markets</option></select>
+        <select class="select" id="so-alert" aria-label="Alert type"><option value="">All alert types</option></select>
+        <select class="select" id="so-size" aria-label="Rows per page"><option value="50">50 rows</option><option value="100">100 rows</option><option value="200">200 rows</option></select>
+      </div>
+      <div class="dt-wrap"><table class="dt led">
+        <thead><tr>
+          <th title="Your sign-off. Does not resolve the alert."><span hidden>Signed off</span></th>
+          <th>Alert time</th><th>Pair</th><th>Alert</th><th>Severity</th>
+          <th title="When someone ticked the row">Signed off at</th><th>Action</th><th>Note</th>
+          <th title="When the monitor saw the issue clear">Resolved at</th><th class="r">Time to resolve</th>
+        </tr></thead>
+        <tbody id="so-body"><tr><td class="empty-cell" colspan="10">Loading…</td></tr></tbody>
+      </table></div>
+      <div class="pager"><span class="num" id="so-info">—</span><div>
+        <button class="btn sm pressable" id="so-prev" type="button" disabled>Previous</button>
+        <button class="btn sm pressable" id="so-next" type="button" disabled>Next</button>
+      </div></div>
+    </section>
+  </section>
 </main>
 
 <!-- ═══ Configuration drawer ═════════════════════════════════════════════ -->
@@ -821,7 +1059,16 @@ svg { display: block; flex-shrink: 0; }
 // Shared
 // ══════════════════════════════════════════════════════════════════════════════
 const params = new URLSearchParams(location.search);
-const API = params.get("api") || (location.protocol === "file:" ? "http://localhost:8765" : "");
+// Reads come from production by default; ?api= points at another instance
+// (e.g. ?api=http://localhost:8765 for a local API).
+const API = (params.get("api") || "https://quidax-monitor.fly.dev").replace(/\/$/, "");
+const API_HOST = (() => { try { return new URL(API).host; } catch { return API; } })();
+// Writes (config save/reset, mutes, sign-offs) only go to a local API, or when
+// ?writes=1 is passed explicitly. Production accepts unauthenticated POSTs, so
+// a design sample must not be able to change live config or the sign-off record.
+const IS_LOCAL_API = /^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/.test(API_HOST);
+const CAN_WRITE = IS_LOCAL_API || params.get("writes") === "1";
+const READ_ONLY_MSG = `Read-only: reading ${API_HOST}. Use the main dashboard to make changes.`;
 const SNAPSHOT = {"summary":{"total_pairs":37,"healthy":28,"warnings":9,"alerts_fired":7,"last_updated":"2026-08-22 13:15:56","last_updated_age_seconds":4482722.5,"monitor_stale":true,"server_time_ngt":"2026-10-13 10:27:58"},"issue_tiers":{"A1":{"CRITICAL":2,"HIGH":2,"MEDIUM":2},"A2":{"CRITICAL":1,"HIGH":2,"MEDIUM":2},"A3":{"CRITICAL":1,"HIGH":1,"MEDIUM":1},"A4":{"CRITICAL":3,"HIGH":3,"MEDIUM":3},"A5":{"CRITICAL":3,"HIGH":3,"MEDIUM":3},"A6":{"CRITICAL":1,"HIGH":1,"MEDIUM":3},"B1":{"CRITICAL":1,"HIGH":1,"MEDIUM":3},"B2":{"CRITICAL":2,"HIGH":2,"MEDIUM":2},"B3":{"CRITICAL":2,"HIGH":2,"MEDIUM":3},"B4":{"CRITICAL":1,"HIGH":2,"MEDIUM":2},"D1":{"CRITICAL":2,"HIGH":2,"MEDIUM":2},"D2":{"CRITICAL":3,"HIGH":3,"MEDIUM":3},"F1":{"CRITICAL":3,"HIGH":3,"MEDIUM":3},"G2":{"CRITICAL":1,"HIGH":2,"MEDIUM":2},"E1":{"CRITICAL":1,"HIGH":1,"MEDIUM":1},"E2":{"CRITICAL":1,"HIGH":1,"MEDIUM":1}},"pairs":[{"symbol":"aaveusdt","monitor_only":false,"alert_tier":0,"issues":null,"mid_price":125.8135,"current_spread":0.285343,"target_spread":0.3,"percent_diff":-4.89,"depth_bid":"$35.8K","depth_ask":"$16.6K","ask_layers":70,"bid_layers":74,"dws":0.1706,"dws_threshold":0.5,"imbalance_ratio":2.15,"heavier_side":"bids","telegram_fired":false,"telegram_detail":null,"timestamp":"2026-08-22 13:15:56","d1_context":"\u00e2\u2030\u02c60.6x typical (baseline warming 2/4 \u00e2\u20ac\u201d absolute floor active)","g2_worst_swing_pct":3.175,"g2_worst_candle":"10:00 UTC","layer_churn_pct":100.0,"b1_diff_pct":0.2978,"b1_threshold_pct":0.65,"depth_deviation_pct":50.0,"trusted_ref":125.44,"min_orderbook_layers":10,"imbalance_threshold":5.0},{"symbol":"adausdt","monitor_only":false,"alert_tier":0,"issues":null,"mid_price":0.226,"current_spread":0.40708,"target_spread":2.0,"percent_diff":-79.65,"depth_bid":"$53.9K","depth_ask":"$39.1K","ask_layers":25,"bid_layers":25,"dws":0.3672,"dws_threshold":0.5,"imbalance_ratio":1.38,"heavier_side":"bids","telegram_fired":false,"telegram_detail":null,"timestamp":"2026-08-22 13:15:57","d1_context":"\u00e2\u2030\u02c61.2x typical (baseline warming 2/4 \u00e2\u20ac\u201d absolute floor active)","g2_worst_swing_pct":3.3221,"g2_worst_candle":"10:00 UTC","layer_churn_pct":100.0,"b1_diff_pct":-0.0884,"b1_threshold_pct":1.5,"depth_deviation_pct":50.0,"trusted_ref":0.2262,"min_orderbook_layers":10,"imbalance_threshold":5.0},{"symbol":"bchusdt","monitor_only":false,"alert_tier":0,"issues":null,"mid_price":278.5,"current_spread":0.359066,"target_spread":1.2,"percent_diff":-70.08,"depth_bid":"$9.6K","depth_ask":"$10.6K","ask_layers":26,"bid_layers":26,"dws":0.3576,"dws_threshold":0.5,"imbalance_ratio":1.11,"heavier_side":"asks","telegram_fired":false,"telegram_detail":null,"timestamp":"2026-08-22 13:15:57","d1_context":"\u00e2\u2030\u02c60.9x typical (baseline warming 2/4 \u00e2\u20ac\u201d absolute floor active)","g2_worst_swing_pct":2.2969,"g2_worst_candle":"08:00 UTC","layer_churn_pct":100.0,"b1_diff_pct":0.0359,"b1_threshold_pct":1.1,"depth_deviation_pct":50.0,"trusted_ref":278.4,"min_orderbook_layers":10,"imbalance_threshold":5.0},{"symbol":"bnbusdt","monitor_only":false,"alert_tier":0,"issues":null,"mid_price":696.11,"current_spread":0.301676,"target_spread":0.3,"percent_diff":0.56,"depth_bid":"$68.4K","depth_ask":"$68.8K","ask_layers":35,"bid_layers":35,"dws":0.1925,"dws_threshold":0.5,"imbalance_ratio":1.01,"heavier_side":"asks","telegram_fired":false,"telegram_detail":null,"timestamp":"2026-08-22 13:15:57","d1_context":"\u00e2\u2030\u02c60.4x typical (baseline warming 2/4 \u00e2\u20ac\u201d absolute floor active)","g2_worst_swing_pct":2.0527,"g2_worst_candle":"10:00 UTC","layer_churn_pct":100.0,"b1_diff_pct":-0.0187,"b1_threshold_pct":0.65,"depth_deviation_pct":50.0,"trusted_ref":696.24,"min_orderbook_layers":10,"imbalance_threshold":5.0},{"symbol":"bonkusdt","monitor_only":false,"alert_tier":2,"issues":"G2:HIGH","mid_price":3.19e-06,"current_spread":2.069614,"target_spread":2.0,"percent_diff":3.48,"depth_bid":"$3.1K","depth_ask":"$3.2K","ask_layers":25,"bid_layers":25,"dws":1.468,"dws_threshold":0.5,"imbalance_ratio":1.04,"heavier_side":"asks","telegram_fired":false,"telegram_detail":"G2:capped","timestamp":"2026-08-22 13:15:57","d1_context":"\u00e2\u2030\u02c61.2x typical (baseline warming 2/4 \u00e2\u20ac\u201d absolute floor active)","g2_worst_swing_pct":8.0495,"g2_worst_candle":"10:00 UTC","layer_churn_pct":100.0,"b1_diff_pct":-0.4682,"b1_threshold_pct":1.5,"depth_deviation_pct":50.0,"trusted_ref":3.2e-06,"min_orderbook_layers":10,"imbalance_threshold":5.0},{"symbol":"btcusdt","monitor_only":false,"alert_tier":0,"issues":null,"mid_price":77238.1,"current_spread":0.200005,"target_spread":0.2,"percent_diff":0.0,"depth_bid":"$2.67M","depth_ask":"$2.31M","ask_layers":42,"bid_layers":41,"dws":0.1426,"dws_threshold":0.5,"imbalance_ratio":1.15,"heavier_side":"bids","telegram_fired":false,"telegram_detail":null,"timestamp":"2026-08-22 13:15:57","d1_context":"\u00e2\u2030\u02c60.4x typical (baseline warming 2/4 \u00e2\u20ac\u201d absolute floor active)","g2_worst_swing_pct":0.7049,"g2_worst_candle":"10:00 UTC","layer_churn_pct":100.0,"b1_diff_pct":0.0067,"b1_threshold_pct":0.6,"depth_deviation_pct":50.0,"trusted_ref":77232.89,"min_orderbook_layers":10,"imbalance_threshold":5.0},{"symbol":"cfxusdt","monitor_only":false,"alert_tier":2,"issues":"G2:HIGH","mid_price":0.04842,"current_spread":2.023957,"target_spread":2.0,"percent_diff":1.2,"depth_bid":"$16.8K","depth_ask":"$17.6K","ask_layers":25,"bid_layers":25,"dws":1.4725,"dws_threshold":0.5,"imbalance_ratio":1.05,"heavier_side":"asks","telegram_fired":true,"telegram_detail":"G2:fired","timestamp":"2026-08-22 13:15:57","d1_context":"\u00e2\u2030\u02c61.1x typical (baseline warming 2/4 \u00e2\u20ac\u201d absolute floor active)","g2_worst_swing_pct":5.2416,"g2_worst_candle":"10:00 UTC","layer_churn_pct":100.0,"b1_diff_pct":-0.6158,"b1_threshold_pct":1.5,"depth_deviation_pct":50.0,"trusted_ref":0.04872,"min_orderbook_layers":10,"imbalance_threshold":5.0},{"symbol":"dashusdt","monitor_only":false,"alert_tier":0,"issues":null,"mid_price":40.437,"current_spread":2.013008,"target_spread":2.0,"percent_diff":0.65,"depth_bid":"$22.4K","depth_ask":"$24.2K","ask_layers":27,"bid_layers":40,"dws":1.3808,"dws_threshold":0.5,"imbalance_ratio":1.08,"heavier_side":"asks","telegram_fired":false,"telegram_detail":null,"timestamp":"2026-08-22 13:15:57","d1_context":"\u00e2\u2030\u02c60.9x typical (baseline warming 2/4 \u00e2\u20ac\u201d absolute floor active)","g2_worst_swing_pct":4.3546,"g2_worst_candle":"08:00 UTC","layer_churn_pct":97.1,"b1_diff_pct":-0.4015,"b1_threshold_pct":1.5,"depth_deviation_pct":50.0,"trusted_ref":40.6,"min_orderbook_layers":10,"imbalance_threshold":5.0},{"symbol":"dotusdt","monitor_only":false,"alert_tier":0,"issues":null,"mid_price":0.9279,"current_spread":0.301757,"target_spread":0.26,"percent_diff":16.06,"depth_bid":"$9.5K","depth_ask":"$8.6K","ask_layers":34,"bid_layers":34,"dws":0.2007,"dws_threshold":0.5,"imbalance_ratio":1.1,"heavier_side":"bids","telegram_fired":false,"telegram_detail":null,"timestamp":"2026-08-22 13:15:57","d1_context":"\u00e2\u2030\u02c60.5x typical (baseline warming 2/4 \u00e2\u20ac\u201d absolute floor active)","g2_worst_swing_pct":2.5776,"g2_worst_candle":"08:00 UTC","layer_churn_pct":100.0,"b1_diff_pct":-0.0969,"b1_threshold_pct":0.63,"depth_deviation_pct":50.0,"trusted_ref":0.9288,"min_orderbook_layers":10,"imbalance_threshold":5.0},{"symbol":"dogeusdt","monitor_only":false,"alert_tier":0,"issues":null,"mid_price":0.090825,"current_spread":0.275255,"target_spread":0.26,"percent_diff":5.87,"depth_bid":"$57.2K","depth_ask":"$58.3K","ask_layers":93,"bid_layers":93,"dws":0.1855,"dws_threshold":0.5,"imbalance_ratio":1.02,"heavier_side":"asks","telegram_fired":false,"telegram_detail":null,"timestamp":"2026-08-22 13:15:57","d1_context":"\u00e2\u2030\u02c61.2x typical (baseline warming 2/4 \u00e2\u20ac\u201d absolute floor active)","g2_worst_swing_pct":2.9583,"g2_worst_candle":"10:00 UTC","layer_churn_pct":100.0,"b1_diff_pct":-0.0385,"b1_threshold_pct":0.63,"depth_deviation_pct":50.0,"trusted_ref":0.09086,"min_orderbook_layers":10,"imbalance_threshold":5.0},{"symbol":"ethusdt","monitor_only":false,"alert_tier":0,"issues":null,"mid_price":2432.075,"current_spread":0.250403,"target_spread":0.25,"percent_diff":0.16,"depth_bid":"$289.5K","depth_ask":"$269.2K","ask_layers":70,"bid_layers":71,"dws":0.146,"dws_threshold":0.5,"imbalance_ratio":1.08,"heavier_side":"bids","telegram_fired":false,"telegram_detail":null,"timestamp":"2026-08-22 13:15:57","d1_context":"\u00e2\u2030\u02c60.9x typical (baseline warming 2/4 \u00e2\u20ac\u201d absolute floor active)","g2_worst_swing_pct":1.0839,"g2_worst_candle":"08:00 UTC","layer_churn_pct":100.0,"b1_diff_pct":-0.0203,"b1_threshold_pct":0.625,"depth_deviation_pct":50.0,"trusted_ref":2432.57,"min_orderbook_layers":10,"imbalance_threshold":5.0},{"symbol":"fartcoinusdt","monitor_only":false,"alert_tier":2,"issues":"G2:HIGH","mid_price":0.19442,"current_spread":2.016253,"target_spread":2.0,"percent_diff":0.81,"depth_bid":"$21.7K","depth_ask":"$24.0K","ask_layers":25,"bid_layers":25,"dws":1.3898,"dws_threshold":0.5,"imbalance_ratio":1.11,"heavier_side":"asks","telegram_fired":true,"telegram_detail":"G2:fired","timestamp":"2026-08-22 13:15:57","d1_context":"\u00e2\u2030\u02c60.8x typical (baseline warming 2/4 \u00e2\u20ac\u201d absolute floor active)","g2_worst_swing_pct":6.4963,"g2_worst_candle":"10:00 UTC","layer_churn_pct":100.0,"b1_diff_pct":-0.2412,"b1_threshold_pct":1.5,"depth_deviation_pct":50.0,"trusted_ref":0.19489,"min_orderbook_layers":10,"imbalance_threshold":5.0},{"symbol":"hypeusdt","monitor_only":false,"alert_tier":0,"issues":null,"mid_price":78.283,"current_spread":0.209496,"target_spread":2.0,"percent_diff":-89.53,"depth_bid":"$202.4K","depth_ask":"$212.9K","ask_layers":50,"bid_layers":50,"dws":0.3721,"dws_threshold":0.5,"imbalance_ratio":1.05,"heavier_side":"asks","telegram_fired":false,"telegram_detail":null,"timestamp":"2026-08-22 13:15:57","d1_context":"\u00e2\u2030\u02c60.4x typical (baseline warming 2/4 \u00e2\u20ac\u201d absolute floor active)","g2_worst_swing_pct":3.3953,"g2_worst_candle":"10:00 UTC","layer_churn_pct":100.0,"b1_diff_pct":0.2087,"b1_threshold_pct":1.5,"depth_deviation_pct":50.0,"trusted_ref":78.12,"min_orderbook_layers":10,"imbalance_threshold":5.0},{"symbol":"linkusdt","monitor_only":false,"alert_tier":0,"issues":null,"mid_price":11.7735,"current_spread":0.314265,"target_spread":0.26,"percent_diff":20.87,"depth_bid":"$33.3K","depth_ask":"$29.5K","ask_layers":37,"bid_layers":38,"dws":0.1944,"dws_threshold":0.5,"imbalance_ratio":1.13,"heavier_side":"bids","telegram_fired":false,"telegram_detail":null,"timestamp":"2026-08-22 13:15:57","d1_context":"\u00e2\u2030\u02c61.3x typical (baseline warming 2/4 \u00e2\u20ac\u201d absolute floor active)","g2_worst_swing_pct":2.1273,"g2_worst_candle":"08:00 UTC","layer_churn_pct":100.0,"b1_diff_pct":0.0722,"b1_threshold_pct":0.63,"depth_deviation_pct":50.0,"trusted_ref":11.765,"min_orderbook_layers":10,"imbalance_threshold":5.0},{"symbol":"lskusdt","monitor_only":false,"alert_tier":0,"issues":null,"mid_price":0.0893,"current_spread":1.567749,"target_spread":1.5,"percent_diff":4.52,"depth_bid":"$10.8K","depth_ask":"$12.3K","ask_layers":21,"bid_layers":25,"dws":1.4153,"dws_threshold":0.5,"imbalance_ratio":1.14,"heavier_side":"asks","telegram_fired":false,"telegram_detail":null,"timestamp":"2026-08-22 13:15:57","d1_context":"baseline building\u00e2\u20ac\u00a6","g2_worst_swing_pct":0.0,"g2_worst_candle":"11:00 UTC","layer_churn_pct":100.0,"b1_diff_pct":null,"b1_threshold_pct":null,"depth_deviation_pct":50.0,"trusted_ref":null,"min_orderbook_layers":10,"imbalance_threshold":5.0},{"symbol":"ltcusdt","monitor_only":false,"alert_tier":0,"issues":null,"mid_price":51.64,"current_spread":0.302091,"target_spread":0.3,"percent_diff":0.7,"depth_bid":"$53.2K","depth_ask":"$78.6K","ask_layers":35,"bid_layers":37,"dws":0.1908,"dws_threshold":0.5,"imbalance_ratio":1.48,"heavier_side":"asks","telegram_fired":false,"telegram_detail":null,"timestamp":"2026-08-22 13:15:57","d1_context":"\u00e2\u2030\u02c60.5x typical (baseline warming 2/4 \u00e2\u20ac\u201d absolute floor active)","g2_worst_swing_pct":2.6909,"g2_worst_candle":"10:00 UTC","layer_churn_pct":100.0,"b1_diff_pct":-0.0387,"b1_threshold_pct":0.65,"depth_deviation_pct":50.0,"trusted_ref":51.66,"min_orderbook_layers":10,"imbalance_threshold":5.0},{"symbol":"pepeusdt","monitor_only":false,"alert_tier":0,"issues":null,"mid_price":4.04e-06,"current_spread":0.346535,"target_spread":0.5,"percent_diff":-30.69,"depth_bid":"$46.1K","depth_ask":"$55.3K","ask_layers":25,"bid_layers":25,"dws":0.3376,"dws_threshold":0.5,"imbalance_ratio":1.2,"heavier_side":"asks","telegram_fired":false,"telegram_detail":null,"timestamp":"2026-08-22 13:15:57","d1_context":"\u00e2\u2030\u02c60.5x typical (baseline warming 2/4 \u00e2\u20ac\u201d absolute floor active)","g2_worst_swing_pct":3.9005,"g2_worst_candle":"10:00 UTC","layer_churn_pct":100.0,"b1_diff_pct":0.0,"b1_threshold_pct":0.75,"depth_deviation_pct":50.0,"trusted_ref":4.04e-06,"min_orderbook_layers":10,"imbalance_threshold":5.0},{"symbol":"shibusdt","monitor_only":false,"alert_tier":0,"issues":null,"mid_price":5.55e-06,"current_spread":0.302921,"target_spread":0.4,"percent_diff":-24.27,"depth_bid":"$17.1K","depth_ask":"$18.2K","ask_layers":30,"bid_layers":31,"dws":0.1946,"dws_threshold":0.5,"imbalance_ratio":1.06,"heavier_side":"asks","telegram_fired":false,"telegram_detail":null,"timestamp":"2026-08-22 13:15:57","d1_context":"\u00e2\u2030\u02c61.0x typical (baseline warming 2/4 \u00e2\u20ac\u201d absolute floor active)","g2_worst_swing_pct":3.3795,"g2_worst_candle":"10:00 UTC","layer_churn_pct":100.0,"b1_diff_pct":-0.036,"b1_threshold_pct":0.7,"depth_deviation_pct":50.0,"trusted_ref":5.55e-06,"min_orderbook_layers":10,"imbalance_threshold":5.0},{"symbol":"solusdt","monitor_only":false,"alert_tier":0,"issues":null,"mid_price":93.8465,"current_spread":0.250409,"target_spread":0.25,"percent_diff":0.16,"depth_bid":"$144.5K","depth_ask":"$167.0K","ask_layers":75,"bid_layers":68,"dws":0.22,"dws_threshold":0.5,"imbalance_ratio":1.16,"heavier_side":"asks","telegram_fired":false,"telegram_detail":null,"timestamp":"2026-08-22 13:15:57","d1_context":"\u00e2\u2030\u02c60.5x typical (baseline warming 2/4 \u00e2\u20ac\u201d absolute floor active)","g2_worst_swing_pct":2.4723,"g2_worst_candle":"10:00 UTC","layer_churn_pct":100.0,"b1_diff_pct":-0.025,"b1_threshold_pct":0.625,"depth_deviation_pct":50.0,"trusted_ref":93.87,"min_orderbook_layers":10,"imbalance_threshold":5.0},{"symbol":"tonusdt","monitor_only":false,"alert_tier":0,"issues":null,"mid_price":1.444,"current_spread":0.207756,"target_spread":0.3,"percent_diff":-30.75,"depth_bid":"$15.8K","depth_ask":"$13.8K","ask_layers":25,"bid_layers":25,"dws":0.2665,"dws_threshold":0.5,"imbalance_ratio":1.14,"heavier_side":"bids","telegram_fired":false,"telegram_detail":null,"timestamp":"2026-08-22 13:15:57","d1_context":"\u00e2\u2030\u02c61.0x typical (baseline warming 2/4 \u00e2\u20ac\u201d absolute floor active)","g2_worst_swing_pct":2.0443,"g2_worst_candle":"08:00 UTC","layer_churn_pct":100.0,"b1_diff_pct":null,"b1_threshold_pct":null,"depth_deviation_pct":50.0,"trusted_ref":null,"min_orderbook_layers":10,"imbalance_threshold":5.0},{"symbol":"trxusdt","monitor_only":false,"alert_tier":0,"issues":null,"mid_price":0.34315,"current_spread":0.273933,"target_spread":0.3,"percent_diff":-8.69,"depth_bid":"$496.8K","depth_ask":"$594.5K","ask_layers":55,"bid_layers":60,"dws":0.1778,"dws_threshold":0.5,"imbalance_ratio":1.2,"heavier_side":"asks","telegram_fired":false,"telegram_detail":null,"timestamp":"2026-08-22 13:15:57","d1_context":"\u00e2\u2030\u02c61.0x typical (baseline warming 2/4 \u00e2\u20ac\u201d absolute floor active)","g2_worst_swing_pct":0.7516,"g2_worst_candle":"08:00 UTC","layer_churn_pct":100.0,"b1_diff_pct":-0.0146,"b1_threshold_pct":0.65,"depth_deviation_pct":50.0,"trusted_ref":0.3432,"min_orderbook_layers":10,"imbalance_threshold":5.0},{"symbol":"usdcusdt","monitor_only":false,"alert_tier":0,"issues":null,"mid_price":1.0002,"current_spread":0.039992,"target_spread":0.02,"percent_diff":99.96,"depth_bid":"$2.99M","depth_ask":"$2.96M","ask_layers":22,"bid_layers":22,"dws":0.0627,"dws_threshold":0.5,"imbalance_ratio":1.01,"heavier_side":"bids","telegram_fired":false,"telegram_detail":null,"timestamp":"2026-08-22 13:15:58","d1_context":"\u00e2\u2030\u02c61.9x typical (baseline warming 2/4 \u00e2\u20ac\u201d absolute floor active)","g2_worst_swing_pct":0.05,"g2_worst_candle":"10:00 UTC","layer_churn_pct":100.0,"b1_diff_pct":0.009,"b1_threshold_pct":0.51,"depth_deviation_pct":50.0,"trusted_ref":1.00011,"min_orderbook_layers":10,"imbalance_threshold":5.0},{"symbol":"xlmusdt","monitor_only":false,"alert_tier":0,"issues":null,"mid_price":0.2011,"current_spread":0.308304,"target_spread":0.3,"percent_diff":2.77,"depth_bid":"$50.0K","depth_ask":"$44.7K","ask_layers":35,"bid_layers":36,"dws":0.1965,"dws_threshold":0.5,"imbalance_ratio":1.12,"heavier_side":"bids","telegram_fired":false,"telegram_detail":null,"timestamp":"2026-08-22 13:15:58","d1_context":"\u00e2\u2030\u02c61.0x typical (baseline warming 2/4 \u00e2\u20ac\u201d absolute floor active)","g2_worst_swing_pct":3.3509,"g2_worst_candle":"08:00 UTC","layer_churn_pct":100.0,"b1_diff_pct":-0.0497,"b1_threshold_pct":0.65,"depth_deviation_pct":50.0,"trusted_ref":0.2012,"min_orderbook_layers":10,"imbalance_threshold":5.0},{"symbol":"xrpusdt","monitor_only":false,"alert_tier":2,"issues":"G2:HIGH","mid_price":1.5152,"current_spread":0.30359,"target_spread":0.3,"percent_diff":1.2,"depth_bid":"$81.0K","depth_ask":"$72.2K","ask_layers":39,"bid_layers":42,"dws":0.1955,"dws_threshold":0.5,"imbalance_ratio":1.12,"heavier_side":"bids","telegram_fired":true,"telegram_detail":"G2:fired","timestamp":"2026-08-22 13:15:58","d1_context":"\u00e2\u2030\u02c61.1x typical (baseline warming 2/4 \u00e2\u20ac\u201d absolute floor active)","g2_worst_swing_pct":5.4944,"g2_worst_candle":"08:00 UTC","layer_churn_pct":100.0,"b1_diff_pct":-0.0132,"b1_threshold_pct":0.65,"depth_deviation_pct":50.0,"trusted_ref":1.5154,"min_orderbook_layers":10,"imbalance_threshold":5.0},{"symbol":"xyousdt","monitor_only":false,"alert_tier":3,"issues":"A5:MEDIUM","mid_price":0.003179,"current_spread":0.301982,"target_spread":1.0,"percent_diff":-69.8,"depth_bid":"$2.7K","depth_ask":"$170.5K","ask_layers":75,"bid_layers":25,"dws":0.3167,"dws_threshold":0.5,"imbalance_ratio":63.34,"heavier_side":"asks","telegram_fired":false,"telegram_detail":"A5:flag-only","timestamp":"2026-08-22 13:15:58","d1_context":"\u00e2\u2030\u02c61.1x typical (baseline warming 2/4 \u00e2\u20ac\u201d absolute floor active)","g2_worst_swing_pct":1.9655,"g2_worst_candle":"09:00 UTC","layer_churn_pct":74.5,"b1_diff_pct":0.9206,"b1_threshold_pct":1.0,"depth_deviation_pct":50.0,"trusted_ref":0.00315,"min_orderbook_layers":10,"imbalance_threshold":5.0},{"symbol":"usdtcngn","monitor_only":true,"alert_tier":1,"issues":"A2:HIGH|A5:MEDIUM|A6:CRITICAL","mid_price":1394.0,"current_spread":0.143472,"target_spread":null,"percent_diff":null,"depth_bid":"$10.5K","depth_ask":"$15.19M","ask_layers":17,"bid_layers":6,"dws":0.1373,"dws_threshold":0.5,"imbalance_ratio":1451.28,"heavier_side":"asks","telegram_fired":true,"telegram_detail":"A2:fired|A5:flag-only|A6:cooldown","timestamp":"2026-08-22 13:15:58","d1_context":"baseline building\u00e2\u20ac\u00a6","g2_worst_swing_pct":0.1436,"g2_worst_candle":"11:00 UTC","layer_churn_pct":0.0,"b1_diff_pct":null,"b1_threshold_pct":null,"depth_deviation_pct":50.0,"trusted_ref":null,"min_orderbook_layers":10,"imbalance_threshold":5.0},{"symbol":"btcngn","monitor_only":false,"alert_tier":0,"issues":null,"mid_price":107334118.5,"current_spread":0.450113,"target_spread":0.7,"percent_diff":-35.7,"depth_bid":"$3803.72M","depth_ask":"$3714.69M","ask_layers":39,"bid_layers":35,"dws":0.2509,"dws_threshold":0.5,"imbalance_ratio":1.02,"heavier_side":"bids","telegram_fired":false,"telegram_detail":null,"timestamp":"2026-08-22 13:15:58","d1_context":"\u00e2\u2030\u02c61.3x typical (baseline warming 2/4 \u00e2\u20ac\u201d absolute floor active)","g2_worst_swing_pct":1.035,"g2_worst_candle":"10:00 UTC","layer_churn_pct":100.0,"b1_diff_pct":null,"b1_threshold_pct":null,"depth_deviation_pct":50.0,"trusted_ref":null,"min_orderbook_layers":10,"imbalance_threshold":5.0},{"symbol":"usdtngn","monitor_only":false,"alert_tier":2,"issues":"D1:HIGH","mid_price":1391.095,"current_spread":0.085544,"target_spread":0.95,"percent_diff":-91.0,"depth_bid":"$8791.31M","depth_ask":"$7734.69M","ask_layers":52,"bid_layers":59,"dws":0.1515,"dws_threshold":0.5,"imbalance_ratio":1.14,"heavier_side":"bids","telegram_fired":true,"telegram_detail":"D1:fired","timestamp":"2026-08-22 13:15:58","d1_context":"\u00e2\u2030\u02c61.5x typical \u00e2\u20ac\u201d fired on absolute floor \u00e2\u201a\u00a650,000,000 (baseline warming, 2/4 buckets)","g2_worst_swing_pct":0.1437,"g2_worst_candle":"10:00 UTC","layer_churn_pct":83.9,"b1_diff_pct":null,"b1_threshold_pct":null,"depth_deviation_pct":50.0,"trusted_ref":null,"min_orderbook_layers":10,"imbalance_threshold":5.0},{"symbol":"ethngn","monitor_only":false,"alert_tier":0,"issues":null,"mid_price":3379746.0,"current_spread":0.450152,"target_spread":0.75,"percent_diff":-39.98,"depth_bid":"$2373.17M","depth_ask":"$2173.27M","ask_layers":39,"bid_layers":39,"dws":0.2612,"dws_threshold":0.5,"imbalance_ratio":1.09,"heavier_side":"bids","telegram_fired":false,"telegram_detail":null,"timestamp":"2026-08-22 13:15:58","d1_context":"\u00e2\u2030\u02c61.6x typical (baseline warming 2/4 \u00e2\u20ac\u201d absolute floor active)","g2_worst_swing_pct":1.4274,"g2_worst_candle":"10:00 UTC","layer_churn_pct":100.0,"b1_diff_pct":null,"b1_threshold_pct":null,"depth_deviation_pct":50.0,"trusted_ref":null,"min_orderbook_layers":10,"imbalance_threshold":5.0},{"symbol":"trxngn","monitor_only":false,"alert_tier":0,"issues":null,"mid_price":476.57095,"current_spread":0.500513,"target_spread":0.75,"percent_diff":-33.26,"depth_bid":"$596.08M","depth_ask":"$641.62M","ask_layers":46,"bid_layers":36,"dws":0.2861,"dws_threshold":0.5,"imbalance_ratio":1.08,"heavier_side":"asks","telegram_fired":false,"telegram_detail":null,"timestamp":"2026-08-22 13:15:58","d1_context":"\u00e2\u2030\u02c61.1x typical (baseline warming 2/4 \u00e2\u20ac\u201d absolute floor active)","g2_worst_swing_pct":0.8164,"g2_worst_candle":"08:00 UTC","layer_churn_pct":100.0,"b1_diff_pct":null,"b1_threshold_pct":null,"depth_deviation_pct":50.0,"trusted_ref":null,"min_orderbook_layers":10,"imbalance_threshold":5.0},{"symbol":"xrpngn","monitor_only":false,"alert_tier":2,"issues":"G2:HIGH","mid_price":2102.21,"current_spread":0.265435,"target_spread":0.5,"percent_diff":-46.91,"depth_bid":"$198.50M","depth_ask":"$208.12M","ask_layers":71,"bid_layers":44,"dws":0.2529,"dws_threshold":0.5,"imbalance_ratio":1.05,"heavier_side":"asks","telegram_fired":true,"telegram_detail":"G2:fired","timestamp":"2026-08-22 13:15:58","d1_context":"\u00e2\u2030\u02c61.2x typical (baseline warming 2/4 \u00e2\u20ac\u201d absolute floor active)","g2_worst_swing_pct":5.2643,"g2_worst_candle":"08:00 UTC","layer_churn_pct":98.7,"b1_diff_pct":null,"b1_threshold_pct":null,"depth_deviation_pct":50.0,"trusted_ref":null,"min_orderbook_layers":10,"imbalance_threshold":5.0},{"symbol":"dashngn","monitor_only":false,"alert_tier":0,"issues":null,"mid_price":56447.0,"current_spread":0.552731,"target_spread":0.5,"percent_diff":10.55,"depth_bid":"$44.35M","depth_ask":"$47.78M","ask_layers":37,"bid_layers":50,"dws":0.3041,"dws_threshold":0.5,"imbalance_ratio":1.08,"heavier_side":"asks","telegram_fired":false,"telegram_detail":null,"timestamp":"2026-08-22 13:15:58","d1_context":"\u00e2\u2030\u02c60.4x typical (baseline warming 2/4 \u00e2\u20ac\u201d absolute floor active)","g2_worst_swing_pct":3.5547,"g2_worst_candle":"10:00 UTC","layer_churn_pct":100.0,"b1_diff_pct":null,"b1_threshold_pct":null,"depth_deviation_pct":50.0,"trusted_ref":null,"min_orderbook_layers":10,"imbalance_threshold":5.0},{"symbol":"ltcngn","monitor_only":false,"alert_tier":0,"issues":null,"mid_price":71726.0,"current_spread":0.552101,"target_spread":0.5,"percent_diff":10.42,"depth_bid":"$159.63M","depth_ask":"$197.21M","ask_layers":35,"bid_layers":35,"dws":0.3043,"dws_threshold":0.5,"imbalance_ratio":1.24,"heavier_side":"asks","telegram_fired":false,"telegram_detail":null,"timestamp":"2026-08-22 13:15:58","d1_context":"\u00e2\u2030\u02c61.2x typical (baseline warming 2/4 \u00e2\u20ac\u201d absolute floor active)","g2_worst_swing_pct":2.7018,"g2_worst_candle":"08:00 UTC","layer_churn_pct":100.0,"b1_diff_pct":null,"b1_threshold_pct":null,"depth_deviation_pct":50.0,"trusted_ref":null,"min_orderbook_layers":10,"imbalance_threshold":5.0},{"symbol":"solngn","monitor_only":false,"alert_tier":0,"issues":null,"mid_price":130290.495,"current_spread":0.690403,"target_spread":0.8,"percent_diff":-13.7,"depth_bid":"$279.45M","depth_ask":"$274.80M","ask_layers":70,"bid_layers":72,"dws":0.3599,"dws_threshold":0.5,"imbalance_ratio":1.02,"heavier_side":"bids","telegram_fired":false,"telegram_detail":null,"timestamp":"2026-08-22 13:15:58","d1_context":"\u00e2\u2030\u02c61.6x typical (baseline warming 2/4 \u00e2\u20ac\u201d absolute floor active)","g2_worst_swing_pct":2.2633,"g2_worst_candle":"10:00 UTC","layer_churn_pct":100.0,"b1_diff_pct":null,"b1_threshold_pct":null,"depth_deviation_pct":50.0,"trusted_ref":null,"min_orderbook_layers":10,"imbalance_threshold":5.0},{"symbol":"usdcngn","monitor_only":false,"alert_tier":0,"issues":null,"mid_price":1390.345,"current_spread":0.390551,"target_spread":1.2,"percent_diff":-67.45,"depth_bid":"$2777.13M","depth_ask":"$2788.76M","ask_layers":44,"bid_layers":41,"dws":0.2224,"dws_threshold":0.5,"imbalance_ratio":1.0,"heavier_side":"asks","telegram_fired":false,"telegram_detail":null,"timestamp":"2026-08-22 13:15:58","d1_context":"\u00e2\u2030\u02c63.0x typical (baseline warming 2/4 \u00e2\u20ac\u201d absolute floor active)","g2_worst_swing_pct":0.3913,"g2_worst_candle":"10:00 UTC","layer_churn_pct":93.0,"b1_diff_pct":null,"b1_threshold_pct":null,"depth_deviation_pct":50.0,"trusted_ref":null,"min_orderbook_layers":10,"imbalance_threshold":5.0},{"symbol":"cngnngn","monitor_only":true,"alert_tier":1,"issues":"A2:HIGH|A6:CRITICAL","mid_price":1.0,"current_spread":0.1,"target_spread":null,"percent_diff":null,"depth_bid":"$31.45M","depth_ask":"$28.01M","ask_layers":11,"bid_layers":8,"dws":0.1215,"dws_threshold":0.5,"imbalance_ratio":1.12,"heavier_side":"bids","telegram_fired":true,"telegram_detail":"A2:fired|A6:cooldown","timestamp":"2026-08-22 13:15:58","d1_context":"baseline building\u00e2\u20ac\u00a6","g2_worst_swing_pct":0.0,"g2_worst_candle":"11:00 UTC","layer_churn_pct":0.0,"b1_diff_pct":null,"b1_threshold_pct":null,"depth_deviation_pct":50.0,"trusted_ref":null,"min_orderbook_layers":10,"imbalance_threshold":5.0},{"symbol":"usdtghs","monitor_only":false,"alert_tier":0,"issues":null,"mid_price":11.84,"current_spread":1.182432,"target_spread":1.3,"percent_diff":-9.04,"depth_bid":"$4.50M","depth_ask":"$4.49M","ask_layers":23,"bid_layers":20,"dws":0.9792,"dws_threshold":0.5,"imbalance_ratio":1.0,"heavier_side":"bids","telegram_fired":false,"telegram_detail":null,"timestamp":"2026-08-22 13:15:58","d1_context":"\u00e2\u2030\u02c613.6x typical (baseline warming 2/4 \u00e2\u20ac\u201d absolute floor active)","g2_worst_swing_pct":0.341,"g2_worst_candle":"11:00 UTC","layer_churn_pct":100.0,"b1_diff_pct":null,"b1_threshold_pct":null,"depth_deviation_pct":50.0,"trusted_ref":null,"min_orderbook_layers":10,"imbalance_threshold":5.0}]};
 
 const $ = id => document.getElementById(id);
@@ -956,25 +1203,31 @@ const csvCell = v => { const s = String(v ?? ""); return /[",\n]/.test(s) ? `"${
 // Views
 // ══════════════════════════════════════════════════════════════════════════════
 let view = "overview";
+let pendingToday = null;      // sign-offs outstanding today, shown on the tab
+const VIEWS = ["overview", "depth", "alerts", "signoff"];
 const tabs = segmented($("tabs"), {
   label: "Views",
   items: () => [
-    { v: "overview", t: "Overview", s: "Overview", k: "1" },
-    { v: "depth", t: "USDT/NGN depth", s: "Depth", k: "2" },
+    { v: "overview", t: "Overview", s: "Markets" },
+    { v: "depth", t: "USDT/NGN depth", s: "Depth" },
+    { v: "alerts", t: "Alert analysis", s: "Alerts" },
+    { v: "signoff", t: "Sign-off", s: "Sign-off", n: pendingToday },
   ],
-  render: it => `<span class="t-long">${esc(it.t)}</span><span class="t-short">${esc(it.s)}</span><span class="k">${it.k}</span>`,
+  render: it => `<span class="t-long">${esc(it.t)}</span><span class="t-short">${esc(it.s)}</span>${it.n ? `<span class="cnt num" title="${it.n} alert${it.n === 1 ? "" : "s"} today not signed off">${it.n > 99 ? "99+" : it.n}</span>` : ""}`,
   onChange: v => showView(v),
 });
 function showView(v, { instant = false } = {}) {
+  if (!VIEWS.includes(v)) v = "overview";
   view = v;
   tabs.set(v, { instant });
-  $("view-overview").hidden = v !== "overview";
-  $("view-depth").hidden = v !== "depth";
+  VIEWS.forEach(x => { $("view-" + x).hidden = x !== v; });
   $("notice").hidden = v !== "overview" || !$("notice").innerHTML;
   if (sheetOpen && v !== "overview") closeSheet();
   if (v === "depth") depthEnter(); else depthLeave();
+  if (v === "alerts") alertsEnter();
+  if (v === "signoff") signoffEnter();
   window.scrollTo(0, 0);
-  try { history.replaceState(null, "", v === "depth" ? "#depth" : location.pathname + location.search); } catch (e) {}
+  try { history.replaceState(null, "", v === "overview" ? location.pathname + location.search : "#" + v); } catch (e) {}
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -1189,7 +1442,7 @@ function renderDetail() {
       <dt>Reference price</dt><dd>${fmtPrice(p.trusted_ref)}</dd>
       <dt>Heavier side</dt><dd>${esc(p.heavier_side || "—")}</dd>
     </dl>
-    <div class="hint"><span><span class="kbd">↑</span><span class="kbd">↓</span> move</span><span><span class="kbd">/</span> filter</span><span><span class="kbd">1</span><span class="kbd">2</span> views</span></div>
+    <div class="hint"><span><span class="kbd">↑</span><span class="kbd">↓</span> move</span><span><span class="kbd">/</span> filter</span><span><span class="kbd">1</span>–<span class="kbd">4</span> views</span></div>
   `;
 }
 
@@ -1203,7 +1456,7 @@ document.addEventListener("keydown", e => {
     return;
   }
   if (inField || e.metaKey || e.ctrlKey || e.altKey) return;
-  if (e.key === "1" || e.key === "2") { showView(e.key === "1" ? "overview" : "depth", { instant: true }); return; }
+  if (e.key >= "1" && e.key <= "4") { showView(VIEWS[+e.key - 1], { instant: true }); return; }
   if (view !== "overview") return;
   if (e.key === "/") { e.preventDefault(); $("search").focus(); $("search").select(); return; }
   const down = e.key === "ArrowDown" || e.key === "j";
@@ -1369,6 +1622,8 @@ $("refresh-btn").addEventListener("click", async () => {
   btn.setAttribute("aria-busy", "true");
   try {
     if (view === "depth") await fetchDepth({ manual: true });
+    else if (view === "alerts") { await reloadAlerts(); toast("Analysis reloaded", `${ngtTime()} WAT`); }
+    else if (view === "signoff") { await fetchLedger(); toast("Sign-off reloaded", `${ngtTime()} WAT`); }
     else await load({ manual: true });
   } finally { btn.removeAttribute("aria-busy"); }
 });
@@ -1900,6 +2155,410 @@ $("csv-vol").addEventListener("click", () => {
 });
 
 // ══════════════════════════════════════════════════════════════════════════════
+// Shared by Alert analysis and Sign-off
+// ══════════════════════════════════════════════════════════════════════════════
+const RANGES = [{ v: "1d", t: "Today" }, { v: "7d", t: "7d" }, { v: "14d", t: "14d" }, { v: "30d", t: "30d" }];
+// A plain calendar date from local fields; toISOString() would shift a date
+// near midnight into the previous day for negative-offset viewers.
+function localDate(d) {
+  const p = n => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+// Inclusive: "30d" is today plus the 29 days before it.
+function rangeDates(r) {
+  const days = { "1d": 1, "7d": 7, "14d": 14, "30d": 30 }[r] || 1;
+  const end = new Date(), start = new Date();
+  start.setDate(start.getDate() - (days - 1));
+  return [localDate(start), localDate(end)];
+}
+function fmtDur(min) {
+  if (min == null || !isFinite(min)) return "—";
+  if (min < 60) return `${min.toFixed(min < 10 ? 1 : 0)}m`;
+  if (min < 1440) return `${(min / 60).toFixed(1)}h`;
+  return `${(min / 1440).toFixed(1)}d`;
+}
+const nfmt = n => n == null ? "—" : Number(n).toLocaleString();
+let facetTiers = {};
+const tierMapNow = () => (data && data.issue_tiers && Object.keys(data.issue_tiers).length) ? data.issue_tiers : facetTiers;
+function tiersFor(id) {
+  const m = tierMapNow()[id];
+  return m ? [...new Set(Object.values(m))].sort((a, b) => a - b) : [];
+}
+// Alert-type options grouped by the most urgent tier each id can reach; an id
+// that spans tiers says so on its own option.
+function alertOptions(ids, selected) {
+  const opt = id => {
+    const t = tiersFor(id);
+    return `<option value="${esc(id)}"${id === selected ? " selected" : ""}>${esc(id)}${CHECK_NAMES[id] ? " · " + esc(CHECK_NAMES[id]) : ""}${t.length > 1 ? ` (also T${t.slice(1).join("/T")})` : ""}</option>`;
+  };
+  if (!Object.keys(tierMapNow()).length) return ids.map(opt).join("");
+  const groups = { 1: [], 2: [], 3: [], 0: [] };
+  ids.forEach(id => { const t = tiersFor(id); groups[t.length ? t[0] : 0].push(id); });
+  const label = { 1: "Tier 1 · pages immediately", 2: "Tier 2 · needs 3 cycles", 3: "Tier 3 · dashboard only", 0: "Unrecognised" };
+  return [1, 2, 3, 0].filter(t => groups[t].length)
+    .map(t => `<optgroup label="${label[t]}">${groups[t].map(opt).join("")}</optgroup>`).join("");
+}
+// Rebuild a filter <select> from its facet list, keeping the current choice when
+// it survives. Returns false when it had to drop a choice that no longer exists,
+// so the caller can re-ask: the table would otherwise be filtered by something
+// the dropdown no longer says.
+function syncSelect(id, options, allLabel, fmt = v => v, grouped = false) {
+  const sel = $(id), prev = sel.value, keep = !!prev && options.includes(prev);
+  sel.innerHTML = `<option value="">${allLabel}</option>` + (grouped
+    ? alertOptions(options, keep ? prev : "")
+    : options.map(o => `<option value="${esc(o)}"${o === prev ? " selected" : ""}>${esc(fmt(o))}</option>`).join(""));
+  if (!keep) sel.value = "";
+  return keep || !prev;
+}
+async function getJSON(url) {
+  const r = await fetch(url, { cache: "no-store" });
+  if (!r.ok) {
+    let detail = `HTTP ${r.status}`;
+    try { detail = (await r.json()).detail || detail; } catch (_) {}
+    throw new Error(detail);
+  }
+  return r.json();
+}
+const sevChip = s => `<span class="sev ${esc(s)}">${esc(s)}</span>`;
+function datesControl(rangeEl, startEl, endEl, onChange) {
+  let current = "1d";
+  const seg = segmented($(rangeEl), {
+    label: "Range", items: () => RANGES, render: it => it.t,
+    onChange: v => { current = v; const [s, e] = rangeDates(v); $(startEl).value = s; $(endEl).value = e; onChange(); },
+  });
+  const custom = () => {
+    if (!$(startEl).value || !$(endEl).value) return;
+    current = null; seg.set(null);   // no preset describes an arbitrary range
+    onChange();
+  };
+  $(startEl).addEventListener("change", custom);
+  $(endEl).addEventListener("change", custom);
+  return {
+    init() { if (!$(startEl).value) { const [s, e] = rangeDates("1d"); $(startEl).value = s; $(endEl).value = e; seg.set("1d", { instant: true }); } },
+    get start() { return $(startEl).value; },
+    get end() { return $(endEl).value; },
+  };
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Alert analysis (ported from the current tab; same endpoints)
+// ══════════════════════════════════════════════════════════════════════════════
+// detection — one issue on one market in one cycle (a row in the daily log).
+// episode   — an unbroken run of the same detection, stitched over gaps.
+const AA_MAX_DAYS = 30;     // mirrors MAX_ANALYSIS_DAYS in api.py
+let aaSeq = 0, aaData = null, aaEntered = false;
+let logPage = 0, logSeq = 0, logData = null;
+const aaDates = datesControl("aa-range", "aa-start", "aa-end", () => reloadAlerts());
+
+function alertsEnter() {
+  if (aaEntered) return;
+  aaEntered = true;
+  aaDates.init();
+  reloadAlerts();
+}
+async function reloadAlerts() {
+  const start = aaDates.start, end = aaDates.end;
+  if (start > end) { setText("aa-coverage", "Start date is after end date"); return; }
+  const days = Math.round((Date.parse(end) - Date.parse(start)) / 86_400_000) + 1;
+  const tooWide = days > AA_MAX_DAYS;
+  $("aa-too-wide").hidden = !tooWide;
+  $("aa-body").hidden = tooWide;
+  if (tooWide) {
+    setText("aa-too-wide-days", days);
+    $("aa-too-wide-link").href = `${API}/api/alert-log/download?start=${start}&end=${end}`;
+    setText("aa-coverage", `${start} → ${end} · ${days} days · download only`);
+    return;
+  }
+  logPage = 0;
+  await Promise.all([fetchAnalysis(), fetchLog()]);
+}
+// Latest request wins. The current tab drops a range change made while a
+// previous load is still running; a sequence number avoids that.
+async function fetchAnalysis() {
+  const seq = ++aaSeq;
+  setText("aa-coverage", "Loading…");
+  try {
+    const d = await getJSON(`${API}/api/alert-analysis?start=${aaDates.start}&end=${aaDates.end}`);
+    if (seq !== aaSeq) return;
+    aaData = d;
+    renderAnalysis();
+  } catch (err) {
+    if (seq === aaSeq) setText("aa-coverage", `Couldn’t load: ${err.message}`);
+  }
+}
+function renderAnalysis() {
+  const s = aaData.summary || {}, cov = aaData.coverage || {};
+  const quiet = (cov.dates_without_data || []).length;
+  setText("aa-coverage", `${cov.start === cov.end ? cov.start : `${cov.start} → ${cov.end}`} · ${cov.days_with_data}/${cov.days_in_range} day${cov.days_in_range === 1 ? "" : "s"} with alerts${quiet ? ` · ${quiet} quiet` : ""}`);
+  setText("a-ep", nfmt(s.total_episodes));
+  setText("a-ep-s", s.issue_types ? `${s.issue_types} alert type${s.issue_types === 1 ? "" : "s"}` : "distinct runs");
+  setText("a-det", nfmt(s.total_detections));
+  setText("a-det-s", `${nfmt(s.warning_rows)} warning rows`);
+  setText("a-mk", nfmt(s.markets_affected));
+  setText("a-mk-s", s.top_market ? `most affected: ${symParts(s.top_market).base}/${symParts(s.top_market).quote}` : "—");
+  setText("a-crit", nfmt(s.critical_episodes));
+  setText("a-crit-s", `${nfmt(s.high_episodes)} high · ${nfmt(s.medium_episodes)} medium`);
+  setText("a-med", fmtDur(s.median_duration_min));
+  setText("a-med-s", `mean ${fmtDur(s.mttr_min)} · p95 ${fmtDur(s.p95_duration_min)}`);
+  setText("a-long", fmtDur(s.longest_min));
+  const le = s.longest_episode;
+  setText("a-long-s", le ? `${le.market.toUpperCase()} · ${le.issue}` : "—");
+  setText("a-esc", nfmt(s.escalations));
+  setText("a-open", nfmt(s.open_at_end));
+  $("a-open").classList.toggle("warn", (s.open_at_end || 0) > 0);
+  renderHeat();
+  const mk = m => `${esc(symParts(m).base)}<span class="mkt-quote">/${esc(symParts(m).quote)}</span>`;
+  const table = (id, nId, head, rows, empty) => {
+    setText(nId, rows.length ? String(rows.length) : "");
+    $(id).innerHTML = `<thead><tr>${head.map(h => `<th${h.r ? ' class="r"' : ""}>${h.l}</th>`).join("")}</tr></thead><tbody>${
+      rows.length ? rows.join("") : `<tr><td class="empty-cell" colspan="${head.length}">${empty}</td></tr>`}</tbody>`;
+  };
+  table("aa-long-t", "aa-long-n",
+    [{ l: "Market" }, { l: "Alert" }, { l: "Severity" }, { l: "Started" }, { l: "Duration", r: 1 }, { l: "Cycles", r: 1 }],
+    (aaData.longest_episodes || []).map(r => `<tr><td class="m">${mk(r.market)}</td><td>${esc(r.issue)}${r.escalated ? '<span class="tag">escalated</span>' : ""}${r.open_at_end ? '<span class="tag open">open</span>' : ""}</td><td>${sevChip(r.severity)}</td><td class="t num">${esc(r.start)}</td><td class="r num">${fmtDur(r.duration_min)}</td><td class="r num">${nfmt(r.detections)}</td></tr>`),
+    "No episodes in range.");
+  table("aa-flap-t", "aa-flap-n",
+    [{ l: "Market" }, { l: "Alert" }, { l: "Episodes", r: 1 }, { l: "Median", r: 1 }, { l: "Score", r: 1 }],
+    (aaData.flapping || []).map(r => `<tr><td class="m">${mk(r.market)}</td><td>${esc(r.issue)}</td><td class="r num">${nfmt(r.episodes)}</td><td class="r num">${fmtDur(r.median_min)}</td><td class="r num"><b>${esc(r.score)}</b></td></tr>`),
+    "Nothing flapped: no market and alert pair reached 3 episodes.");
+  table("aa-open-t", "aa-open-n",
+    [{ l: "Market" }, { l: "Alert" }, { l: "Severity" }, { l: "Started" }, { l: "Open for", r: 1 }],
+    (aaData.still_open || []).map(r => `<tr><td class="m">${mk(r.market)}</td><td>${esc(r.issue)}</td><td>${sevChip(r.severity)}</td><td class="t num">${esc(r.start)}</td><td class="r num">${fmtDur(r.duration_min)}</td></tr>`),
+    "Everything had cleared by the end of the range.");
+}
+function renderHeat() {
+  const h = (aaData && aaData.hourly) || {};
+  const issues = h.issues || [];
+  if (!issues.length) { $("aa-heat").innerHTML = `<div class="empty">No detections in range.</div>`; return; }
+  const head = `<tr><th class="rl"></th>${(h.hours || []).map(x => `<th>${String(x).padStart(2, "0")}</th>`).join("")}<th class="tot">Total</th></tr>`;
+  const body = issues.map((issue, i) => {
+    const row = (h.matrix || [])[i] || [];
+    const max = Math.max(1, ...row), tot = row.reduce((a, b) => a + b, 0);
+    return `<tr><th class="rl" title="${esc(CHECK_NAMES[issue] || issue)}">${esc(issue)}</th>${row.map((v, hr) => {
+      if (!v) return `<td class="z" title="${esc(issue)} · ${String(hr).padStart(2, "0")}:00 · none">·</td>`;
+      const pct = Math.round(10 + (v / max) * 80);
+      return `<td style="background:color-mix(in srgb, var(--accent) ${pct}%, var(--surface));${pct > 55 ? "color:var(--heat-ink);" : ""}" title="${esc(issue)} · ${String(hr).padStart(2, "0")}:00 · ${nfmt(v)} detections">${v >= 1000 ? (v / 1000).toFixed(1) + "k" : v}</td>`;
+    }).join("")}<th class="tot num">${nfmt(tot)}</th></tr>`;
+  }).join("");
+  $("aa-heat").innerHTML = `<table>${head}${body}</table>`;
+}
+
+// ── Daily log: server-paged, server-filtered ─────────────────────────────────
+function logQuery(extra = {}) {
+  const p = new URLSearchParams({ start: aaDates.start, end: aaDates.end, tier: $("log-tier").value,
+    page: logPage, page_size: $("log-size").value, ...extra });
+  if ($("log-market").value) p.set("market", $("log-market").value);
+  if ($("log-alert").value) p.set("issue", $("log-alert").value);
+  return p.toString();
+}
+async function fetchLog(retry = true) {
+  const seq = ++logSeq;
+  try {
+    const d = await getJSON(`${API}/api/alert-log?${logQuery()}`);
+    if (seq !== logSeq) return;
+    logData = d; logPage = d.page;
+    if (!renderLog() && retry) { logPage = 0; await fetchLog(false); }
+  } catch (err) {
+    if (seq !== logSeq) return;
+    logData = null;
+    $("log-body").innerHTML = `<tr><td class="empty-cell" colspan="6">Couldn’t load the log: ${esc(err.message)}</td></tr>`;
+    ["log-n", "log-tiers", "log-info"].forEach(id => setText(id, ""));
+  }
+}
+function renderLog() {
+  const f = logData.facets || {};
+  if (f.issue_tiers) facetTiers = f.issue_tiers;
+  const okM = syncSelect("log-market", f.markets || [], "All markets", m => m.toUpperCase());
+  const okA = syncSelect("log-alert", f.issues || [], "All alert types", v => v, true);
+  if (!okM || !okA) return false;
+  const t = f.tiers || {};
+  setText("log-tiers", `T1 ${nfmt(t["1"] || 0)} · T2 ${nfmt(t["2"] || 0)} · T3 ${nfmt(t["3"] || 0)} in range`);
+  const total = logData.total || 0, rows = logData.rows || [];
+  setText("log-n", `${nfmt(total)}`);
+  const from = total ? logPage * logData.page_size + 1 : 0;
+  setText("log-info", total ? `${nfmt(from)}–${nfmt(from + rows.length - 1)} of ${nfmt(total)}` : "No rows");
+  $("log-prev").disabled = logPage === 0;
+  $("log-next").disabled = logPage >= (logData.pages || 1) - 1;
+  $("log-csv").href = `${API}/api/alert-log?${logQuery({ format: "csv" })}`;
+  $("log-csv").setAttribute("aria-disabled", total ? "false" : "true");
+  $("log-body").innerHTML = rows.length ? rows.map(r => `<tr>
+    <td class="t num">${esc(r.ts)}</td>
+    <td class="m">${esc(symParts(r.market).base)}<span class="mkt-quote">/${esc(symParts(r.market).quote)}</span></td>
+    <td title="${esc(CHECK_NAMES[r.issue] || r.issue)}">${esc(r.issue)} <span class="muted">${esc(CHECK_NAMES[r.issue] || "")}</span></td>
+    <td>${sevChip(r.severity)}</td>
+    <td class="t">T${esc(r.tier)}</td>
+    <td class="r num t">${esc(r.depth || "—")}</td></tr>`).join("")
+    : `<tr><td class="empty-cell" colspan="6">No detections match these filters in this range.</td></tr>`;
+  return true;
+}
+["log-tier", "log-market", "log-alert", "log-size"].forEach(id => $(id).addEventListener("change", () => { logPage = 0; fetchLog(); }));
+$("log-prev").addEventListener("click", () => { if (logPage > 0) { logPage--; fetchLog(); } });
+$("log-next").addEventListener("click", () => { if (logData && logPage < logData.pages - 1) { logPage++; fetchLog(); } });
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Sign-off (accountability ledger)
+// ══════════════════════════════════════════════════════════════════════════════
+// Lists what actually reached Telegram. One click signs a row off: the checkbox
+// IS the action. Nothing here mutes anything — that's a different control.
+let ledPage = 0, ledSeq = 0, ledData = null, ledStatus = "all", ledEntered = false, ledFetchedAt = 0;
+const soDates = datesControl("so-range", "so-start", "so-end", () => { ledPage = 0; fetchLedger(); });
+const statusSeg = segmented($("so-status"), {
+  label: "Show", fill: true,
+  items: () => {
+    const c = (ledData && ledData.facets && ledData.facets.counts) || {};
+    const n = k => ledData ? nfmt(c[k] || 0) : "—";
+    return [
+      { v: "pending", t: "Needs sign-off", n: n("pending") },
+      { v: "acknowledged", t: "Signed off", n: n("acknowledged") },
+      { v: "open", t: "Still unresolved", n: n("open") },
+      { v: "all", t: "All delivered", n: n("all") },
+    ];
+  },
+  render: it => `<span class="f-label">${it.t}</span><span class="f-value num">${it.n}</span>`,
+  onChange: v => { ledStatus = v; ledPage = 0; fetchLedger(); },
+});
+statusSeg.set("all", { instant: true });
+
+function signoffEnter() {
+  if (!CAN_WRITE) { const n = $("so-ro"); n.hidden = false; n.innerHTML = `${infoIcon()}<div><b>Read-only.</b> This page is reading <b>${esc(API_HOST)}</b>, so ticking, actions, notes and “mark cleared” are switched off here. Record sign-offs in the main dashboard.</div>`; }
+  if (!ledEntered) { ledEntered = true; soDates.init(); fetchLedger(); }
+  else if (Date.now() - ledFetchedAt > 30_000) fetchLedger();
+}
+function ledQuery(extra = {}) {
+  const p = new URLSearchParams({ start: soDates.start, end: soDates.end, status: ledStatus,
+    page: ledPage, page_size: $("so-size").value, ...extra });
+  if ($("so-market").value) p.set("market", $("so-market").value);
+  if ($("so-alert").value) p.set("issue", $("so-alert").value);
+  return p.toString();
+}
+async function fetchLedger() {
+  const seq = ++ledSeq;
+  try {
+    const d = await getJSON(`${API}/api/alert-ledger?${ledQuery()}`);
+    if (seq !== ledSeq) return;
+    ledData = d; ledPage = d.page; ledFetchedAt = Date.now();
+    renderLedger();
+  } catch (err) {
+    if (seq !== ledSeq) return;
+    $("so-body").innerHTML = `<tr><td class="empty-cell" colspan="10">Couldn’t load sign-off: ${esc(err.message)}</td></tr>`;
+  }
+}
+const ledMarket = m => m === "_global" ? "Global (E1/E2)" : `${esc(symParts(m).base)}<span class="mkt-quote">/${esc(symParts(m).quote)}</span>`;
+function fmtOpen(min) {
+  if (min < 60) return `${Math.round(min)}m`;
+  if (min < 1440) return `${(min / 60).toFixed(1)}h`;
+  return `${Math.round(min / 1440)}d`;
+}
+function renderLedger() {
+  const f = ledData.facets || {};
+  if (f.issue_tiers) facetTiers = f.issue_tiers;
+  syncSelect("so-market", f.markets || [], "All markets", m => m === "_global" ? "Global (E1/E2)" : m.toUpperCase());
+  syncSelect("so-alert", f.issues || [], "All alert types", v => v, true);
+  statusSeg.refresh(); statusSeg.set(ledStatus, { instant: true });
+  const cov = ledData.coverage || {};
+  setText("so-coverage", cov.start === cov.end ? cov.start : `${cov.start} → ${cov.end}`);
+  if (cov.end === localDate(new Date()) && cov.start === cov.end) setPendingToday((f.counts || {}).pending || 0);
+
+  const actions = f.actions || [];
+  if (!$("so-bulk-action").options.length && actions.length) $("so-bulk-action").innerHTML = actions.map(a => `<option value="${esc(a)}">${esc(a)}</option>`).join("");
+  const total = ledData.total || 0, rows = ledData.rows || [];
+  setText("so-n", `${nfmt(total)}`);
+  const from = total ? ledPage * ledData.page_size + 1 : 0;
+  setText("so-info", total ? `${nfmt(from)}–${nfmt(from + rows.length - 1)} of ${nfmt(total)}` : "No rows");
+  $("so-prev").disabled = ledPage === 0;
+  $("so-next").disabled = ledPage >= (ledData.pages || 1) - 1;
+  $("so-csv").href = `${API}/api/alert-ledger?${ledQuery({ format: "csv" })}`;
+  $("so-csv").setAttribute("aria-disabled", total ? "false" : "true");
+
+  const unsigned = rows.filter(r => !r.acknowledged).length;
+  $("so-bulk").hidden = !unsigned;
+  setText("so-bulk-n", `${unsigned} on this page not signed off`);
+  $("so-bulk-go").disabled = !CAN_WRITE;
+  $("so-bulk-action").disabled = !CAN_WRITE;
+  $("so-bulk-go").title = CAN_WRITE ? "" : READ_ONLY_MSG;
+
+  if (!rows.length) { $("so-body").innerHTML = `<tr><td class="empty-cell" colspan="10">Nothing delivered to Telegram matches this view.</td></tr>`; return; }
+  const ro = CAN_WRITE ? "" : ` disabled title="${esc(READ_ONLY_MSG)}"`;
+  const msgs = [];
+  const noteMax = f.note_max || 500;
+  $("so-body").innerHTML = rows.map(r => {
+    if (r.msg_id && !msgs.includes(r.msg_id)) msgs.push(r.msg_id);
+    const g = r.msg_id ? (msgs.indexOf(r.msg_id) % 2 ? "gb" : "ga") : "";
+    const id = esc(r.id);
+    const opts = actions.map(a => `<option value="${esc(a)}"${a === r.action ? " selected" : ""}>${esc(a)}</option>`).join("");
+    const resolved = r.resolved_at
+      ? `<span class="num">${esc(r.resolved_at)}</span>${r.resolved_manual ? `<span class="tag" title="Recorded by hand, not observed by the monitor">manual</span><button class="ghost pressable" type="button" data-act="unclear" data-id="${id}"${ro}>Undo</button>` : ""}`
+      : `<span class="open-txt">open${r.open_for_min != null ? ` · ${fmtOpen(r.open_for_min)}` : ""}</span><button class="ghost pressable" type="button" data-act="clear" data-id="${id}" title="For a condition that will never clear by itself. Recorded as manual; doesn’t close the row."${CAN_WRITE ? "" : ` disabled`}>Mark cleared</button>`;
+    return `<tr class="${g}" data-id="${id}">
+      <td><label class="ck-wrap"><input class="ck" type="checkbox" data-act="ack" aria-label="Signed off"${r.acknowledged ? " checked" : ""}${ro} /></label></td>
+      <td class="t num">${esc(r.ts)}${r.fired_count > 1 ? `<span class="rep" title="Paged ${r.fired_count} times; most recently ${esc(r.last_ts)}">×${r.fired_count}</span>` : ""}</td>
+      <td class="m" title="${esc(r.label)}">${ledMarket(r.market)}</td>
+      <td>${esc(r.issue)} <span class="muted">${esc(r.name)}</span></td>
+      <td>${sevChip(r.severity)}</td>
+      <td class="t num">${r.acknowledged_at ? esc(r.acknowledged_at) : "—"}</td>
+      <td><select class="select" data-act="action" aria-label="Action taken"${r.acknowledged && CAN_WRITE ? "" : " disabled"}>${r.action ? "" : '<option value=""></option>'}${opts}</select></td>
+      <td><input class="cell-in" data-act="note" maxlength="${noteMax}" value="${esc(r.note)}" placeholder="—" aria-label="Note"${r.acknowledged && CAN_WRITE ? "" : " disabled"} /></td>
+      <td>${resolved}</td>
+      <td class="r num t">${r.time_to_resolve ? esc(r.time_to_resolve) : "—"}</td>
+    </tr>`;
+  }).join("");
+}
+// Writes: one endpoint covers a single tick and a page-wide apply. Refetch
+// either way, so a failed write snaps the row back to the truth.
+async function postLedger(payload, okMsg) {
+  if (!CAN_WRITE) { toast("Read-only", READ_ONLY_MSG, { error: true }); fetchLedger(); return; }
+  try {
+    const res = await fetch(`${API}/api/alert-ledger/action`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
+    });
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || res.statusText);
+    if (okMsg) toast(okMsg);
+  } catch (err) {
+    toast("Couldn’t save", err.message, { error: true });
+  } finally {
+    await fetchLedger();
+    refreshPendingToday();
+  }
+}
+$("so-body").addEventListener("change", e => {
+  const el = e.target, id = el.closest("tr") && el.closest("tr").dataset.id;
+  if (!id) return;
+  if (el.dataset.act === "ack") postLedger({ fire_ids: [id], acknowledged: el.checked }, el.checked ? "Signed off" : "Sign-off cleared");
+  if (el.dataset.act === "action" && el.value) postLedger({ fire_ids: [id], acknowledged: true, action: el.value }, "Action saved");
+  // change, not input: one request per keystroke against a file-backed store is how it gets corrupted.
+  if (el.dataset.act === "note") postLedger({ fire_ids: [id], acknowledged: true, note: el.value }, "Note saved");
+});
+$("so-body").addEventListener("click", e => {
+  const b = e.target.closest("button[data-act]");
+  if (!b) return;
+  // Sent without `acknowledged`: calling something cleared doesn't also sign it off.
+  postLedger({ fire_ids: [b.dataset.id], cleared: b.dataset.act === "clear" }, b.dataset.act === "clear" ? "Marked cleared (manual)" : "Manual clear removed");
+});
+$("so-bulk-go").addEventListener("click", () => {
+  const ids = ((ledData && ledData.rows) || []).filter(r => !r.acknowledged).map(r => r.id);
+  if (!ids.length) return;
+  postLedger({ fire_ids: ids, acknowledged: true, action: $("so-bulk-action").value }, `${ids.length} alert${ids.length === 1 ? "" : "s"} signed off`);
+});
+["so-market", "so-alert", "so-size"].forEach(id => $(id).addEventListener("change", () => { ledPage = 0; fetchLedger(); }));
+$("so-prev").addEventListener("click", () => { if (ledPage > 0) { ledPage--; fetchLedger(); } });
+$("so-next").addEventListener("click", () => { if (ledData && ledPage < ledData.pages - 1) { ledPage++; fetchLedger(); } });
+
+// Outstanding sign-offs today, on the tab, so the queue is visible without opening it.
+function setPendingToday(n) {
+  if (n === pendingToday) return;
+  pendingToday = n;
+  tabs.refresh(); tabs.set(view, { instant: true });
+}
+async function refreshPendingToday() {
+  const today = localDate(new Date());
+  try {
+    const d = await getJSON(`${API}/api/alert-ledger?start=${today}&end=${today}&status=pending&page=0&page_size=1`);
+    setPendingToday(((d.facets || {}).counts || {}).pending || 0);
+  } catch (_) { /* the badge is a nudge; leave it as it was */ }
+}
+setInterval(() => { if (!document.hidden) refreshPendingToday(); }, 5 * 60_000);
+
+// ══════════════════════════════════════════════════════════════════════════════
 // Configuration drawer
 // ══════════════════════════════════════════════════════════════════════════════
 // One schema drives rendering, loading and the save payload, so the three can
@@ -2037,8 +2696,9 @@ function pairRowHTML(p) {
 function muteHTML(key) {
   const until = suspensions[key];
   const left = until ? new Date(until).getTime() - Date.now() : 0;
-  if (until && left > 0) return `<button class="mute-btn on pressable" type="button" data-act="resume" title="Resume Telegram alerts for ${esc(key.toUpperCase())} now">Muted ${Math.max(1, Math.ceil(left / 60000))}m</button>`;
-  return `<button class="mute-btn pressable" type="button" data-act="mute" title="Mute ${esc(key.toUpperCase())} Telegram alerts for ${suspendMinutes}m">Mute</button>`;
+  const dis = CAN_WRITE ? "" : ` disabled title="${esc(READ_ONLY_MSG)}"`;
+  if (until && left > 0) return `<button class="mute-btn on pressable" type="button" data-act="resume"${dis || ` title="Resume Telegram alerts for ${esc(key.toUpperCase())} now"`}>Muted ${fmtMuteLeft(left)}</button>`;
+  return `<button class="mute-btn pressable" type="button" data-act="mute"${dis || ` title="Mute ${esc(key.toUpperCase())} Telegram alerts for ${fmtDur(suspendMinutes)}"`}>Mute</button>`;
 }
 function tickMutes() { document.querySelectorAll("#pairs-tbody .mute-cell").forEach(td => td.innerHTML = muteHTML(td.dataset.sym)); }
 
@@ -2130,12 +2790,13 @@ function renderFoot(state) {
   confirmingClose = false;
   const msg = n ? null : footMsg;
   const status = msg ? `<span class="cfg-status ${msg.err ? "err" : ""}">${esc(msg.text)}</span>`
-    : n ? `<span class="cfg-status dirty">${n} unsaved change${n === 1 ? "" : "s"}${n && dirtyPairsOnly(n) ? " (pairs)" : ""}</span>`
-    : `<span class="cfg-status">${cfgLoaded ? "No changes" : "Loading…"}</span>`;
+    : n ? `<span class="cfg-status dirty">${n} unsaved change${n === 1 ? "" : "s"}${n && dirtyPairsOnly(n) ? " (pairs)" : ""}${CAN_WRITE ? "" : " · read-only, can’t save"}</span>`
+    : `<span class="cfg-status">${!cfgLoaded ? "Loading…" : CAN_WRITE ? "No changes" : `Read-only · reading ${esc(API_HOST)}`}</span>`;
+  const ro = CAN_WRITE ? "" : ` title="${esc(READ_ONLY_MSG)}"`;
   foot.innerHTML = `${status}
-    <button class="btn hold pressable" type="button" id="cfg-reset" ${cfgLoaded ? "" : "disabled"} title="Press and hold to reset every setting to its default"><i class="hold-fill"></i><span>Hold to reset</span></button>
+    <button class="btn hold pressable" type="button" id="cfg-reset" ${cfgLoaded && CAN_WRITE ? "" : "disabled"}${ro || ' title="Press and hold to reset every setting to its default"'}><i class="hold-fill"></i><span>Hold to reset</span></button>
     <button class="btn pressable" type="button" data-act="revert" ${n ? "" : "disabled"}>Revert</button>
-    <button class="btn primary pressable" type="button" data-act="save" ${n && cfgLoaded ? "" : "disabled"}>Save</button>`;
+    <button class="btn primary pressable" type="button" data-act="save" ${n && cfgLoaded && CAN_WRITE ? "" : "disabled"}${ro}>Save</button>`;
   bindHold($("cfg-reset"), resetDefaults);
 }
 function dirtyPairsOnly(n) {
@@ -2189,7 +2850,13 @@ async function fetchSuspensions() {
   } catch { suspensions = {}; }
   tickMutes();
 }
+// Production mutes run for 1440 minutes; "Muted 1440m" reads worse than "Muted 24h".
+function fmtMuteLeft(ms) {
+  const m = Math.max(1, Math.ceil(ms / 60000));
+  return m < 120 ? `${m}m` : `${Math.round(m / 60)}h`;
+}
 async function setMute(key, suspend) {
+  if (!CAN_WRITE) { toast("Read-only", READ_ONLY_MSG, { error: true }); return; }
   try {
     const res = await fetch(`${API}/api/suspensions`, {
       method: "POST", headers: { "Content-Type": "application/json" },
@@ -2206,6 +2873,7 @@ async function setMute(key, suspend) {
   }
 }
 async function saveCfg() {
+  if (!CAN_WRITE) { toast("Read-only", READ_ONLY_MSG, { error: true }); return; }
   footMsg = { text: "Saving…" };
   $("cfg-foot").querySelector(".cfg-status").textContent = "Saving…";
   try {
@@ -2226,6 +2894,7 @@ async function saveCfg() {
   }
 }
 async function resetDefaults() {
+  if (!CAN_WRITE) { toast("Read-only", READ_ONLY_MSG, { error: true }); return; }
   try {
     const res = await fetch(`${API}/api/config`, {
       method: "POST", headers: { "Content-Type": "application/json" },
@@ -2378,8 +3047,10 @@ function tick() { $("clock").textContent = ngtTime() + " WAT"; }
 tick(); setInterval(tick, 1000);
 addEventListener("scroll", () => $("header").classList.toggle("scrolled", scrollY > 0), { passive: true });
 
-showView(location.hash === "#depth" ? "depth" : "overview", { instant: true });
+if (!CAN_WRITE) { $("ro-pill").hidden = false; $("ro-pill").title = READ_ONLY_MSG; }
+showView(location.hash.slice(1) || "overview", { instant: true });
 load();
+refreshPendingToday();
 </script>
 </body>
 </html>
