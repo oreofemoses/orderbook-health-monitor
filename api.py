@@ -429,21 +429,24 @@ def health():
     return {"status": "ok", "time_ngt": ngt_now().strftime("%Y-%m-%d %H:%M:%S")}
 
 
+# The redesigned dashboard is the default. /next is kept as an alias because it
+# was the trial link people bookmarked.
 @app.get("/")
-def serve_dashboard():
-    path = STATIC_DIR / "dashboard.html"
-    if not path.exists():
-        raise HTTPException(status_code=404, detail="dashboard.html not found next to api.py")
-    return FileResponse(path)
-
-
-# The redesigned dashboard, served alongside dashboard.html while it's trialled.
-# Swap the two routes (or point "/" at dashboard-next.html) to make it the default.
 @app.get("/next")
-def serve_dashboard_next():
+def serve_dashboard():
     path = STATIC_DIR / "dashboard-next.html"
     if not path.exists():
         raise HTTPException(status_code=404, detail="dashboard-next.html not found next to api.py")
+    return FileResponse(path)
+
+
+# The previous dashboard, kept reachable while the team moves over. Remove this
+# route (and dashboard.html from the Dockerfile and .dockerignore) to retire it.
+@app.get("/old")
+def serve_dashboard_old():
+    path = STATIC_DIR / "dashboard.html"
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="dashboard.html not found next to api.py")
     return FileResponse(path)
 
 

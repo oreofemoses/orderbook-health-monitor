@@ -3,7 +3,8 @@
 ## Files
 ```
 api.py           ← FastAPI server
-dashboard.html   ← Frontend (served at GET /)
+dashboard-next.html ← Frontend (served at GET /, also /next)
+dashboard.html   ← Previous frontend (served at GET /old)
 data/
   latest.csv     ← Written by quidax_monitor.py each cycle
   health_state.json
@@ -40,7 +41,8 @@ To watch it live, just keep your monitor running alongside uvicorn.
 
 | Endpoint | Returns |
 |---|---|
-| `GET /` | dashboard.html |
+| `GET /` | dashboard-next.html (also at `/next`) |
+| `GET /old` | dashboard.html, the previous dashboard |
 | `GET /api/status` | latest.csv as JSON + summary counts |
 | `GET /api/history` | one day's daily_log CSV as JSON (`?date=`); the dashboard now reads the log through `/api/alert-log` |
 | `GET /api/state` | health_state.json with anomaly age in minutes |
