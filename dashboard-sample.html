@@ -1,0 +1,1079 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+<title>Market Monitor — sample redesign</title>
+<!--
+  SAMPLE REDESIGN of dashboard.html (Overview tab only). It does not replace the
+  live dashboard; nothing links to it. It reads the same /api/status endpoint:
+  served from the API it uses relative URLs, opened as a file it calls
+  http://localhost:8765 (override with ?api=http://host:port), and if neither
+  answers it renders a saved snapshot so the design can still be reviewed.
+
+  Motion rules this page follows (emil-design-eng):
+  - Keyboard actions (↑/↓, j/k, Esc, /) never animate.
+  - Things seen tens of times a minute (row hover, selection, detail swap) don't
+    animate either; only press feedback does, at 120ms.
+  - Occasional UI (filter indicator, tooltip, toast, mobile sheet) animates with
+    strong ease-out curves, under 300ms except the sheet, which uses the iOS
+    drawer curve.
+  - Only transform, opacity and clip-path are animated.
+-->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;650&display=swap" rel="stylesheet">
+<script>
+(function () {
+  try {
+    var saved = localStorage.getItem("ohm-sample-theme");
+    var dark = saved ? saved === "dark"
+                     : window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
+    document.documentElement.setAttribute("data-theme", dark ? "dark" : "light");
+  } catch (e) { document.documentElement.setAttribute("data-theme", "light"); }
+})();
+</script>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
+  --ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
+
+  --font: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --radius: 12px;
+  --radius-sm: 8px;
+  --header-h: 56px;
+}
+
+/* Neutral surfaces; colour is reserved for state. Hairlines are translucent
+   shadows rather than solid borders so they sit correctly on any surface. */
+:root[data-theme="light"] {
+  --bg: #f7f7f8;
+  --surface: #ffffff;
+  --surface-2: #f2f2f4;
+  --surface-hover: #f6f6f8;
+  --text: #18181b;
+  --text-2: #52525b;
+  --text-3: #8b8b94;
+  --hairline: rgba(24, 24, 27, 0.08);
+  --hairline-strong: rgba(24, 24, 27, 0.14);
+  --shadow-card: 0 0 0 1px rgba(24,24,27,.06), 0 1px 2px rgba(24,24,27,.04);
+  --shadow-pop: 0 0 0 1px rgba(24,24,27,.08), 0 8px 24px -6px rgba(24,24,27,.18);
+  --accent: #6d28d9;
+  --accent-soft: rgba(109, 40, 217, 0.08);
+  --accent-line: rgba(109, 40, 217, 0.35);
+  --red: #dc2626;    --red-soft: rgba(220, 38, 38, 0.09);   --red-text: #b91c1c;
+  --amber: #d97706;  --amber-soft: rgba(217, 119, 6, 0.11); --amber-text: #92400e;
+  --green: #16a34a;  --green-soft: rgba(22, 163, 74, 0.10); --green-text: #166534;
+  --gray-soft: rgba(24, 24, 27, 0.06);
+  --header-bg: rgba(247, 247, 248, 0.78);
+  --scrim: rgba(24, 24, 27, 0.32);
+}
+:root[data-theme="dark"] {
+  --bg: #0c0c0e;
+  --surface: #151518;
+  --surface-2: #1c1c20;
+  --surface-hover: #1a1a1e;
+  --text: #ededef;
+  --text-2: #a1a1aa;
+  --text-3: #71717a;
+  --hairline: rgba(255, 255, 255, 0.07);
+  --hairline-strong: rgba(255, 255, 255, 0.13);
+  --shadow-card: 0 0 0 1px rgba(255,255,255,.06);
+  --shadow-pop: 0 0 0 1px rgba(255,255,255,.09), 0 12px 32px -8px rgba(0,0,0,.7);
+  --accent: #a78bfa;
+  --accent-soft: rgba(167, 139, 250, 0.10);
+  --accent-line: rgba(167, 139, 250, 0.45);
+  --red: #f87171;    --red-soft: rgba(248, 113, 113, 0.12);  --red-text: #fca5a5;
+  --amber: #fbbf24;  --amber-soft: rgba(251, 191, 36, 0.12); --amber-text: #fcd34d;
+  --green: #4ade80;  --green-soft: rgba(74, 222, 128, 0.10); --green-text: #86efac;
+  --gray-soft: rgba(255, 255, 255, 0.07);
+  --header-bg: rgba(12, 12, 14, 0.72);
+  --scrim: rgba(0, 0, 0, 0.55);
+}
+
+/* Theme switches must not run every element's colour transition at once. */
+.no-transitions *, .no-transitions *::before, .no-transitions *::after { transition: none !important; }
+
+html { -webkit-text-size-adjust: 100%; }
+body {
+  font-family: var(--font);
+  font-size: 0.8125rem;
+  line-height: 1.45;
+  color: var(--text);
+  background: var(--bg);
+  font-feature-settings: "cv11", "ss01";
+  -webkit-font-smoothing: antialiased;
+  min-height: 100vh;
+}
+.num { font-variant-numeric: tabular-nums; }
+button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; }
+a { color: inherit; }
+svg { display: block; flex-shrink: 0; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 6px; }
+
+/* Press feedback: the one animation every control gets. */
+.pressable { transition: transform 120ms var(--ease-out); }
+.pressable:active { transform: scale(0.97); }
+
+/* ─── Header ─────────────────────────────────────────────── */
+.header {
+  position: sticky; top: 0; z-index: 20;
+  height: var(--header-h);
+  display: flex; align-items: center; gap: 16px;
+  padding: 0 24px;
+  background: var(--header-bg);
+  -webkit-backdrop-filter: blur(16px) saturate(180%);
+  backdrop-filter: blur(16px) saturate(180%);
+  box-shadow: 0 1px 0 transparent;
+  transition: box-shadow 200ms ease;
+}
+.header.scrolled { box-shadow: 0 1px 0 var(--hairline); }
+@media (prefers-reduced-transparency: reduce) {
+  .header { background: var(--bg); -webkit-backdrop-filter: none; backdrop-filter: none; }
+}
+.brand { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.brand-mark {
+  width: 26px; height: 26px; border-radius: 7px;
+  background: var(--text); color: var(--bg);
+  display: grid; place-items: center;
+}
+.brand-name { font-weight: 600; font-size: 0.875rem; letter-spacing: -0.01em; white-space: nowrap; }
+.brand-sep { color: var(--text-3); }
+.brand-page { color: var(--text-2); white-space: nowrap; }
+
+.header-right { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+
+.status-pill {
+  display: inline-flex; align-items: center; gap: 7px;
+  height: 28px; padding: 0 10px; border-radius: 999px;
+  font-size: 0.75rem; font-weight: 500; color: var(--text-2);
+  background: var(--gray-soft);
+  white-space: nowrap;
+}
+.status-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--green); }
+.status-pill.stale .status-dot { background: var(--amber); }
+.status-pill.offline .status-dot { background: var(--red); }
+.status-pill.sample .status-dot { background: var(--text-3); }
+
+.clock { font-size: 0.75rem; color: var(--text-3); white-space: nowrap; }
+
+.icon-btn {
+  width: 32px; height: 32px; border-radius: var(--radius-sm);
+  display: grid; place-items: center; color: var(--text-2);
+}
+.btn {
+  height: 32px; padding: 0 12px; border-radius: var(--radius-sm);
+  display: inline-flex; align-items: center; gap: 7px;
+  font-size: 0.8125rem; font-weight: 500; color: var(--text);
+  background: var(--surface); box-shadow: var(--shadow-card);
+  white-space: nowrap;
+}
+@media (hover: hover) and (pointer: fine) {
+  .icon-btn:hover { background: var(--gray-soft); color: var(--text); }
+  .btn:hover { background: var(--surface-hover); }
+}
+.btn[aria-busy="true"] { color: var(--text-2); cursor: progress; }
+/* A faster spinner reads as faster loading. Linear: it's constant motion. */
+.btn[aria-busy="true"] .refresh-icon { animation: spin 600ms linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ─── Layout ─────────────────────────────────────────────── */
+.page { max-width: 1440px; margin: 0 auto; padding: 20px 24px 48px; }
+
+.notice {
+  display: flex; gap: 10px; align-items: flex-start;
+  padding: 10px 14px; margin-bottom: 16px;
+  border-radius: var(--radius-sm);
+  background: var(--amber-soft); color: var(--amber-text);
+  font-size: 0.8125rem;
+}
+.notice[hidden] { display: none; }
+.notice.error { background: var(--red-soft); color: var(--red-text); }
+.notice.neutral { background: var(--gray-soft); color: var(--text-2); }
+.notice b { font-weight: 600; }
+.notice svg { margin-top: 2px; }
+
+/* ─── Filter / summary segmented control ──────────────────
+   The summary numbers ARE the filter. The active state is drawn by a duplicate
+   layer clipped to the active segment; moving the clip-path animates the
+   colour change perfectly, which per-button colour transitions can't do. */
+.segments-wrap { margin-bottom: 16px; }
+.segments {
+  position: relative;
+  display: grid; grid-template-columns: repeat(4, minmax(0, 1fr));
+  background: var(--surface); border-radius: var(--radius);
+  box-shadow: var(--shadow-card);
+  padding: 4px;
+}
+.segments-layer { display: contents; }
+.seg {
+  position: relative;
+  display: flex; flex-direction: column; align-items: flex-start; gap: 2px;
+  padding: 10px 14px 11px; border-radius: 9px; text-align: left;
+  min-width: 0;
+}
+.seg-label { font-size: 0.75rem; font-weight: 500; color: var(--text-2); white-space: nowrap; }
+.seg-value { font-size: 1.5rem; font-weight: 600; letter-spacing: -0.025em; line-height: 1.15; }
+.seg-sub { font-size: 0.6875rem; color: var(--text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+@media (hover: hover) and (pointer: fine) {
+  .segments-base .seg:hover { background: var(--surface-hover); }
+}
+.segments-active {
+  position: absolute; inset: 4px;
+  display: grid; grid-template-columns: repeat(4, minmax(0, 1fr));
+  pointer-events: none;
+  background: var(--accent-soft);
+  border-radius: 9px;
+  box-shadow: inset 0 0 0 1px var(--accent-line);
+  clip-path: inset(0 75% 0 0 round 9px);
+  transition: clip-path 220ms var(--ease-out);
+}
+.segments-active .seg-label, .segments-active .seg-value { color: var(--accent); }
+.segments-active .seg-sub { color: var(--accent); opacity: .75; }
+.segments-active.instant { transition: none; }
+
+/* ─── Main grid ──────────────────────────────────────────── */
+.grid { display: grid; grid-template-columns: minmax(0, 1fr) 380px; gap: 16px; align-items: start; }
+
+.card { background: var(--surface); border-radius: var(--radius); box-shadow: var(--shadow-card); min-width: 0; }
+.table-wrap { overflow-x: clip; }  /* clip, not auto: a scroll container would break the sticky header */
+
+.list-head {
+  display: flex; align-items: center; gap: 12px;
+  padding: 12px 14px 12px 16px;
+}
+.list-title { font-weight: 600; font-size: 0.875rem; letter-spacing: -0.01em; }
+.list-count { color: var(--text-3); }
+.search {
+  margin-left: auto; position: relative; display: flex; align-items: center;
+}
+.search svg { position: absolute; left: 9px; color: var(--text-3); pointer-events: none; }
+.search input {
+  height: 30px; width: 200px; padding: 0 30px 0 30px;
+  border: 0; border-radius: var(--radius-sm);
+  background: var(--surface-2); color: var(--text);
+  font: inherit; font-size: 0.8125rem;
+}
+.search input::placeholder { color: var(--text-3); }
+.search input:focus { outline: none; box-shadow: 0 0 0 2px var(--accent-line); }
+.kbd {
+  position: absolute; right: 7px;
+  font-size: 0.6875rem; color: var(--text-3);
+  padding: 0 5px; border-radius: 4px; box-shadow: 0 0 0 1px var(--hairline-strong);
+  pointer-events: none;
+}
+
+.table { width: 100%; border-collapse: collapse; }
+.table th {
+  position: sticky; top: var(--header-h); z-index: 2;
+  background: var(--surface);
+  text-align: left; font-weight: 500; font-size: 0.6875rem; color: var(--text-3);
+  padding: 8px 12px; box-shadow: inset 0 -1px 0 var(--hairline);
+  white-space: nowrap;
+}
+.table th.r, .table td.r { text-align: right; }
+.table td {
+  padding: 0 12px; height: 48px;
+  box-shadow: inset 0 -1px 0 var(--hairline);
+  white-space: nowrap; vertical-align: middle;
+}
+.table tr:last-child td { box-shadow: none; }
+.row { cursor: pointer; }
+@media (hover: hover) and (pointer: fine) {
+  .row:hover td { background: var(--surface-hover); }
+}
+.row[aria-selected="true"] td { background: var(--accent-soft); }
+.row td:first-child { position: relative; padding-left: 16px; }
+.row[aria-selected="true"] td:first-child::before {
+  content: ""; position: absolute; left: 0; top: 8px; bottom: 8px; width: 2px;
+  border-radius: 0 2px 2px 0; background: var(--accent);
+}
+
+/* First paint only: rows cascade in. Never on refresh or filter changes. */
+.row.enter { animation: rowIn 280ms var(--ease-out) both; }
+@keyframes rowIn { from { opacity: 0; transform: translateY(4px); } }
+
+.mkt { display: flex; align-items: center; gap: 10px; }
+.tier-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; background: var(--green); }
+.tier-dot.t1 { background: var(--red); box-shadow: 0 0 0 3px var(--red-soft); }
+.tier-dot.t2 { background: var(--amber); box-shadow: 0 0 0 3px var(--amber-soft); }
+.tier-dot.t3 { background: var(--text-3); }
+.mkt-name { font-weight: 600; letter-spacing: -0.005em; }
+.mkt-quote { color: var(--text-3); font-weight: 500; }
+.mkt-tag { font-size: 0.6875rem; color: var(--text-3); margin-left: 2px; }
+
+/* Spread vs target: the bar shows the spread as a fraction of a 2× target
+   scale, with the target marked — "how far over" reads without a number. */
+.spread { display: flex; align-items: center; gap: 10px; justify-content: flex-end; }
+.spread-bar { position: relative; width: 64px; height: 4px; border-radius: 2px; background: var(--gray-soft); overflow: hidden; }
+.spread-bar.none { visibility: hidden; }  /* keeps the numbers in one column */
+.spread-fill { position: absolute; inset: 0; background: var(--text-3); transform-origin: left; border-radius: 2px; }
+.spread-fill.over { background: var(--amber); }
+.spread-fill.way-over { background: var(--red); }
+.spread-target { position: absolute; left: 50%; top: -2px; bottom: -2px; width: 1px; background: var(--text-2); }
+.delta { font-size: 0.75rem; min-width: 52px; text-align: right; color: var(--text-3); }
+.delta.up { color: var(--amber-text); }
+.delta.way-up { color: var(--red-text); }
+
+.chips { display: flex; gap: 4px; }
+.chip {
+  display: inline-flex; align-items: center; height: 20px; padding: 0 7px;
+  border-radius: 6px; font-size: 0.6875rem; font-weight: 600;
+  background: var(--gray-soft); color: var(--text-2);
+}
+.chip.t1 { background: var(--red-soft); color: var(--red-text); }
+.chip.t2 { background: var(--amber-soft); color: var(--amber-text); }
+.chip.ok { background: none; color: var(--text-3); font-weight: 500; padding: 0; }
+
+.tg { display: inline-flex; align-items: center; gap: 5px; font-size: 0.75rem; color: var(--text-3); }
+.tg.sent { color: var(--text); }
+.tg.sent svg { color: var(--accent); }
+
+.empty { padding: 48px 16px; text-align: center; color: var(--text-3); }
+.empty b { display: block; color: var(--text-2); font-weight: 600; margin-bottom: 4px; }
+
+/* ─── Detail panel ───────────────────────────────────────── */
+.detail { position: sticky; top: calc(var(--header-h) + 16px); max-height: calc(100vh - var(--header-h) - 32px); overflow: auto; }
+.detail-inner { padding: 18px; }
+.sheet-handle { display: none; }
+.d-head { display: flex; align-items: flex-start; gap: 10px; margin-bottom: 4px; }
+.d-title { font-size: 1.125rem; font-weight: 600; letter-spacing: -0.02em; line-height: 1.25; }
+.d-sub { color: var(--text-3); font-size: 0.75rem; margin-bottom: 16px; }
+.d-link {
+  margin-left: auto; display: inline-flex; align-items: center; gap: 5px;
+  height: 28px; padding: 0 9px; border-radius: 7px;
+  font-size: 0.75rem; font-weight: 500; color: var(--text-2); text-decoration: none;
+  box-shadow: 0 0 0 1px var(--hairline-strong);
+}
+@media (hover: hover) and (pointer: fine) { .d-link:hover { color: var(--text); background: var(--surface-hover); } }
+
+.metrics { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 1px; background: var(--hairline); border-radius: 10px; overflow: hidden; margin-bottom: 18px; box-shadow: 0 0 0 1px var(--hairline); }
+.metric { background: var(--surface); padding: 10px 12px; min-width: 0; }
+.metric-k { font-size: 0.6875rem; color: var(--text-3); margin-bottom: 2px; white-space: nowrap; }
+.metric-v { font-size: 0.9375rem; font-weight: 600; letter-spacing: -0.01em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.metric-v.warn { color: var(--amber-text); }
+.metric-v.crit { color: var(--red-text); }
+
+.section-k { font-size: 0.6875rem; font-weight: 600; color: var(--text-3); margin: 0 0 8px; display: flex; align-items: center; gap: 6px; }
+.issues { display: flex; flex-direction: column; gap: 6px; margin-bottom: 18px; }
+.issue { padding: 10px 12px; border-radius: 10px; box-shadow: 0 0 0 1px var(--hairline); }
+.issue-top { display: flex; align-items: center; gap: 8px; }
+.issue-name { font-weight: 600; }
+.issue-id { color: var(--text-3); font-size: 0.75rem; }
+.issue .chip { margin-left: auto; }
+.issue-evidence { color: var(--text-2); margin-top: 4px; font-size: 0.75rem; }
+.issue-tg { color: var(--text-3); margin-top: 4px; font-size: 0.75rem; display: flex; align-items: center; gap: 5px; }
+.all-clear { display: flex; align-items: center; gap: 8px; padding: 12px; border-radius: 10px; background: var(--green-soft); color: var(--green-text); margin-bottom: 18px; font-weight: 500; }
+
+.kv { display: grid; grid-template-columns: auto 1fr; gap: 6px 16px; font-size: 0.75rem; }
+.kv dt { color: var(--text-3); }
+.kv dd { text-align: right; }
+
+.d-empty { padding: 56px 24px; text-align: center; color: var(--text-3); }
+.hint { color: var(--text-3); font-size: 0.6875rem; margin-top: 16px; display: flex; gap: 10px; flex-wrap: wrap; }
+.hint .kbd { position: static; display: inline-block; margin-right: 3px; }
+
+/* ─── Tooltip ────────────────────────────────────────────
+   Delayed the first time, instant on neighbours while one is already showing.
+   Scales from the chip it describes (origin set from JS). */
+.tip {
+  position: fixed; z-index: 60; pointer-events: none;
+  max-width: 260px; padding: 8px 10px; border-radius: 8px;
+  background: var(--text); color: var(--bg);
+  font-size: 0.75rem; line-height: 1.4;
+  opacity: 0; transform: scale(0.97);
+  transition: opacity 125ms var(--ease-out), transform 125ms var(--ease-out);
+}
+.tip.show { opacity: 1; transform: none; }
+.tip.instant { transition-duration: 0ms; }
+.tip b { font-weight: 600; }
+.tip span { opacity: .7; }
+
+/* ─── Toasts ─────────────────────────────────────────────
+   Transitions, not keyframes, so a toast added mid-exit retargets smoothly.
+   Enter and exit along the same edge; exit is quicker than enter. */
+.toaster { position: fixed; right: 20px; bottom: 20px; z-index: 70; display: flex; flex-direction: column; gap: 8px; align-items: flex-end; pointer-events: none; }
+.toast {
+  pointer-events: auto;
+  display: flex; align-items: center; gap: 10px;
+  min-width: 260px; max-width: 360px; padding: 12px 14px;
+  border-radius: 10px; background: var(--surface); box-shadow: var(--shadow-pop);
+  font-size: 0.8125rem;
+  opacity: 0; transform: translateY(100%);
+  transition: opacity 400ms ease, transform 400ms ease;
+}
+.toast[data-mounted="true"] { opacity: 1; transform: none; }
+.toast[data-leaving="true"] { opacity: 0; transform: translateY(100%); transition-duration: 200ms; transition-timing-function: ease-in-out; }
+.toast-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--green); }
+.toast.error .toast-dot { background: var(--red); }
+.toast small { color: var(--text-3); display: block; }
+
+/* Depth is repeated in the detail panel, so it's the first column to go. */
+@media (max-width: 1360px) { .col-depth { display: none; } }
+
+/* ─── Narrow screens: detail becomes a bottom sheet ───────── */
+.scrim { display: none; }
+@media (max-width: 960px) {
+  .grid { grid-template-columns: minmax(0, 1fr); }
+  .col-depth, .col-tg { display: none; }
+  .detail {
+    position: fixed; left: 0; right: 0; bottom: 0; top: auto; z-index: 50;
+    max-height: 86vh; border-radius: 16px 16px 0 0;
+    padding-bottom: env(safe-area-inset-bottom);
+    box-shadow: var(--shadow-pop);
+    transform: translateY(100%);
+    transition: transform 500ms var(--ease-drawer);
+    overscroll-behavior: contain;
+  }
+  .detail.open { transform: none; }
+  .detail.dragging { transition: none; }
+  .sheet-handle { display: block; padding: 10px 0 2px; cursor: grab; touch-action: none; }
+  .sheet-handle::before { content: ""; display: block; width: 36px; height: 4px; border-radius: 2px; background: var(--hairline-strong); margin: 0 auto; }
+  .scrim {
+    display: block; position: fixed; inset: 0; z-index: 40; background: var(--scrim);
+    opacity: 0; pointer-events: none; transition: opacity 300ms ease;
+  }
+  .scrim.show { opacity: 1; pointer-events: auto; }
+  .hint { display: none; }
+}
+@media (max-width: 640px) {
+  .header { padding: 0 16px; gap: 10px; }
+  .brand-sep, .brand-page, .clock { display: none; }
+  .page { padding: 16px 16px 40px; }
+  .segments, .segments-active { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .segments-active { clip-path: none !important; display: none; }
+  .segments-base .seg[aria-pressed="true"] { background: var(--accent-soft); }
+  .segments-base .seg[aria-pressed="true"] .seg-value, .segments-base .seg[aria-pressed="true"] .seg-label { color: var(--accent); }
+  .seg-value { font-size: 1.25rem; }
+  .list-head { flex-wrap: wrap; }
+  .search { margin-left: 0; width: 100%; }
+  .search input { width: 100%; }
+  .col-mid { display: none; }
+  .spread-bar { display: none; }
+  .delta, .mkt-tag, .th-sub, .search .kbd { display: none; }
+  .search input { padding-right: 10px; }
+  .table td, .table th { padding-left: 10px; padding-right: 10px; }
+  .btn-label { display: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pressable:active { transform: none; }
+  .row.enter { animation: none; }
+  .segments-active { transition: none; }
+  .tip { transform: none; }
+  .toast, .toast[data-leaving="true"] { transform: none; transition: opacity 200ms ease; }
+  .detail { transition: opacity 200ms ease; }
+  @media (max-width: 960px) {
+    .detail { transform: none; opacity: 0; pointer-events: none; }
+    .detail.open { opacity: 1; pointer-events: auto; }
+  }
+  .btn[aria-busy="true"] .refresh-icon { animation: none; opacity: .5; }
+}
+</style>
+</head>
+<body>
+
+<header class="header" id="header">
+  <div class="brand">
+    <div class="brand-mark" aria-hidden="true">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg>
+    </div>
+    <span class="brand-name">Market Monitor</span>
+    <span class="brand-sep">/</span>
+    <span class="brand-page">Overview</span>
+  </div>
+  <div class="header-right">
+    <span class="status-pill" id="status-pill" role="status"><span class="status-dot"></span><span id="status-text">Connecting…</span></span>
+    <span class="clock num" id="clock">—</span>
+    <button class="icon-btn pressable" id="theme-btn" type="button" aria-label="Switch theme"></button>
+    <button class="btn pressable" id="refresh-btn" type="button">
+      <svg class="refresh-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/></svg>
+      <span class="btn-label">Refresh</span>
+    </button>
+  </div>
+</header>
+
+<main class="page">
+  <div class="notice" id="notice" hidden></div>
+
+  <div class="segments-wrap">
+    <div class="segments" id="segments" role="group" aria-label="Filter markets">
+      <div class="segments-layer segments-base" id="seg-base"></div>
+      <div class="segments-active" id="seg-active" aria-hidden="true"></div>
+    </div>
+  </div>
+
+  <div class="grid">
+    <section class="card" aria-labelledby="list-title">
+      <div class="list-head">
+        <span class="list-title" id="list-title">Markets</span>
+        <span class="list-count num" id="list-count"></span>
+        <label class="search">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+          <input id="search" type="search" placeholder="Filter markets" autocomplete="off" spellcheck="false" aria-label="Filter markets" />
+          <span class="kbd" aria-hidden="true">/</span>
+        </label>
+      </div>
+      <div class="table-wrap">
+      <table class="table" aria-label="Markets">
+        <thead>
+          <tr>
+            <th>Market</th>
+            <th class="r col-mid">Mid</th>
+            <th class="r">Spread<span class="th-sub"> vs target</span></th>
+            <th class="r col-depth">Depth bid / ask</th>
+            <th>Issues</th>
+            <th class="col-tg">Telegram</th>
+          </tr>
+        </thead>
+        <tbody id="rows"></tbody>
+      </table>
+      </div>
+      <div class="empty" id="empty" hidden></div>
+    </section>
+
+    <aside class="card detail" id="detail" aria-label="Market detail" tabindex="-1">
+      <div class="sheet-handle" id="sheet-handle" aria-hidden="true"></div>
+      <div class="detail-inner" id="detail-inner"></div>
+    </aside>
+  </div>
+</main>
+
+<div class="scrim" id="scrim"></div>
+<div class="tip" id="tip" role="tooltip"></div>
+<div class="toaster" id="toaster" aria-live="polite"></div>
+
+<script>
+// ── Config ────────────────────────────────────────────────────────────────────
+const params = new URLSearchParams(location.search);
+const API = params.get("api") || (location.protocol === "file:" ? "http://localhost:8765" : "");
+const POLL_MS = 60_000;
+const SNAPSHOT = {"summary":{"total_pairs":37,"healthy":28,"warnings":9,"alerts_fired":7,"last_updated":"2026-08-22 13:15:56","last_updated_age_seconds":4482722.5,"monitor_stale":true,"server_time_ngt":"2026-10-13 10:27:58"},"issue_tiers":{"A1":{"CRITICAL":2,"HIGH":2,"MEDIUM":2},"A2":{"CRITICAL":1,"HIGH":2,"MEDIUM":2},"A3":{"CRITICAL":1,"HIGH":1,"MEDIUM":1},"A4":{"CRITICAL":3,"HIGH":3,"MEDIUM":3},"A5":{"CRITICAL":3,"HIGH":3,"MEDIUM":3},"A6":{"CRITICAL":1,"HIGH":1,"MEDIUM":3},"B1":{"CRITICAL":1,"HIGH":1,"MEDIUM":3},"B2":{"CRITICAL":2,"HIGH":2,"MEDIUM":2},"B3":{"CRITICAL":2,"HIGH":2,"MEDIUM":3},"B4":{"CRITICAL":1,"HIGH":2,"MEDIUM":2},"D1":{"CRITICAL":2,"HIGH":2,"MEDIUM":2},"D2":{"CRITICAL":3,"HIGH":3,"MEDIUM":3},"F1":{"CRITICAL":3,"HIGH":3,"MEDIUM":3},"G2":{"CRITICAL":1,"HIGH":2,"MEDIUM":2},"E1":{"CRITICAL":1,"HIGH":1,"MEDIUM":1},"E2":{"CRITICAL":1,"HIGH":1,"MEDIUM":1}},"pairs":[{"symbol":"aaveusdt","monitor_only":false,"alert_tier":0,"issues":null,"mid_price":125.8135,"current_spread":0.285343,"target_spread":0.3,"percent_diff":-4.89,"depth_bid":"$35.8K","depth_ask":"$16.6K","ask_layers":70,"bid_layers":74,"dws":0.1706,"dws_threshold":0.5,"imbalance_ratio":2.15,"heavier_side":"bids","telegram_fired":false,"telegram_detail":null,"timestamp":"2026-08-22 13:15:56","d1_context":"\u00e2\u2030\u02c60.6x typical (baseline warming 2/4 \u00e2\u20ac\u201d absolute floor active)","g2_worst_swing_pct":3.175,"g2_worst_candle":"10:00 UTC","layer_churn_pct":100.0,"b1_diff_pct":0.2978,"b1_threshold_pct":0.65,"depth_deviation_pct":50.0,"trusted_ref":125.44,"min_orderbook_layers":10,"imbalance_threshold":5.0},{"symbol":"adausdt","monitor_only":false,"alert_tier":0,"issues":null,"mid_price":0.226,"current_spread":0.40708,"target_spread":2.0,"percent_diff":-79.65,"depth_bid":"$53.9K","depth_ask":"$39.1K","ask_layers":25,"bid_layers":25,"dws":0.3672,"dws_threshold":0.5,"imbalance_ratio":1.38,"heavier_side":"bids","telegram_fired":false,"telegram_detail":null,"timestamp":"2026-08-22 13:15:57","d1_context":"\u00e2\u2030\u02c61.2x typical (baseline warming 2/4 \u00e2\u20ac\u201d absolute floor active)","g2_worst_swing_pct":3.3221,"g2_worst_candle":"10:00 UTC","layer_churn_pct":100.0,"b1_diff_pct":-0.0884,"b1_threshold_pct":1.5,"depth_deviation_pct":50.0,"trusted_ref":0.2262,"min_orderbook_layers":10,"imbalance_threshold":5.0},{"symbol":"bchusdt","monitor_only":false,"alert_tier":0,"issues":null,"mid_price":278.5,"current_spread":0.359066,"target_spread":1.2,"percent_diff":-70.08,"depth_bid":"$9.6K","depth_ask":"$10.6K","ask_layers":26,"bid_layers":26,"dws":0.3576,"dws_threshold":0.5,"imbalance_ratio":1.11,"heavier_side":"asks","telegram_fired":false,"telegram_detail":null,"timestamp":"2026-08-22 13:15:57","d1_context":"\u00e2\u2030\u02c60.9x typical (baseline warming 2/4 \u00e2\u20ac\u201d absolute floor active)","g2_worst_swing_pct":2.2969,"g2_worst_candle":"08:00 UTC","layer_churn_pct":100.0,"b1_diff_pct":0.0359,"b1_threshold_pct":1.1,"depth_deviation_pct":50.0,"trusted_ref":278.4,"min_orderbook_layers":10,"imbalance_threshold":5.0},{"symbol":"bnbusdt","monitor_only":false,"alert_tier":0,"issues":null,"mid_price":696.11,"current_spread":0.301676,"target_spread":0.3,"percent_diff":0.56,"depth_bid":"$68.4K","depth_ask":"$68.8K","ask_layers":35,"bid_layers":35,"dws":0.1925,"dws_threshold":0.5,"imbalance_ratio":1.01,"heavier_side":"asks","telegram_fired":false,"telegram_detail":null,"timestamp":"2026-08-22 13:15:57","d1_context":"\u00e2\u2030\u02c60.4x typical (baseline warming 2/4 \u00e2\u20ac\u201d absolute floor active)","g2_worst_swing_pct":2.0527,"g2_worst_candle":"10:00 UTC","layer_churn_pct":100.0,"b1_diff_pct":-0.0187,"b1_threshold_pct":0.65,"depth_deviation_pct":50.0,"trusted_ref":696.24,"min_orderbook_layers":10,"imbalance_threshold":5.0},{"symbol":"bonkusdt","monitor_only":false,"alert_tier":2,"issues":"G2:HIGH","mid_price":3.19e-06,"current_spread":2.069614,"target_spread":2.0,"percent_diff":3.48,"depth_bid":"$3.1K","depth_ask":"$3.2K","ask_layers":25,"bid_layers":25,"dws":1.468,"dws_threshold":0.5,"imbalance_ratio":1.04,"heavier_side":"asks","telegram_fired":false,"telegram_detail":"G2:capped","timestamp":"2026-08-22 13:15:57","d1_context":"\u00e2\u2030\u02c61.2x typical (baseline warming 2/4 \u00e2\u20ac\u201d absolute floor active)","g2_worst_swing_pct":8.0495,"g2_worst_candle":"10:00 UTC","layer_churn_pct":100.0,"b1_diff_pct":-0.4682,"b1_threshold_pct":1.5,"depth_deviation_pct":50.0,"trusted_ref":3.2e-06,"min_orderbook_layers":10,"imbalance_threshold":5.0},{"symbol":"btcusdt","monitor_only":false,"alert_tier":0,"issues":null,"mid_price":77238.1,"current_spread":0.200005,"target_spread":0.2,"percent_diff":0.0,"depth_bid":"$2.67M","depth_ask":"$2.31M","ask_layers":42,"bid_layers":41,"dws":0.1426,"dws_threshold":0.5,"imbalance_ratio":1.15,"heavier_side":"bids","telegram_fired":false,"telegram_detail":null,"timestamp":"2026-08-22 13:15:57","d1_context":"\u00e2\u2030\u02c60.4x typical (baseline warming 2/4 \u00e2\u20ac\u201d absolute floor active)","g2_worst_swing_pct":0.7049,"g2_worst_candle":"10:00 UTC","layer_churn_pct":100.0,"b1_diff_pct":0.0067,"b1_threshold_pct":0.6,"depth_deviation_pct":50.0,"trusted_ref":77232.89,"min_orderbook_layers":10,"imbalance_threshold":5.0},{"symbol":"cfxusdt","monitor_only":false,"alert_tier":2,"issues":"G2:HIGH","mid_price":0.04842,"current_spread":2.023957,"target_spread":2.0,"percent_diff":1.2,"depth_bid":"$16.8K","depth_ask":"$17.6K","ask_layers":25,"bid_layers":25,"dws":1.4725,"dws_threshold":0.5,"imbalance_ratio":1.05,"heavier_side":"asks","telegram_fired":true,"telegram_detail":"G2:fired","timestamp":"2026-08-22 13:15:57","d1_context":"\u00e2\u2030\u02c61.1x typical (baseline warming 2/4 \u00e2\u20ac\u201d absolute floor active)","g2_worst_swing_pct":5.2416,"g2_worst_candle":"10:00 UTC","layer_churn_pct":100.0,"b1_diff_pct":-0.6158,"b1_threshold_pct":1.5,"depth_deviation_pct":50.0,"trusted_ref":0.04872,"min_orderbook_layers":10,"imbalance_threshold":5.0},{"symbol":"dashusdt","monitor_only":false,"alert_tier":0,"issues":null,"mid_price":40.437,"current_spread":2.013008,"target_spread":2.0,"percent_diff":0.65,"depth_bid":"$22.4K","depth_ask":"$24.2K","ask_layers":27,"bid_layers":40,"dws":1.3808,"dws_threshold":0.5,"imbalance_ratio":1.08,"heavier_side":"asks","telegram_fired":false,"telegram_detail":null,"timestamp":"2026-08-22 13:15:57","d1_context":"\u00e2\u2030\u02c60.9x typical (baseline warming 2/4 \u00e2\u20ac\u201d absolute floor active)","g2_worst_swing_pct":4.3546,"g2_worst_candle":"08:00 UTC","layer_churn_pct":97.1,"b1_diff_pct":-0.4015,"b1_threshold_pct":1.5,"depth_deviation_pct":50.0,"trusted_ref":40.6,"min_orderbook_layers":10,"imbalance_threshold":5.0},{"symbol":"dotusdt","monitor_only":false,"alert_tier":0,"issues":null,"mid_price":0.9279,"current_spread":0.301757,"target_spread":0.26,"percent_diff":16.06,"depth_bid":"$9.5K","depth_ask":"$8.6K","ask_layers":34,"bid_layers":34,"dws":0.2007,"dws_threshold":0.5,"imbalance_ratio":1.1,"heavier_side":"bids","telegram_fired":false,"telegram_detail":null,"timestamp":"2026-08-22 13:15:57","d1_context":"\u00e2\u2030\u02c60.5x typical (baseline warming 2/4 \u00e2\u20ac\u201d absolute floor active)","g2_worst_swing_pct":2.5776,"g2_worst_candle":"08:00 UTC","layer_churn_pct":100.0,"b1_diff_pct":-0.0969,"b1_threshold_pct":0.63,"depth_deviation_pct":50.0,"trusted_ref":0.9288,"min_orderbook_layers":10,"imbalance_threshold":5.0},{"symbol":"dogeusdt","monitor_only":false,"alert_tier":0,"issues":null,"mid_price":0.090825,"current_spread":0.275255,"target_spread":0.26,"percent_diff":5.87,"depth_bid":"$57.2K","depth_ask":"$58.3K","ask_layers":93,"bid_layers":93,"dws":0.1855,"dws_threshold":0.5,"imbalance_ratio":1.02,"heavier_side":"asks","telegram_fired":false,"telegram_detail":null,"timestamp":"2026-08-22 13:15:57","d1_context":"\u00e2\u2030\u02c61.2x typical (baseline warming 2/4 \u00e2\u20ac\u201d absolute floor active)","g2_worst_swing_pct":2.9583,"g2_worst_candle":"10:00 UTC","layer_churn_pct":100.0,"b1_diff_pct":-0.0385,"b1_threshold_pct":0.63,"depth_deviation_pct":50.0,"trusted_ref":0.09086,"min_orderbook_layers":10,"imbalance_threshold":5.0},{"symbol":"ethusdt","monitor_only":false,"alert_tier":0,"issues":null,"mid_price":2432.075,"current_spread":0.250403,"target_spread":0.25,"percent_diff":0.16,"depth_bid":"$289.5K","depth_ask":"$269.2K","ask_layers":70,"bid_layers":71,"dws":0.146,"dws_threshold":0.5,"imbalance_ratio":1.08,"heavier_side":"bids","telegram_fired":false,"telegram_detail":null,"timestamp":"2026-08-22 13:15:57","d1_context":"\u00e2\u2030\u02c60.9x typical (baseline warming 2/4 \u00e2\u20ac\u201d absolute floor active)","g2_worst_swing_pct":1.0839,"g2_worst_candle":"08:00 UTC","layer_churn_pct":100.0,"b1_diff_pct":-0.0203,"b1_threshold_pct":0.625,"depth_deviation_pct":50.0,"trusted_ref":2432.57,"min_orderbook_layers":10,"imbalance_threshold":5.0},{"symbol":"fartcoinusdt","monitor_only":false,"alert_tier":2,"issues":"G2:HIGH","mid_price":0.19442,"current_spread":2.016253,"target_spread":2.0,"percent_diff":0.81,"depth_bid":"$21.7K","depth_ask":"$24.0K","ask_layers":25,"bid_layers":25,"dws":1.3898,"dws_threshold":0.5,"imbalance_ratio":1.11,"heavier_side":"asks","telegram_fired":true,"telegram_detail":"G2:fired","timestamp":"2026-08-22 13:15:57","d1_context":"\u00e2\u2030\u02c60.8x typical (baseline warming 2/4 \u00e2\u20ac\u201d absolute floor active)","g2_worst_swing_pct":6.4963,"g2_worst_candle":"10:00 UTC","layer_churn_pct":100.0,"b1_diff_pct":-0.2412,"b1_threshold_pct":1.5,"depth_deviation_pct":50.0,"trusted_ref":0.19489,"min_orderbook_layers":10,"imbalance_threshold":5.0},{"symbol":"hypeusdt","monitor_only":false,"alert_tier":0,"issues":null,"mid_price":78.283,"current_spread":0.209496,"target_spread":2.0,"percent_diff":-89.53,"depth_bid":"$202.4K","depth_ask":"$212.9K","ask_layers":50,"bid_layers":50,"dws":0.3721,"dws_threshold":0.5,"imbalance_ratio":1.05,"heavier_side":"asks","telegram_fired":false,"telegram_detail":null,"timestamp":"2026-08-22 13:15:57","d1_context":"\u00e2\u2030\u02c60.4x typical (baseline warming 2/4 \u00e2\u20ac\u201d absolute floor active)","g2_worst_swing_pct":3.3953,"g2_worst_candle":"10:00 UTC","layer_churn_pct":100.0,"b1_diff_pct":0.2087,"b1_threshold_pct":1.5,"depth_deviation_pct":50.0,"trusted_ref":78.12,"min_orderbook_layers":10,"imbalance_threshold":5.0},{"symbol":"linkusdt","monitor_only":false,"alert_tier":0,"issues":null,"mid_price":11.7735,"current_spread":0.314265,"target_spread":0.26,"percent_diff":20.87,"depth_bid":"$33.3K","depth_ask":"$29.5K","ask_layers":37,"bid_layers":38,"dws":0.1944,"dws_threshold":0.5,"imbalance_ratio":1.13,"heavier_side":"bids","telegram_fired":false,"telegram_detail":null,"timestamp":"2026-08-22 13:15:57","d1_context":"\u00e2\u2030\u02c61.3x typical (baseline warming 2/4 \u00e2\u20ac\u201d absolute floor active)","g2_worst_swing_pct":2.1273,"g2_worst_candle":"08:00 UTC","layer_churn_pct":100.0,"b1_diff_pct":0.0722,"b1_threshold_pct":0.63,"depth_deviation_pct":50.0,"trusted_ref":11.765,"min_orderbook_layers":10,"imbalance_threshold":5.0},{"symbol":"lskusdt","monitor_only":false,"alert_tier":0,"issues":null,"mid_price":0.0893,"current_spread":1.567749,"target_spread":1.5,"percent_diff":4.52,"depth_bid":"$10.8K","depth_ask":"$12.3K","ask_layers":21,"bid_layers":25,"dws":1.4153,"dws_threshold":0.5,"imbalance_ratio":1.14,"heavier_side":"asks","telegram_fired":false,"telegram_detail":null,"timestamp":"2026-08-22 13:15:57","d1_context":"baseline building\u00e2\u20ac\u00a6","g2_worst_swing_pct":0.0,"g2_worst_candle":"11:00 UTC","layer_churn_pct":100.0,"b1_diff_pct":null,"b1_threshold_pct":null,"depth_deviation_pct":50.0,"trusted_ref":null,"min_orderbook_layers":10,"imbalance_threshold":5.0},{"symbol":"ltcusdt","monitor_only":false,"alert_tier":0,"issues":null,"mid_price":51.64,"current_spread":0.302091,"target_spread":0.3,"percent_diff":0.7,"depth_bid":"$53.2K","depth_ask":"$78.6K","ask_layers":35,"bid_layers":37,"dws":0.1908,"dws_threshold":0.5,"imbalance_ratio":1.48,"heavier_side":"asks","telegram_fired":false,"telegram_detail":null,"timestamp":"2026-08-22 13:15:57","d1_context":"\u00e2\u2030\u02c60.5x typical (baseline warming 2/4 \u00e2\u20ac\u201d absolute floor active)","g2_worst_swing_pct":2.6909,"g2_worst_candle":"10:00 UTC","layer_churn_pct":100.0,"b1_diff_pct":-0.0387,"b1_threshold_pct":0.65,"depth_deviation_pct":50.0,"trusted_ref":51.66,"min_orderbook_layers":10,"imbalance_threshold":5.0},{"symbol":"pepeusdt","monitor_only":false,"alert_tier":0,"issues":null,"mid_price":4.04e-06,"current_spread":0.346535,"target_spread":0.5,"percent_diff":-30.69,"depth_bid":"$46.1K","depth_ask":"$55.3K","ask_layers":25,"bid_layers":25,"dws":0.3376,"dws_threshold":0.5,"imbalance_ratio":1.2,"heavier_side":"asks","telegram_fired":false,"telegram_detail":null,"timestamp":"2026-08-22 13:15:57","d1_context":"\u00e2\u2030\u02c60.5x typical (baseline warming 2/4 \u00e2\u20ac\u201d absolute floor active)","g2_worst_swing_pct":3.9005,"g2_worst_candle":"10:00 UTC","layer_churn_pct":100.0,"b1_diff_pct":0.0,"b1_threshold_pct":0.75,"depth_deviation_pct":50.0,"trusted_ref":4.04e-06,"min_orderbook_layers":10,"imbalance_threshold":5.0},{"symbol":"shibusdt","monitor_only":false,"alert_tier":0,"issues":null,"mid_price":5.55e-06,"current_spread":0.302921,"target_spread":0.4,"percent_diff":-24.27,"depth_bid":"$17.1K","depth_ask":"$18.2K","ask_layers":30,"bid_layers":31,"dws":0.1946,"dws_threshold":0.5,"imbalance_ratio":1.06,"heavier_side":"asks","telegram_fired":false,"telegram_detail":null,"timestamp":"2026-08-22 13:15:57","d1_context":"\u00e2\u2030\u02c61.0x typical (baseline warming 2/4 \u00e2\u20ac\u201d absolute floor active)","g2_worst_swing_pct":3.3795,"g2_worst_candle":"10:00 UTC","layer_churn_pct":100.0,"b1_diff_pct":-0.036,"b1_threshold_pct":0.7,"depth_deviation_pct":50.0,"trusted_ref":5.55e-06,"min_orderbook_layers":10,"imbalance_threshold":5.0},{"symbol":"solusdt","monitor_only":false,"alert_tier":0,"issues":null,"mid_price":93.8465,"current_spread":0.250409,"target_spread":0.25,"percent_diff":0.16,"depth_bid":"$144.5K","depth_ask":"$167.0K","ask_layers":75,"bid_layers":68,"dws":0.22,"dws_threshold":0.5,"imbalance_ratio":1.16,"heavier_side":"asks","telegram_fired":false,"telegram_detail":null,"timestamp":"2026-08-22 13:15:57","d1_context":"\u00e2\u2030\u02c60.5x typical (baseline warming 2/4 \u00e2\u20ac\u201d absolute floor active)","g2_worst_swing_pct":2.4723,"g2_worst_candle":"10:00 UTC","layer_churn_pct":100.0,"b1_diff_pct":-0.025,"b1_threshold_pct":0.625,"depth_deviation_pct":50.0,"trusted_ref":93.87,"min_orderbook_layers":10,"imbalance_threshold":5.0},{"symbol":"tonusdt","monitor_only":false,"alert_tier":0,"issues":null,"mid_price":1.444,"current_spread":0.207756,"target_spread":0.3,"percent_diff":-30.75,"depth_bid":"$15.8K","depth_ask":"$13.8K","ask_layers":25,"bid_layers":25,"dws":0.2665,"dws_threshold":0.5,"imbalance_ratio":1.14,"heavier_side":"bids","telegram_fired":false,"telegram_detail":null,"timestamp":"2026-08-22 13:15:57","d1_context":"\u00e2\u2030\u02c61.0x typical (baseline warming 2/4 \u00e2\u20ac\u201d absolute floor active)","g2_worst_swing_pct":2.0443,"g2_worst_candle":"08:00 UTC","layer_churn_pct":100.0,"b1_diff_pct":null,"b1_threshold_pct":null,"depth_deviation_pct":50.0,"trusted_ref":null,"min_orderbook_layers":10,"imbalance_threshold":5.0},{"symbol":"trxusdt","monitor_only":false,"alert_tier":0,"issues":null,"mid_price":0.34315,"current_spread":0.273933,"target_spread":0.3,"percent_diff":-8.69,"depth_bid":"$496.8K","depth_ask":"$594.5K","ask_layers":55,"bid_layers":60,"dws":0.1778,"dws_threshold":0.5,"imbalance_ratio":1.2,"heavier_side":"asks","telegram_fired":false,"telegram_detail":null,"timestamp":"2026-08-22 13:15:57","d1_context":"\u00e2\u2030\u02c61.0x typical (baseline warming 2/4 \u00e2\u20ac\u201d absolute floor active)","g2_worst_swing_pct":0.7516,"g2_worst_candle":"08:00 UTC","layer_churn_pct":100.0,"b1_diff_pct":-0.0146,"b1_threshold_pct":0.65,"depth_deviation_pct":50.0,"trusted_ref":0.3432,"min_orderbook_layers":10,"imbalance_threshold":5.0},{"symbol":"usdcusdt","monitor_only":false,"alert_tier":0,"issues":null,"mid_price":1.0002,"current_spread":0.039992,"target_spread":0.02,"percent_diff":99.96,"depth_bid":"$2.99M","depth_ask":"$2.96M","ask_layers":22,"bid_layers":22,"dws":0.0627,"dws_threshold":0.5,"imbalance_ratio":1.01,"heavier_side":"bids","telegram_fired":false,"telegram_detail":null,"timestamp":"2026-08-22 13:15:58","d1_context":"\u00e2\u2030\u02c61.9x typical (baseline warming 2/4 \u00e2\u20ac\u201d absolute floor active)","g2_worst_swing_pct":0.05,"g2_worst_candle":"10:00 UTC","layer_churn_pct":100.0,"b1_diff_pct":0.009,"b1_threshold_pct":0.51,"depth_deviation_pct":50.0,"trusted_ref":1.00011,"min_orderbook_layers":10,"imbalance_threshold":5.0},{"symbol":"xlmusdt","monitor_only":false,"alert_tier":0,"issues":null,"mid_price":0.2011,"current_spread":0.308304,"target_spread":0.3,"percent_diff":2.77,"depth_bid":"$50.0K","depth_ask":"$44.7K","ask_layers":35,"bid_layers":36,"dws":0.1965,"dws_threshold":0.5,"imbalance_ratio":1.12,"heavier_side":"bids","telegram_fired":false,"telegram_detail":null,"timestamp":"2026-08-22 13:15:58","d1_context":"\u00e2\u2030\u02c61.0x typical (baseline warming 2/4 \u00e2\u20ac\u201d absolute floor active)","g2_worst_swing_pct":3.3509,"g2_worst_candle":"08:00 UTC","layer_churn_pct":100.0,"b1_diff_pct":-0.0497,"b1_threshold_pct":0.65,"depth_deviation_pct":50.0,"trusted_ref":0.2012,"min_orderbook_layers":10,"imbalance_threshold":5.0},{"symbol":"xrpusdt","monitor_only":false,"alert_tier":2,"issues":"G2:HIGH","mid_price":1.5152,"current_spread":0.30359,"target_spread":0.3,"percent_diff":1.2,"depth_bid":"$81.0K","depth_ask":"$72.2K","ask_layers":39,"bid_layers":42,"dws":0.1955,"dws_threshold":0.5,"imbalance_ratio":1.12,"heavier_side":"bids","telegram_fired":true,"telegram_detail":"G2:fired","timestamp":"2026-08-22 13:15:58","d1_context":"\u00e2\u2030\u02c61.1x typical (baseline warming 2/4 \u00e2\u20ac\u201d absolute floor active)","g2_worst_swing_pct":5.4944,"g2_worst_candle":"08:00 UTC","layer_churn_pct":100.0,"b1_diff_pct":-0.0132,"b1_threshold_pct":0.65,"depth_deviation_pct":50.0,"trusted_ref":1.5154,"min_orderbook_layers":10,"imbalance_threshold":5.0},{"symbol":"xyousdt","monitor_only":false,"alert_tier":3,"issues":"A5:MEDIUM","mid_price":0.003179,"current_spread":0.301982,"target_spread":1.0,"percent_diff":-69.8,"depth_bid":"$2.7K","depth_ask":"$170.5K","ask_layers":75,"bid_layers":25,"dws":0.3167,"dws_threshold":0.5,"imbalance_ratio":63.34,"heavier_side":"asks","telegram_fired":false,"telegram_detail":"A5:flag-only","timestamp":"2026-08-22 13:15:58","d1_context":"\u00e2\u2030\u02c61.1x typical (baseline warming 2/4 \u00e2\u20ac\u201d absolute floor active)","g2_worst_swing_pct":1.9655,"g2_worst_candle":"09:00 UTC","layer_churn_pct":74.5,"b1_diff_pct":0.9206,"b1_threshold_pct":1.0,"depth_deviation_pct":50.0,"trusted_ref":0.00315,"min_orderbook_layers":10,"imbalance_threshold":5.0},{"symbol":"usdtcngn","monitor_only":true,"alert_tier":1,"issues":"A2:HIGH|A5:MEDIUM|A6:CRITICAL","mid_price":1394.0,"current_spread":0.143472,"target_spread":null,"percent_diff":null,"depth_bid":"$10.5K","depth_ask":"$15.19M","ask_layers":17,"bid_layers":6,"dws":0.1373,"dws_threshold":0.5,"imbalance_ratio":1451.28,"heavier_side":"asks","telegram_fired":true,"telegram_detail":"A2:fired|A5:flag-only|A6:cooldown","timestamp":"2026-08-22 13:15:58","d1_context":"baseline building\u00e2\u20ac\u00a6","g2_worst_swing_pct":0.1436,"g2_worst_candle":"11:00 UTC","layer_churn_pct":0.0,"b1_diff_pct":null,"b1_threshold_pct":null,"depth_deviation_pct":50.0,"trusted_ref":null,"min_orderbook_layers":10,"imbalance_threshold":5.0},{"symbol":"btcngn","monitor_only":false,"alert_tier":0,"issues":null,"mid_price":107334118.5,"current_spread":0.450113,"target_spread":0.7,"percent_diff":-35.7,"depth_bid":"$3803.72M","depth_ask":"$3714.69M","ask_layers":39,"bid_layers":35,"dws":0.2509,"dws_threshold":0.5,"imbalance_ratio":1.02,"heavier_side":"bids","telegram_fired":false,"telegram_detail":null,"timestamp":"2026-08-22 13:15:58","d1_context":"\u00e2\u2030\u02c61.3x typical (baseline warming 2/4 \u00e2\u20ac\u201d absolute floor active)","g2_worst_swing_pct":1.035,"g2_worst_candle":"10:00 UTC","layer_churn_pct":100.0,"b1_diff_pct":null,"b1_threshold_pct":null,"depth_deviation_pct":50.0,"trusted_ref":null,"min_orderbook_layers":10,"imbalance_threshold":5.0},{"symbol":"usdtngn","monitor_only":false,"alert_tier":2,"issues":"D1:HIGH","mid_price":1391.095,"current_spread":0.085544,"target_spread":0.95,"percent_diff":-91.0,"depth_bid":"$8791.31M","depth_ask":"$7734.69M","ask_layers":52,"bid_layers":59,"dws":0.1515,"dws_threshold":0.5,"imbalance_ratio":1.14,"heavier_side":"bids","telegram_fired":true,"telegram_detail":"D1:fired","timestamp":"2026-08-22 13:15:58","d1_context":"\u00e2\u2030\u02c61.5x typical \u00e2\u20ac\u201d fired on absolute floor \u00e2\u201a\u00a650,000,000 (baseline warming, 2/4 buckets)","g2_worst_swing_pct":0.1437,"g2_worst_candle":"10:00 UTC","layer_churn_pct":83.9,"b1_diff_pct":null,"b1_threshold_pct":null,"depth_deviation_pct":50.0,"trusted_ref":null,"min_orderbook_layers":10,"imbalance_threshold":5.0},{"symbol":"ethngn","monitor_only":false,"alert_tier":0,"issues":null,"mid_price":3379746.0,"current_spread":0.450152,"target_spread":0.75,"percent_diff":-39.98,"depth_bid":"$2373.17M","depth_ask":"$2173.27M","ask_layers":39,"bid_layers":39,"dws":0.2612,"dws_threshold":0.5,"imbalance_ratio":1.09,"heavier_side":"bids","telegram_fired":false,"telegram_detail":null,"timestamp":"2026-08-22 13:15:58","d1_context":"\u00e2\u2030\u02c61.6x typical (baseline warming 2/4 \u00e2\u20ac\u201d absolute floor active)","g2_worst_swing_pct":1.4274,"g2_worst_candle":"10:00 UTC","layer_churn_pct":100.0,"b1_diff_pct":null,"b1_threshold_pct":null,"depth_deviation_pct":50.0,"trusted_ref":null,"min_orderbook_layers":10,"imbalance_threshold":5.0},{"symbol":"trxngn","monitor_only":false,"alert_tier":0,"issues":null,"mid_price":476.57095,"current_spread":0.500513,"target_spread":0.75,"percent_diff":-33.26,"depth_bid":"$596.08M","depth_ask":"$641.62M","ask_layers":46,"bid_layers":36,"dws":0.2861,"dws_threshold":0.5,"imbalance_ratio":1.08,"heavier_side":"asks","telegram_fired":false,"telegram_detail":null,"timestamp":"2026-08-22 13:15:58","d1_context":"\u00e2\u2030\u02c61.1x typical (baseline warming 2/4 \u00e2\u20ac\u201d absolute floor active)","g2_worst_swing_pct":0.8164,"g2_worst_candle":"08:00 UTC","layer_churn_pct":100.0,"b1_diff_pct":null,"b1_threshold_pct":null,"depth_deviation_pct":50.0,"trusted_ref":null,"min_orderbook_layers":10,"imbalance_threshold":5.0},{"symbol":"xrpngn","monitor_only":false,"alert_tier":2,"issues":"G2:HIGH","mid_price":2102.21,"current_spread":0.265435,"target_spread":0.5,"percent_diff":-46.91,"depth_bid":"$198.50M","depth_ask":"$208.12M","ask_layers":71,"bid_layers":44,"dws":0.2529,"dws_threshold":0.5,"imbalance_ratio":1.05,"heavier_side":"asks","telegram_fired":true,"telegram_detail":"G2:fired","timestamp":"2026-08-22 13:15:58","d1_context":"\u00e2\u2030\u02c61.2x typical (baseline warming 2/4 \u00e2\u20ac\u201d absolute floor active)","g2_worst_swing_pct":5.2643,"g2_worst_candle":"08:00 UTC","layer_churn_pct":98.7,"b1_diff_pct":null,"b1_threshold_pct":null,"depth_deviation_pct":50.0,"trusted_ref":null,"min_orderbook_layers":10,"imbalance_threshold":5.0},{"symbol":"dashngn","monitor_only":false,"alert_tier":0,"issues":null,"mid_price":56447.0,"current_spread":0.552731,"target_spread":0.5,"percent_diff":10.55,"depth_bid":"$44.35M","depth_ask":"$47.78M","ask_layers":37,"bid_layers":50,"dws":0.3041,"dws_threshold":0.5,"imbalance_ratio":1.08,"heavier_side":"asks","telegram_fired":false,"telegram_detail":null,"timestamp":"2026-08-22 13:15:58","d1_context":"\u00e2\u2030\u02c60.4x typical (baseline warming 2/4 \u00e2\u20ac\u201d absolute floor active)","g2_worst_swing_pct":3.5547,"g2_worst_candle":"10:00 UTC","layer_churn_pct":100.0,"b1_diff_pct":null,"b1_threshold_pct":null,"depth_deviation_pct":50.0,"trusted_ref":null,"min_orderbook_layers":10,"imbalance_threshold":5.0},{"symbol":"ltcngn","monitor_only":false,"alert_tier":0,"issues":null,"mid_price":71726.0,"current_spread":0.552101,"target_spread":0.5,"percent_diff":10.42,"depth_bid":"$159.63M","depth_ask":"$197.21M","ask_layers":35,"bid_layers":35,"dws":0.3043,"dws_threshold":0.5,"imbalance_ratio":1.24,"heavier_side":"asks","telegram_fired":false,"telegram_detail":null,"timestamp":"2026-08-22 13:15:58","d1_context":"\u00e2\u2030\u02c61.2x typical (baseline warming 2/4 \u00e2\u20ac\u201d absolute floor active)","g2_worst_swing_pct":2.7018,"g2_worst_candle":"08:00 UTC","layer_churn_pct":100.0,"b1_diff_pct":null,"b1_threshold_pct":null,"depth_deviation_pct":50.0,"trusted_ref":null,"min_orderbook_layers":10,"imbalance_threshold":5.0},{"symbol":"solngn","monitor_only":false,"alert_tier":0,"issues":null,"mid_price":130290.495,"current_spread":0.690403,"target_spread":0.8,"percent_diff":-13.7,"depth_bid":"$279.45M","depth_ask":"$274.80M","ask_layers":70,"bid_layers":72,"dws":0.3599,"dws_threshold":0.5,"imbalance_ratio":1.02,"heavier_side":"bids","telegram_fired":false,"telegram_detail":null,"timestamp":"2026-08-22 13:15:58","d1_context":"\u00e2\u2030\u02c61.6x typical (baseline warming 2/4 \u00e2\u20ac\u201d absolute floor active)","g2_worst_swing_pct":2.2633,"g2_worst_candle":"10:00 UTC","layer_churn_pct":100.0,"b1_diff_pct":null,"b1_threshold_pct":null,"depth_deviation_pct":50.0,"trusted_ref":null,"min_orderbook_layers":10,"imbalance_threshold":5.0},{"symbol":"usdcngn","monitor_only":false,"alert_tier":0,"issues":null,"mid_price":1390.345,"current_spread":0.390551,"target_spread":1.2,"percent_diff":-67.45,"depth_bid":"$2777.13M","depth_ask":"$2788.76M","ask_layers":44,"bid_layers":41,"dws":0.2224,"dws_threshold":0.5,"imbalance_ratio":1.0,"heavier_side":"asks","telegram_fired":false,"telegram_detail":null,"timestamp":"2026-08-22 13:15:58","d1_context":"\u00e2\u2030\u02c63.0x typical (baseline warming 2/4 \u00e2\u20ac\u201d absolute floor active)","g2_worst_swing_pct":0.3913,"g2_worst_candle":"10:00 UTC","layer_churn_pct":93.0,"b1_diff_pct":null,"b1_threshold_pct":null,"depth_deviation_pct":50.0,"trusted_ref":null,"min_orderbook_layers":10,"imbalance_threshold":5.0},{"symbol":"cngnngn","monitor_only":true,"alert_tier":1,"issues":"A2:HIGH|A6:CRITICAL","mid_price":1.0,"current_spread":0.1,"target_spread":null,"percent_diff":null,"depth_bid":"$31.45M","depth_ask":"$28.01M","ask_layers":11,"bid_layers":8,"dws":0.1215,"dws_threshold":0.5,"imbalance_ratio":1.12,"heavier_side":"bids","telegram_fired":true,"telegram_detail":"A2:fired|A6:cooldown","timestamp":"2026-08-22 13:15:58","d1_context":"baseline building\u00e2\u20ac\u00a6","g2_worst_swing_pct":0.0,"g2_worst_candle":"11:00 UTC","layer_churn_pct":0.0,"b1_diff_pct":null,"b1_threshold_pct":null,"depth_deviation_pct":50.0,"trusted_ref":null,"min_orderbook_layers":10,"imbalance_threshold":5.0},{"symbol":"usdtghs","monitor_only":false,"alert_tier":0,"issues":null,"mid_price":11.84,"current_spread":1.182432,"target_spread":1.3,"percent_diff":-9.04,"depth_bid":"$4.50M","depth_ask":"$4.49M","ask_layers":23,"bid_layers":20,"dws":0.9792,"dws_threshold":0.5,"imbalance_ratio":1.0,"heavier_side":"bids","telegram_fired":false,"telegram_detail":null,"timestamp":"2026-08-22 13:15:58","d1_context":"\u00e2\u2030\u02c613.6x typical (baseline warming 2/4 \u00e2\u20ac\u201d absolute floor active)","g2_worst_swing_pct":0.341,"g2_worst_candle":"11:00 UTC","layer_churn_pct":100.0,"b1_diff_pct":null,"b1_threshold_pct":null,"depth_deviation_pct":50.0,"trusted_ref":null,"min_orderbook_layers":10,"imbalance_threshold":5.0}]};
+
+const CHECK_NAMES = {
+  A1: "Crossed book", A2: "Spread / thin book", A3: "One-sided market",
+  A4: "Book depth", A5: "Depth imbalance", A6: "Layer churn stall",
+  B1: "Price discrepancy", B2: "Source divergence", B3: "Stale reference feed",
+  B4: "Circuit breaker proximity", D1: "Volume spike", D2: "Fill rate deviation",
+  E1: "Exchange check E1", E2: "Exchange check E2",
+  F1: "Cross-pair arbitrage gap", G2: "Candle wick / anomalous print",
+};
+const TG_STATE = {
+  "fired": "Sent to Telegram", "flag-only": "Dashboard only",
+  "suspended": "Muted — pair suspended", "acked": "Muted — acknowledged",
+  "cooldown": "In cooldown", "capped": "Episode limit reached",
+};
+const SEGMENTS = [
+  { key: "attention", label: "Needs attention" },
+  { key: "flagged",   label: "Flagged" },
+  { key: "healthy",   label: "Healthy" },
+  { key: "all",       label: "All markets" },
+];
+
+// ── State ─────────────────────────────────────────────────────────────────────
+let data = null;
+let source = "live";        // "live" | "sample"
+let filter = "attention";
+let query = "";
+let selected = null;
+let firstPaint = true;
+
+const $ = id => document.getElementById(id);
+const reducedMotion = () => matchMedia("(prefers-reduced-motion: reduce)").matches;
+const isNarrow = () => matchMedia("(max-width: 960px)").matches;
+
+// ── Formatting ────────────────────────────────────────────────────────────────
+function esc(s) {
+  return String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+function symParts(symbol) {
+  const s = (symbol || "").toUpperCase();
+  for (const q of ["USDT", "NGN", "GHS"]) if (s.endsWith(q)) return { base: s.slice(0, -q.length), quote: q };
+  return { base: s.slice(0, -3), quote: s.slice(-3) };
+}
+// Significant digits for small prices: BONK at 0.0000123 must not render as "0".
+function fmtPrice(v) {
+  if (v == null || isNaN(v)) return "—";
+  v = Number(v);
+  if (Math.abs(v) >= 1000) return v.toLocaleString(undefined, { maximumFractionDigits: 2 });
+  if (Math.abs(v) >= 1)    return v.toLocaleString(undefined, { maximumFractionDigits: 4 });
+  return v.toLocaleString(undefined, { maximumSignificantDigits: 4 });
+}
+function fmtPct(v, d = 3) { return v == null || isNaN(v) ? "—" : Number(v).toFixed(d) + "%"; }
+function fmtAge(sec) {
+  if (sec == null) return "unknown";
+  if (sec < 90) return `${Math.round(sec)}s`;
+  if (sec < 5400) return `${Math.round(sec / 60)} min`;
+  if (sec < 48 * 3600) return `${Math.round(sec / 3600)} h`;
+  return `${Math.round(sec / 86400)} days`;
+}
+function quidaxUrl(symbol) {
+  const { base, quote } = symParts(symbol);
+  return `https://pro.quidax.io/en_US/trade/${encodeURIComponent(base + "_" + quote)}`;
+}
+function parsePairs(str) {
+  return (str || "").split("|").filter(Boolean).map(part => {
+    const [id, val] = part.split(":");
+    return { id: id.trim(), val: (val || "").trim() };
+  });
+}
+function issueTier(id, sev) {
+  const m = (data && data.issue_tiers || {})[id];
+  if (!m) return null;
+  return m[sev] != null ? m[sev] : Math.min(...Object.values(m));
+}
+function evidence(p, id) {
+  switch (id) {
+    case "G2": return p.g2_worst_swing_pct != null ? `Worst candle swing ${fmtPct(p.g2_worst_swing_pct, 2)} at ${p.g2_worst_candle || "—"}` : "";
+    case "D1": return p.d1_context || "";
+    case "A5": return p.imbalance_ratio != null ? `${Number(p.imbalance_ratio).toFixed(2)}× heavier on ${p.heavier_side || "one side"} (limit ${p.imbalance_threshold ?? "—"}×)` : "";
+    case "A6": return p.layer_churn_pct != null ? `Book layers changed in ${Math.round(p.layer_churn_pct)}% of recent cycles` : "";
+    case "A2": return `${p.ask_layers ?? "—"} ask / ${p.bid_layers ?? "—"} bid layers · spread ${fmtPct(p.current_spread)}` + (p.target_spread ? ` vs ${fmtPct(p.target_spread)} target` : "");
+    case "B1": return p.b1_diff_pct != null ? `${fmtPct(p.b1_diff_pct, 2)} from reference (limit ${fmtPct(p.b1_threshold_pct, 2)})` : "";
+    case "A4": return p.depth_deviation_pct != null ? `Depth ${fmtPct(p.depth_deviation_pct, 1)} off baseline` : "";
+    default: return "";
+  }
+}
+function tgSummary(p) {
+  if (p.telegram_fired) return { sent: true, text: "Sent" };
+  const states = parsePairs(p.telegram_detail);
+  if (!states.length) return { sent: false, text: "—" };
+  const s = states[0].val;
+  return { sent: false, text: s === "flag-only" ? "Dashboard" : s === "cooldown" ? "Cooldown" : s === "capped" ? "Capped" : s === "acked" || s === "suspended" ? "Muted" : s };
+}
+
+// ── Derived lists ─────────────────────────────────────────────────────────────
+function tierOf(p) { return p.alert_tier ?? 0; }
+function bucket(p) {
+  const t = tierOf(p);
+  return t === 1 || t === 2 ? "attention" : t === 3 ? "flagged" : "healthy";
+}
+function sorted(pairs) {
+  const rank = t => (t === 1 ? 0 : t === 2 ? 1 : t === 3 ? 2 : 3);
+  return [...pairs].sort((a, b) =>
+    rank(tierOf(a)) - rank(tierOf(b)) ||
+    Math.abs(b.percent_diff ?? 0) - Math.abs(a.percent_diff ?? 0));
+}
+function visiblePairs() {
+  if (!data) return [];
+  const q = query.trim().toLowerCase().replace("/", "");
+  return sorted(data.pairs).filter(p =>
+    (filter === "all" || bucket(p) === filter) &&
+    (!q || p.symbol.toLowerCase().includes(q)));
+}
+
+// ── Segments ──────────────────────────────────────────────────────────────────
+function segmentHTML(active) {
+  const pairs = data ? data.pairs : [];
+  const count = k => k === "all" ? pairs.length : pairs.filter(p => bucket(p) === k).length;
+  const t1 = pairs.filter(p => tierOf(p) === 1).length;
+  const t2 = pairs.filter(p => tierOf(p) === 2).length;
+  const sent = pairs.filter(p => p.telegram_fired).length;
+  const sub = {
+    attention: `${t1} tier 1 · ${t2} tier 2`,
+    flagged: "Dashboard only",
+    healthy: "No open issues",
+    all: `${sent} sent to Telegram`,
+  };
+  return SEGMENTS.map(s => active
+    ? `<div class="seg"><span class="seg-label">${s.label}</span><span class="seg-value num">${data ? count(s.key) : "—"}</span><span class="seg-sub">${sub[s.key]}</span></div>`
+    : `<button type="button" class="seg pressable" data-key="${s.key}" aria-pressed="${s.key === filter}"><span class="seg-label">${s.label}</span><span class="seg-value num">${data ? count(s.key) : "—"}</span><span class="seg-sub">${sub[s.key]}</span></button>`
+  ).join("");
+}
+function renderSegments() {
+  $("seg-base").innerHTML = segmentHTML(false);
+  $("seg-active").innerHTML = segmentHTML(true);
+  positionIndicator(true);
+}
+function positionIndicator(instant) {
+  const layer = $("seg-active");
+  const btn = $("seg-base").querySelector(`[data-key="${filter}"]`);
+  if (!btn) return;
+  const box = layer.getBoundingClientRect();
+  const r = btn.getBoundingClientRect();
+  if (!box.width) return;
+  const left = ((r.left - box.left) / box.width) * 100;
+  const right = ((box.right - r.right) / box.width) * 100;
+  if (instant) layer.classList.add("instant");
+  layer.style.clipPath = `inset(0 ${right.toFixed(3)}% 0 ${left.toFixed(3)}% round 9px)`;
+  if (instant) { layer.offsetWidth; layer.classList.remove("instant"); }
+}
+$("seg-base").addEventListener("click", e => {
+  const btn = e.target.closest(".seg");
+  if (!btn) return;
+  filter = btn.dataset.key;
+  $("seg-base").querySelectorAll(".seg").forEach(b => b.setAttribute("aria-pressed", b.dataset.key === filter));
+  positionIndicator(false);
+  renderRows();
+});
+addEventListener("resize", () => positionIndicator(true));
+
+// ── Rows ──────────────────────────────────────────────────────────────────────
+function rowHTML(p, i) {
+  const { base, quote } = symParts(p.symbol);
+  const t = tierOf(p);
+  const issues = parsePairs(p.issues);
+  const ratio = p.target_spread ? p.current_spread / p.target_spread : null;
+  const fill = ratio == null ? 0 : Math.min(ratio / 2, 1);
+  const level = ratio == null ? "" : ratio >= 1.5 ? "way-over" : ratio > 1 ? "over" : "";
+  const diff = p.percent_diff;
+  const deltaCls = diff == null ? "" : diff >= 50 ? "way-up" : diff > 0 ? "up" : "";
+  const tg = tgSummary(p);
+  const chips = issues.length
+    ? issues.slice(0, 3).map(({ id, val }) => {
+        const it = issueTier(id, val);
+        return `<span class="chip ${it === 1 ? "t1" : it === 2 ? "t2" : ""}" data-tip-id="${esc(id)}" data-tip-sev="${esc(val)}" data-sym="${esc(p.symbol)}">${esc(id)}</span>`;
+      }).join("") + (issues.length > 3 ? `<span class="chip">+${issues.length - 3}</span>` : "")
+    : `<span class="chip ok">—</span>`;
+  const enter = firstPaint && i < 14 && !reducedMotion();
+  return `<tr class="row${enter ? " enter" : ""}" data-sym="${esc(p.symbol)}" aria-selected="${p.symbol === selected}"${enter ? ` style="animation-delay:${i * 30}ms"` : ""}>
+    <td><div class="mkt"><span class="tier-dot ${t ? "t" + t : ""}" aria-label="${t ? "Tier " + t : "Healthy"}"></span><span><span class="mkt-name">${esc(base)}</span><span class="mkt-quote">/${esc(quote)}</span>${p.monitor_only ? `<span class="mkt-tag"> · monitor</span>` : ""}</span></div></td>
+    <td class="r num col-mid">${fmtPrice(p.mid_price)}</td>
+    <td class="r"><div class="spread"><span class="num">${fmtPct(p.current_spread)}</span><span class="spread-bar${ratio == null ? " none" : ""}" aria-hidden="true"><span class="spread-fill ${level}" style="transform:scaleX(${fill.toFixed(3)})"></span><span class="spread-target"></span></span><span class="delta num ${deltaCls}">${diff == null ? "" : (diff > 0 ? "+" : "") + Number(diff).toFixed(1) + "%"}</span></div></td>
+    <td class="r num col-depth">${esc(p.depth_bid || "—")} <span style="color:var(--text-3)">/</span> ${esc(p.depth_ask || "—")}</td>
+    <td><div class="chips">${chips}</div></td>
+    <td class="col-tg"><span class="tg ${tg.sent ? "sent" : ""}">${tg.sent ? `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m22 2-7 20-4-9-9-4z"/><path d="M22 2 11 13"/></svg>` : ""}${esc(tg.text)}</span></td>
+  </tr>`;
+}
+function renderRows() {
+  const list = visiblePairs();
+  $("list-count").textContent = data ? `${list.length} of ${data.pairs.length}` : "";
+  $("rows").innerHTML = list.map(rowHTML).join("");
+  const empty = $("empty");
+  if (!list.length && data) {
+    empty.hidden = false;
+    empty.innerHTML = query
+      ? `<b>No markets match “${esc(query)}”</b>Try a base or quote, like “btc” or “ngn”.`
+      : filter === "attention"
+        ? `<b>Nothing needs attention</b>Every market is healthy or dashboard-only.`
+        : `<b>No markets here</b>`;
+  } else empty.hidden = true;
+  firstPaint = false;
+}
+$("rows").addEventListener("click", e => {
+  if (e.target.closest("a")) return;
+  const row = e.target.closest(".row");
+  if (row) select(row.dataset.sym, { open: true });
+});
+
+// ── Selection + detail ───────────────────────────────────────────────────────
+function select(sym, { open = false, scroll = false } = {}) {
+  selected = sym;
+  document.querySelectorAll(".row").forEach(r => r.setAttribute("aria-selected", r.dataset.sym === sym));
+  renderDetail();
+  if (scroll) {
+    const row = document.querySelector(`.row[data-sym="${CSS.escape(sym)}"]`);
+    // Keyboard navigation: instant, never smooth.
+    if (row) row.scrollIntoView({ block: "nearest" });
+  }
+  if (open && isNarrow()) openSheet();
+}
+function renderDetail() {
+  const el = $("detail-inner");
+  const p = data && data.pairs.find(x => x.symbol === selected);
+  if (!p) {
+    el.innerHTML = `<div class="d-empty">Select a market to see its checks.</div>`;
+    return;
+  }
+  const { base, quote } = symParts(p.symbol);
+  const t = tierOf(p);
+  const issues = parsePairs(p.issues);
+  const tg = Object.fromEntries(parsePairs(p.telegram_detail).map(x => [x.id, x.val]));
+  const diff = p.percent_diff;
+  const metric = (k, v, cls = "") => `<div class="metric"><div class="metric-k">${k}</div><div class="metric-v num ${cls}">${v}</div></div>`;
+  const tierChip = t === 1 ? `<span class="chip t1">Tier 1</span>` : t === 2 ? `<span class="chip t2">Tier 2</span>` : t === 3 ? `<span class="chip">Flagged</span>` : `<span class="chip" style="background:var(--green-soft);color:var(--green-text)">Healthy</span>`;
+
+  el.innerHTML = `
+    <div class="d-head">
+      <div>
+        <div class="d-title">${esc(base)}<span class="mkt-quote">/${esc(quote)}</span></div>
+      </div>
+      <div style="margin-top:3px">${tierChip}</div>
+      <a class="d-link pressable" href="${quidaxUrl(p.symbol)}" target="_blank" rel="noopener noreferrer">Order book
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 17 17 7"/><path d="M8 7h9v9"/></svg></a>
+    </div>
+    <div class="d-sub">${p.monitor_only ? "Monitor only" : "Managed"} · cycle ${esc((p.timestamp || "").split(" ").pop() || "—")}</div>
+
+    <div class="metrics">
+      ${metric("Mid", fmtPrice(p.mid_price))}
+      ${metric("Spread", fmtPct(p.current_spread))}
+      ${metric("Target", fmtPct(p.target_spread))}
+      ${metric("vs target", diff == null ? "—" : (diff > 0 ? "+" : "") + Number(diff).toFixed(1) + "%", diff >= 50 ? "crit" : diff > 0 ? "warn" : "")}
+      ${metric("DWS", p.dws == null ? "—" : Number(p.dws).toFixed(3), p.dws > (p.dws_threshold ?? Infinity) ? "warn" : "")}
+      ${metric("Imbalance", p.imbalance_ratio == null ? "—" : Number(p.imbalance_ratio).toFixed(2) + "×")}
+    </div>
+
+    ${issues.length ? `
+      <div class="section-k">Open issues · ${issues.length}</div>
+      <div class="issues">
+        ${issues.map(({ id, val }) => {
+          const it = issueTier(id, val);
+          const ev = evidence(p, id);
+          const st = tg[id];
+          return `<div class="issue">
+            <div class="issue-top"><span class="issue-name">${esc(CHECK_NAMES[id] || id)}</span><span class="issue-id">${esc(id)} · ${esc(val.toLowerCase())}</span>
+              <span class="chip ${it === 1 ? "t1" : it === 2 ? "t2" : ""}">${it ? "Tier " + it : "—"}</span></div>
+            ${ev ? `<div class="issue-evidence">${esc(ev)}</div>` : ""}
+            ${st ? `<div class="issue-tg">${st === "fired" ? `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="color:var(--accent)"><path d="m22 2-7 20-4-9-9-4z"/><path d="M22 2 11 13"/></svg>` : ""}${esc(TG_STATE[st] || st)}</div>` : ""}
+          </div>`;
+        }).join("")}
+      </div>` : `
+      <div class="all-clear"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>All checks passing</div>`}
+
+    <div class="section-k">Book</div>
+    <dl class="kv num">
+      <dt>Depth bid / ask</dt><dd>${esc(p.depth_bid || "—")} / ${esc(p.depth_ask || "—")}</dd>
+      <dt>Layers ask / bid</dt><dd>${p.ask_layers ?? "—"} / ${p.bid_layers ?? "—"}</dd>
+      <dt>Reference price</dt><dd>${fmtPrice(p.trusted_ref)}</dd>
+      <dt>Heavier side</dt><dd>${esc(p.heavier_side || "—")}</dd>
+    </dl>
+
+    <div class="hint"><span><span class="kbd">↑</span><span class="kbd">↓</span>move</span><span><span class="kbd">/</span>filter</span><span><span class="kbd">Esc</span>clear</span></div>
+  `;
+}
+
+// ── Keyboard: instant, no animation ──────────────────────────────────────────
+document.addEventListener("keydown", e => {
+  const inField = !!(e.target.matches && e.target.matches("input, textarea, select"));
+  if (e.key === "/" && !inField) { e.preventDefault(); $("search").focus(); $("search").select(); return; }
+  if (e.key === "Escape") {
+    if (inField) { $("search").blur(); return; }
+    if (sheetOpen) { closeSheet(); return; }
+    return;
+  }
+  if (inField || e.metaKey || e.ctrlKey || e.altKey) return;
+  const down = e.key === "ArrowDown" || e.key === "j";
+  const up = e.key === "ArrowUp" || e.key === "k";
+  if (!down && !up) return;
+  const list = visiblePairs();
+  if (!list.length) return;
+  e.preventDefault();
+  let i = list.findIndex(p => p.symbol === selected);
+  i = i < 0 ? 0 : Math.max(0, Math.min(list.length - 1, i + (down ? 1 : -1)));
+  select(list[i].symbol, { scroll: true });
+});
+$("search").addEventListener("input", e => { query = e.target.value; renderRows(); });
+
+// ── Tooltip (chips) ──────────────────────────────────────────────────────────
+const tip = $("tip");
+let tipTimer = null, tipHideTimer = null, tipWarm = false;
+function showTip(chip) {
+  const p = data.pairs.find(x => x.symbol === chip.dataset.sym);
+  const id = chip.dataset.tipId, sev = chip.dataset.tipSev;
+  const st = p ? Object.fromEntries(parsePairs(p.telegram_detail).map(x => [x.id, x.val]))[id] : null;
+  const ev = p ? evidence(p, id) : "";
+  tip.innerHTML = `<b>${esc(CHECK_NAMES[id] || id)}</b> <span>${esc(sev.toLowerCase())}</span>${ev ? `<br>${esc(ev)}` : ""}${st ? `<br><span>${esc(TG_STATE[st] || st)}</span>` : ""}`;
+  const r = chip.getBoundingClientRect();
+  tip.style.left = "0px"; tip.style.top = "0px";
+  const tr = tip.getBoundingClientRect();
+  const left = Math.max(8, Math.min(innerWidth - tr.width - 8, r.left + r.width / 2 - tr.width / 2));
+  const above = r.top - tr.height - 8 > 8;
+  const top = above ? r.top - tr.height - 6 : r.bottom + 6;
+  tip.style.left = left + "px"; tip.style.top = top + "px";
+  // Scale from the chip, not from the tooltip's centre.
+  tip.style.transformOrigin = `${r.left + r.width / 2 - left}px ${above ? "100%" : "0%"}`;
+  tip.classList.toggle("instant", tipWarm);
+  tip.classList.add("show");
+  tipWarm = true;
+}
+function hideTip() {
+  clearTimeout(tipTimer);
+  tip.classList.remove("show");
+  clearTimeout(tipHideTimer);
+  tipHideTimer = setTimeout(() => { tipWarm = false; }, 400);
+}
+document.addEventListener("pointerover", e => {
+  if (e.pointerType !== "mouse") return;
+  const chip = e.target.closest && e.target.closest("[data-tip-id]");
+  if (!chip) return;
+  clearTimeout(tipTimer); clearTimeout(tipHideTimer);
+  if (tipWarm) showTip(chip);
+  else tipTimer = setTimeout(() => showTip(chip), 450);
+});
+document.addEventListener("pointerout", e => {
+  const chip = e.target.closest && e.target.closest("[data-tip-id]");
+  if (chip && !chip.contains(e.relatedTarget)) hideTip();
+});
+addEventListener("scroll", hideTip, { passive: true });
+
+// ── Toasts ───────────────────────────────────────────────────────────────────
+// Timers pause while the tab is hidden, so a toast is never missed.
+function toast(title, sub = "", { error = false, duration = 4000 } = {}) {
+  const t = document.createElement("div");
+  t.className = "toast" + (error ? " error" : "");
+  t.setAttribute("role", error ? "alert" : "status");
+  t.innerHTML = `<span class="toast-dot"></span><div>${esc(title)}${sub ? `<small>${esc(sub)}</small>` : ""}</div>`;
+  $("toaster").appendChild(t);
+  requestAnimationFrame(() => requestAnimationFrame(() => t.dataset.mounted = "true"));
+  let remaining = duration, started = Date.now(), timer = null;
+  const dismiss = () => {
+    t.dataset.leaving = "true";
+    document.removeEventListener("visibilitychange", onVis);
+    setTimeout(() => t.remove(), 220);
+  };
+  const run = () => { started = Date.now(); timer = setTimeout(dismiss, remaining); };
+  const onVis = () => {
+    if (document.hidden) { clearTimeout(timer); remaining -= Date.now() - started; }
+    else run();
+  };
+  document.addEventListener("visibilitychange", onVis);
+  run();
+  // Keep at most three on screen.
+  const all = $("toaster").querySelectorAll(".toast:not([data-leaving])");
+  if (all.length > 3) all[0].dataset.leaving = "true", setTimeout(() => all[0].remove(), 220);
+}
+
+// ── Mobile sheet with drag-to-dismiss ────────────────────────────────────────
+let sheetOpen = false;
+function openSheet() {
+  sheetOpen = true;
+  $("detail").classList.add("open");
+  $("scrim").classList.add("show");
+  $("detail").scrollTop = 0;
+  $("detail").focus({ preventScroll: true });
+}
+function closeSheet() {
+  sheetOpen = false;
+  const d = $("detail");
+  d.classList.remove("open", "dragging");
+  d.style.transform = "";
+  $("scrim").classList.remove("show");
+  const row = document.querySelector(`.row[data-sym="${CSS.escape(selected || "")}"]`);
+  if (row) row.focus?.();
+}
+$("scrim").addEventListener("click", closeSheet);
+(function () {
+  const d = $("detail"), handle = $("sheet-handle");
+  let startY = 0, startT = 0, dy = 0, dragging = false, pid = null;
+  handle.addEventListener("pointerdown", e => {
+    if (!isNarrow() || dragging) return;      // ignore a second finger mid-drag
+    dragging = true; pid = e.pointerId;
+    startY = e.clientY; startT = performance.now(); dy = 0;
+    try { handle.setPointerCapture(e.pointerId); } catch (_) { /* pointer already gone */ }
+    d.classList.add("dragging");
+  });
+  handle.addEventListener("pointermove", e => {
+    if (!dragging || e.pointerId !== pid) return;
+    const raw = e.clientY - startY;
+    // Down follows the finger 1:1; up meets increasing resistance.
+    dy = raw >= 0 ? raw : -Math.sqrt(-raw) * 2;
+    d.style.transform = `translateY(${dy}px)`;
+  });
+  const end = e => {
+    if (!dragging || e.pointerId !== pid) return;
+    dragging = false;
+    d.classList.remove("dragging");
+    const velocity = dy / Math.max(1, performance.now() - startT);   // px per ms
+    if (dy > d.offsetHeight * 0.3 || velocity > 0.11) closeSheet();
+    else d.style.transform = "";
+  };
+  handle.addEventListener("pointerup", end);
+  handle.addEventListener("pointercancel", end);
+})();
+matchMedia("(max-width: 960px)").addEventListener("change", e => { if (!e.matches && sheetOpen) closeSheet(); positionIndicator(true); });
+
+// ── Status ───────────────────────────────────────────────────────────────────
+function renderStatus(err) {
+  const pill = $("status-pill"), text = $("status-text"), notice = $("notice");
+  pill.className = "status-pill";
+  notice.hidden = true; notice.className = "notice";
+  if (source === "sample") {
+    pill.classList.add("sample");
+    text.textContent = "Sample data";
+    notice.hidden = false; notice.classList.add("neutral");
+    notice.innerHTML = `${infoIcon()}<div>Can’t reach the API at <b>${esc(API || location.origin)}</b>, so this is a saved snapshot. Start the API and refresh to see live numbers.</div>`;
+    return;
+  }
+  if (err) {
+    pill.classList.add("offline");
+    text.textContent = "Offline";
+    notice.hidden = false; notice.classList.add("error");
+    notice.innerHTML = `${infoIcon()}<div><b>Can’t reach the API.</b> Showing the last numbers loaded. ${esc(err)}</div>`;
+    return;
+  }
+  const s = data.summary || {};
+  if (s.monitor_stale) {
+    pill.classList.add("stale");
+    text.textContent = `Stale · ${fmtAge(s.last_updated_age_seconds)}`;
+    notice.hidden = false;
+    notice.innerHTML = `${infoIcon()}<div><b>The monitor stopped ${fmtAge(s.last_updated_age_seconds)} ago.</b> Everything below is from its last cycle (${esc(s.last_updated || "unknown")}). The API is up; check that the monitor process is running.</div>`;
+  } else {
+    text.textContent = `Live · ${fmtAge(s.last_updated_age_seconds)} ago`;
+  }
+}
+function infoIcon() {
+  return `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 8v5M12 16.5v.01"/></svg>`;
+}
+
+// ── Data ─────────────────────────────────────────────────────────────────────
+async function load({ manual = false } = {}) {
+  const btn = $("refresh-btn");
+  if (manual) btn.setAttribute("aria-busy", "true");
+  let err = null;
+  try {
+    const res = await fetch(`${API}/api/status`, { cache: "no-store" });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    data = await res.json();
+    source = "live";
+  } catch (e) {
+    err = e.message;
+    if (!data && SNAPSHOT) { data = SNAPSHOT; source = "sample"; err = null; }
+  } finally {
+    btn.removeAttribute("aria-busy");
+  }
+  if (data) {
+    if (!selected || !data.pairs.some(p => p.symbol === selected)) {
+      const first = visiblePairsFor(data)[0];
+      selected = first ? first.symbol : null;
+    }
+    renderSegments();
+    renderRows();
+    renderDetail();
+  }
+  renderStatus(err);
+  if (manual) {
+    if (err) toast("Refresh failed", err, { error: true });
+    else if (source === "sample") toast("Still showing the snapshot", "The API didn’t answer.");
+    else toast("Up to date", `Last cycle ${data.summary?.last_updated || "unknown"}`);
+  }
+}
+function visiblePairsFor(d) { const keep = data; data = d; const v = visiblePairs(); data = keep; return v; }
+
+$("refresh-btn").addEventListener("click", () => load({ manual: true }));
+setInterval(() => { if (!document.hidden) load(); }, POLL_MS);
+
+// ── Theme ────────────────────────────────────────────────────────────────────
+const SUN = `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>`;
+const MOON = `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>`;
+function syncThemeBtn() {
+  const dark = document.documentElement.dataset.theme === "dark";
+  $("theme-btn").innerHTML = dark ? SUN : MOON;
+  $("theme-btn").setAttribute("aria-label", dark ? "Switch to light theme" : "Switch to dark theme");
+}
+$("theme-btn").addEventListener("click", () => {
+  const root = document.documentElement;
+  const next = root.dataset.theme === "dark" ? "light" : "dark";
+  root.classList.add("no-transitions");
+  root.dataset.theme = next;
+  try { localStorage.setItem("ohm-sample-theme", next); } catch (e) {}
+  syncThemeBtn();
+  root.offsetWidth;
+  requestAnimationFrame(() => root.classList.remove("no-transitions"));
+});
+syncThemeBtn();
+
+// ── Clock + header edge ──────────────────────────────────────────────────────
+function tick() {
+  $("clock").textContent = new Date().toLocaleTimeString("en-GB", { timeZone: "Africa/Lagos", hour12: false }) + " WAT";
+}
+tick(); setInterval(tick, 1000);
+addEventListener("scroll", () => $("header").classList.toggle("scrolled", scrollY > 0), { passive: true });
+
+renderSegments();
+load();
+</script>
+</body>
+</html>
