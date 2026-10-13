@@ -5,24 +5,28 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
 <title>Market Monitor — sample redesign</title>
 <!--
-  SAMPLE REDESIGN of dashboard.html (Overview tab only). It does not replace the
-  live dashboard; nothing links to it. It reads the same /api/status endpoint:
-  served from the API it uses relative URLs, opened as a file it calls
-  http://localhost:8765 (override with ?api=http://host:port), and if neither
-  answers it renders a saved snapshot so the design can still be reviewed.
+  SAMPLE REDESIGN of dashboard.html: Overview, USDT/NGN depth (the Slippage
+  tab) and the configuration drawer. It does not replace the live dashboard;
+  nothing links to it. It talks to the same API: served from the API it uses
+  relative URLs, opened as a file it calls http://localhost:8765 (override with
+  ?api=http://host:port). If the API is unreachable the Overview renders a
+  saved snapshot; the depth view and configuration need the API.
+
+  The configuration drawer and the per-pair Mute buttons WRITE to the API
+  exactly like the current dashboard does.
 
   Motion rules this page follows (emil-design-eng):
-  - Keyboard actions (↑/↓, j/k, Esc, /) never animate.
-  - Things seen tens of times a minute (row hover, selection, detail swap) don't
-    animate either; only press feedback does, at 120ms.
-  - Occasional UI (filter indicator, tooltip, toast, mobile sheet) animates with
-    strong ease-out curves, under 300ms except the sheet, which uses the iOS
-    drawer curve.
-  - Only transform, opacity and clip-path are animated.
+  - Keyboard actions (↑/↓, j/k, /, 1/2, Esc) never animate.
+  - Things seen many times a minute (row hover, selection, detail swap, view
+    content, chart updates) don't animate either; only press feedback does.
+  - Occasional UI (segmented indicators, tooltip, toast, drawer, sheet)
+    animates with strong ease-out curves on transform, opacity and clip-path.
+  - Charts are functional graphs: no animation at all.
 -->
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;650&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
 <script>
 (function () {
   try {
@@ -61,12 +65,14 @@
   --hairline-strong: rgba(24, 24, 27, 0.14);
   --shadow-card: 0 0 0 1px rgba(24,24,27,.06), 0 1px 2px rgba(24,24,27,.04);
   --shadow-pop: 0 0 0 1px rgba(24,24,27,.08), 0 8px 24px -6px rgba(24,24,27,.18);
+  --shadow-drawer: 0 0 0 1px rgba(24,24,27,.06), -24px 0 48px -24px rgba(24,24,27,.25);
   --accent: #6d28d9;
   --accent-soft: rgba(109, 40, 217, 0.08);
   --accent-line: rgba(109, 40, 217, 0.35);
   --red: #dc2626;    --red-soft: rgba(220, 38, 38, 0.09);   --red-text: #b91c1c;
   --amber: #d97706;  --amber-soft: rgba(217, 119, 6, 0.11); --amber-text: #92400e;
   --green: #16a34a;  --green-soft: rgba(22, 163, 74, 0.10); --green-text: #166534;
+  --blue: #2563eb;
   --gray-soft: rgba(24, 24, 27, 0.06);
   --header-bg: rgba(247, 247, 248, 0.78);
   --scrim: rgba(24, 24, 27, 0.32);
@@ -83,12 +89,14 @@
   --hairline-strong: rgba(255, 255, 255, 0.13);
   --shadow-card: 0 0 0 1px rgba(255,255,255,.06);
   --shadow-pop: 0 0 0 1px rgba(255,255,255,.09), 0 12px 32px -8px rgba(0,0,0,.7);
+  --shadow-drawer: 0 0 0 1px rgba(255,255,255,.07), -24px 0 48px -24px rgba(0,0,0,.8);
   --accent: #a78bfa;
   --accent-soft: rgba(167, 139, 250, 0.10);
   --accent-line: rgba(167, 139, 250, 0.45);
   --red: #f87171;    --red-soft: rgba(248, 113, 113, 0.12);  --red-text: #fca5a5;
   --amber: #fbbf24;  --amber-soft: rgba(251, 191, 36, 0.12); --amber-text: #fcd34d;
   --green: #4ade80;  --green-soft: rgba(74, 222, 128, 0.10); --green-text: #86efac;
+  --blue: #60a5fa;
   --gray-soft: rgba(255, 255, 255, 0.07);
   --header-bg: rgba(12, 12, 14, 0.72);
   --scrim: rgba(0, 0, 0, 0.55);
@@ -108,21 +116,46 @@ body {
   -webkit-font-smoothing: antialiased;
   min-height: 100vh;
 }
+body.locked { overflow: hidden; }
 .num { font-variant-numeric: tabular-nums; }
 button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; }
+button:disabled { cursor: not-allowed; }
 a { color: inherit; }
 svg { display: block; flex-shrink: 0; }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 6px; }
+[hidden] { display: none !important; }
+.muted { color: var(--text-3); }
 
 /* Press feedback: the one animation every control gets. */
 .pressable { transition: transform 120ms var(--ease-out); }
-.pressable:active { transform: scale(0.97); }
+.pressable:active:not(:disabled) { transform: scale(0.97); }
+
+/* ─── Segmented control ───────────────────────────────────
+   Two identical layers. The top one is styled "active" and clipped to the
+   active item; moving the clip animates the colour change perfectly, which
+   per-button colour transitions can't do. Used for the header tabs, the
+   Overview filter and the depth range picker. */
+.seg-inner { position: relative; }
+.seg-base, .seg-active { display: grid; grid-auto-flow: column; grid-auto-columns: max-content; gap: var(--seg-gap, 2px); }
+.seg-fill .seg-base, .seg-fill .seg-active { grid-auto-flow: row; grid-template-columns: repeat(var(--cols), minmax(0, 1fr)); }
+.seg-active {
+  position: absolute; inset: 0; pointer-events: none;
+  clip-path: inset(0 100% 100% 0);
+  transition: clip-path 220ms var(--ease-out);
+}
+.seg-active.instant { transition: none; }
+.seg-btn { display: flex; align-items: center; justify-content: center; white-space: nowrap; border-radius: var(--seg-radius, 8px); min-width: 0; }
+.seg-active .seg-btn { background: var(--seg-on-bg); color: var(--seg-on-fg); box-shadow: var(--seg-on-ring, none); }
+@media (hover: hover) and (pointer: fine) {
+  .seg-base .seg-btn:hover { color: var(--text); }
+}
+.t-short { display: none; }
 
 /* ─── Header ─────────────────────────────────────────────── */
 .header {
   position: sticky; top: 0; z-index: 20;
   height: var(--header-h);
-  display: flex; align-items: center; gap: 16px;
+  display: flex; align-items: center; gap: 20px;
   padding: 0 24px;
   background: var(--header-bg);
   -webkit-backdrop-filter: blur(16px) saturate(180%);
@@ -141,8 +174,10 @@ svg { display: block; flex-shrink: 0; }
   display: grid; place-items: center;
 }
 .brand-name { font-weight: 600; font-size: 0.875rem; letter-spacing: -0.01em; white-space: nowrap; }
-.brand-sep { color: var(--text-3); }
-.brand-page { color: var(--text-2); white-space: nowrap; }
+
+.tabs { --seg-radius: 7px; --seg-on-bg: var(--surface); --seg-on-fg: var(--text); --seg-on-ring: var(--shadow-card); background: var(--gray-soft); border-radius: 9px; padding: 3px; }
+.tabs .seg-btn { height: 28px; padding: 0 12px; font-weight: 500; color: var(--text-2); }
+.tabs .seg-btn .k { margin-left: 6px; color: var(--text-3); font-size: 0.6875rem; }
 
 .header-right { margin-left: auto; display: flex; align-items: center; gap: 8px; }
 
@@ -153,10 +188,10 @@ svg { display: block; flex-shrink: 0; }
   background: var(--gray-soft);
   white-space: nowrap;
 }
-.status-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--green); }
-.status-pill.stale .status-dot { background: var(--amber); }
+.status-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--green); flex-shrink: 0; }
+.status-pill.stale .status-dot, .status-dot.stale { background: var(--amber); }
 .status-pill.offline .status-dot { background: var(--red); }
-.status-pill.sample .status-dot { background: var(--text-3); }
+.status-pill.sample .status-dot, .status-dot.off { background: var(--text-3); }
 
 .clock { font-size: 0.75rem; color: var(--text-3); white-space: nowrap; }
 
@@ -171,9 +206,12 @@ svg { display: block; flex-shrink: 0; }
   background: var(--surface); box-shadow: var(--shadow-card);
   white-space: nowrap;
 }
+.btn.sm { height: 28px; padding: 0 10px; font-size: 0.75rem; }
+.btn.primary { background: var(--text); color: var(--bg); box-shadow: none; }
+.btn:disabled { opacity: .45; }
 @media (hover: hover) and (pointer: fine) {
   .icon-btn:hover { background: var(--gray-soft); color: var(--text); }
-  .btn:hover { background: var(--surface-hover); }
+  .btn:not(.primary):not(:disabled):hover { background: var(--surface-hover); }
 }
 .btn[aria-busy="true"] { color: var(--text-2); cursor: progress; }
 /* A faster spinner reads as faster loading. Linear: it's constant motion. */
@@ -190,66 +228,33 @@ svg { display: block; flex-shrink: 0; }
   background: var(--amber-soft); color: var(--amber-text);
   font-size: 0.8125rem;
 }
-.notice[hidden] { display: none; }
 .notice.error { background: var(--red-soft); color: var(--red-text); }
 .notice.neutral { background: var(--gray-soft); color: var(--text-2); }
 .notice b { font-weight: 600; }
 .notice svg { margin-top: 2px; }
-
-/* ─── Filter / summary segmented control ──────────────────
-   The summary numbers ARE the filter. The active state is drawn by a duplicate
-   layer clipped to the active segment; moving the clip-path animates the
-   colour change perfectly, which per-button colour transitions can't do. */
-.segments-wrap { margin-bottom: 16px; }
-.segments {
-  position: relative;
-  display: grid; grid-template-columns: repeat(4, minmax(0, 1fr));
-  background: var(--surface); border-radius: var(--radius);
-  box-shadow: var(--shadow-card);
-  padding: 4px;
-}
-.segments-layer { display: contents; }
-.seg {
-  position: relative;
-  display: flex; flex-direction: column; align-items: flex-start; gap: 2px;
-  padding: 10px 14px 11px; border-radius: 9px; text-align: left;
-  min-width: 0;
-}
-.seg-label { font-size: 0.75rem; font-weight: 500; color: var(--text-2); white-space: nowrap; }
-.seg-value { font-size: 1.5rem; font-weight: 600; letter-spacing: -0.025em; line-height: 1.15; }
-.seg-sub { font-size: 0.6875rem; color: var(--text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
-@media (hover: hover) and (pointer: fine) {
-  .segments-base .seg:hover { background: var(--surface-hover); }
-}
-.segments-active {
-  position: absolute; inset: 4px;
-  display: grid; grid-template-columns: repeat(4, minmax(0, 1fr));
-  pointer-events: none;
-  background: var(--accent-soft);
-  border-radius: 9px;
-  box-shadow: inset 0 0 0 1px var(--accent-line);
-  clip-path: inset(0 75% 0 0 round 9px);
-  transition: clip-path 220ms var(--ease-out);
-}
-.segments-active .seg-label, .segments-active .seg-value { color: var(--accent); }
-.segments-active .seg-sub { color: var(--accent); opacity: .75; }
-.segments-active.instant { transition: none; }
-
-/* ─── Main grid ──────────────────────────────────────────── */
-.grid { display: grid; grid-template-columns: minmax(0, 1fr) 380px; gap: 16px; align-items: start; }
+.notice code { font-size: 0.75rem; }
 
 .card { background: var(--surface); border-radius: var(--radius); box-shadow: var(--shadow-card); min-width: 0; }
-.table-wrap { overflow-x: clip; }  /* clip, not auto: a scroll container would break the sticky header */
+.card-title { font-weight: 600; font-size: 0.875rem; letter-spacing: -0.01em; }
 
-.list-head {
-  display: flex; align-items: center; gap: 12px;
-  padding: 12px 14px 12px 16px;
+/* ─── Overview: filter ───────────────────────────────────── */
+.filter { --cols: 4; --seg-gap: 0px; --seg-radius: 9px; --seg-on-bg: var(--accent-soft); --seg-on-fg: var(--accent); --seg-on-ring: inset 0 0 0 1px var(--accent-line);
+  padding: 4px; margin-bottom: 16px; }
+.filter .seg-btn { flex-direction: column; align-items: flex-start; justify-content: flex-start; gap: 2px; padding: 10px 14px 11px; text-align: left; }
+.f-label { font-size: 0.75rem; font-weight: 500; color: var(--text-2); white-space: nowrap; }
+.f-value { font-size: 1.5rem; font-weight: 600; letter-spacing: -0.025em; line-height: 1.15; }
+.f-sub { font-size: 0.6875rem; color: var(--text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+.seg-active .f-label, .seg-active .f-value { color: var(--accent); }
+.seg-active .f-sub { color: var(--accent); opacity: .75; }
+@media (hover: hover) and (pointer: fine) {
+  .filter .seg-base .seg-btn:hover { background: var(--surface-hover); }
 }
-.list-title { font-weight: 600; font-size: 0.875rem; letter-spacing: -0.01em; }
-.list-count { color: var(--text-3); }
-.search {
-  margin-left: auto; position: relative; display: flex; align-items: center;
-}
+
+/* ─── Overview: grid, table ──────────────────────────────── */
+.grid { display: grid; grid-template-columns: minmax(0, 1fr) 380px; gap: 16px; align-items: start; }
+
+.list-head { display: flex; align-items: center; gap: 12px; padding: 12px 14px 12px 16px; }
+.search { margin-left: auto; position: relative; display: flex; align-items: center; }
 .search svg { position: absolute; left: 9px; color: var(--text-3); pointer-events: none; }
 .search input {
   height: 30px; width: 200px; padding: 0 30px 0 30px;
@@ -260,12 +265,12 @@ svg { display: block; flex-shrink: 0; }
 .search input::placeholder { color: var(--text-3); }
 .search input:focus { outline: none; box-shadow: 0 0 0 2px var(--accent-line); }
 .kbd {
-  position: absolute; right: 7px;
-  font-size: 0.6875rem; color: var(--text-3);
+  font-size: 0.6875rem; color: var(--text-3); font-weight: 500;
   padding: 0 5px; border-radius: 4px; box-shadow: 0 0 0 1px var(--hairline-strong);
-  pointer-events: none;
 }
+.search .kbd { position: absolute; right: 7px; pointer-events: none; }
 
+.table-wrap { overflow-x: clip; }  /* clip, not auto: a scroll container would break the sticky header */
 .table { width: 100%; border-collapse: collapse; }
 .table th {
   position: sticky; top: var(--header-h); z-index: 2;
@@ -291,7 +296,6 @@ svg { display: block; flex-shrink: 0; }
   content: ""; position: absolute; left: 0; top: 8px; bottom: 8px; width: 2px;
   border-radius: 0 2px 2px 0; background: var(--accent);
 }
-
 /* First paint only: rows cascade in. Never on refresh or filter changes. */
 .row.enter { animation: rowIn 280ms var(--ease-out) both; }
 @keyframes rowIn { from { opacity: 0; transform: translateY(4px); } }
@@ -305,8 +309,8 @@ svg { display: block; flex-shrink: 0; }
 .mkt-quote { color: var(--text-3); font-weight: 500; }
 .mkt-tag { font-size: 0.6875rem; color: var(--text-3); margin-left: 2px; }
 
-/* Spread vs target: the bar shows the spread as a fraction of a 2× target
-   scale, with the target marked — "how far over" reads without a number. */
+/* Spread vs target: the bar shows the spread on a 2× target scale with the
+   target marked, so "how far over" reads without a number. */
 .spread { display: flex; align-items: center; gap: 10px; justify-content: flex-end; }
 .spread-bar { position: relative; width: 64px; height: 4px; border-radius: 2px; background: var(--gray-soft); overflow: hidden; }
 .spread-bar.none { visibility: hidden; }  /* keeps the numbers in one column */
@@ -322,11 +326,12 @@ svg { display: block; flex-shrink: 0; }
 .chip {
   display: inline-flex; align-items: center; height: 20px; padding: 0 7px;
   border-radius: 6px; font-size: 0.6875rem; font-weight: 600;
-  background: var(--gray-soft); color: var(--text-2);
+  background: var(--gray-soft); color: var(--text-2); white-space: nowrap;
 }
 .chip.t1 { background: var(--red-soft); color: var(--red-text); }
 .chip.t2 { background: var(--amber-soft); color: var(--amber-text); }
 .chip.ok { background: none; color: var(--text-3); font-weight: 500; padding: 0; }
+.chip.good { background: var(--green-soft); color: var(--green-text); }
 
 .tg { display: inline-flex; align-items: center; gap: 5px; font-size: 0.75rem; color: var(--text-3); }
 .tg.sent { color: var(--text); }
@@ -335,7 +340,7 @@ svg { display: block; flex-shrink: 0; }
 .empty { padding: 48px 16px; text-align: center; color: var(--text-3); }
 .empty b { display: block; color: var(--text-2); font-weight: 600; margin-bottom: 4px; }
 
-/* ─── Detail panel ───────────────────────────────────────── */
+/* ─── Overview: detail panel ─────────────────────────────── */
 .detail { position: sticky; top: calc(var(--header-h) + 16px); max-height: calc(100vh - var(--header-h) - 32px); overflow: auto; }
 .detail-inner { padding: 18px; }
 .sheet-handle { display: none; }
@@ -374,13 +379,62 @@ svg { display: block; flex-shrink: 0; }
 
 .d-empty { padding: 56px 24px; text-align: center; color: var(--text-3); }
 .hint { color: var(--text-3); font-size: 0.6875rem; margin-top: 16px; display: flex; gap: 10px; flex-wrap: wrap; }
-.hint .kbd { position: static; display: inline-block; margin-right: 3px; }
+.hint .kbd { display: inline-block; margin-right: 3px; }
+
+/* ─── Depth view ─────────────────────────────────────────── */
+.toolbar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 8px; margin-bottom: 16px; }
+.range { --seg-radius: 7px; --seg-on-bg: var(--text); --seg-on-fg: var(--bg); }
+.range .seg-btn { height: 30px; min-width: 44px; padding: 0 10px; font-weight: 500; color: var(--text-2); }
+.vsep { width: 1px; height: 20px; background: var(--hairline-strong); }
+.dates { display: flex; align-items: center; gap: 6px; color: var(--text-3); font-size: 0.75rem; }
+.dates input {
+  height: 30px; padding: 0 8px; border: 0; border-radius: 7px;
+  background: var(--surface-2); color: var(--text); font: inherit; font-size: 0.75rem;
+}
+:root[data-theme="dark"] .dates input { color-scheme: dark; }
+.dates input:focus { outline: none; box-shadow: 0 0 0 2px var(--accent-line); }
+.dates .icon-btn { width: 28px; height: 28px; }
+.live { margin-left: auto; display: inline-flex; align-items: center; gap: 7px; padding-right: 6px; color: var(--text-3); font-size: 0.75rem; white-space: nowrap; }
+
+.kpis { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1px; background: var(--hairline); border-radius: var(--radius); overflow: hidden; box-shadow: var(--shadow-card); margin-bottom: 16px; }
+.kpi { background: var(--surface); padding: 14px 16px; min-width: 0; }
+.kpi-k { font-size: 0.75rem; color: var(--text-2); font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.kpi-v { font-size: 1.375rem; font-weight: 600; letter-spacing: -0.025em; line-height: 1.25; margin-top: 2px; }
+.kpi-s { font-size: 0.6875rem; color: var(--text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 1px; }
+.kpi-v.buy { color: var(--green-text); }
+.kpi-v.sell { color: var(--red-text); }
+.kpi-v.warn { color: var(--amber-text); }
+
+.charts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.charts .wide { grid-column: 1 / -1; }
+.chart-card { padding: 14px 16px 12px; }
+.chart-head { display: flex; align-items: flex-start; gap: 12px; margin-bottom: 8px; }
+.chart-sub { color: var(--text-3); font-size: 0.75rem; margin-top: 1px; }
+.chart-head .btn { margin-left: auto; }
+.legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 0.75rem; color: var(--text-2); margin-bottom: 8px; }
+.legend > span { display: inline-flex; align-items: center; gap: 6px; }
+.sw { width: 10px; height: 2px; border-radius: 1px; background: currentColor; display: inline-block; }
+.sw.dash { background: repeating-linear-gradient(90deg, currentColor 0 4px, transparent 4px 6px); }
+.sw.dot { width: 7px; height: 7px; border-radius: 50%; }
+.sw.bar { width: 8px; height: 8px; border-radius: 2px; }
+.legend .lt { color: var(--text-2); }
+.chart-box { position: relative; height: 240px; }
+.charts .wide .chart-box { height: 280px; }
+.chart-note { font-size: 0.6875rem; color: var(--text-3); margin-top: 8px; }
+.explain { margin-top: 10px; box-shadow: inset 0 1px 0 var(--hairline); padding-top: 8px; }
+.explain summary { cursor: pointer; color: var(--text-3); font-size: 0.75rem; list-style: none; display: inline-flex; align-items: center; gap: 6px; }
+.explain summary::-webkit-details-marker { display: none; }
+.explain summary svg { transition: transform 160ms var(--ease-out); }
+.explain[open] summary svg { transform: rotate(90deg); }
+.explain p { color: var(--text-2); font-size: 0.75rem; margin-top: 8px; max-width: 80ch; }
+.explain p + p { margin-top: 6px; }
+@media (hover: hover) and (pointer: fine) { .explain summary:hover { color: var(--text); } }
 
 /* ─── Tooltip ────────────────────────────────────────────
-   Delayed the first time, instant on neighbours while one is already showing.
+   Delayed the first time, instant on neighbours while one is showing.
    Scales from the chip it describes (origin set from JS). */
 .tip {
-  position: fixed; z-index: 60; pointer-events: none;
+  position: fixed; z-index: 90; pointer-events: none;
   max-width: 260px; padding: 8px 10px; border-radius: 8px;
   background: var(--text); color: var(--bg);
   font-size: 0.75rem; line-height: 1.4;
@@ -395,11 +449,11 @@ svg { display: block; flex-shrink: 0; }
 /* ─── Toasts ─────────────────────────────────────────────
    Transitions, not keyframes, so a toast added mid-exit retargets smoothly.
    Enter and exit along the same edge; exit is quicker than enter. */
-.toaster { position: fixed; right: 20px; bottom: 20px; z-index: 70; display: flex; flex-direction: column; gap: 8px; align-items: flex-end; pointer-events: none; }
+.toaster { position: fixed; right: 20px; bottom: 20px; z-index: 95; display: flex; flex-direction: column; gap: 8px; align-items: flex-end; pointer-events: none; }
 .toast {
   pointer-events: auto;
   display: flex; align-items: center; gap: 10px;
-  min-width: 260px; max-width: 360px; padding: 12px 14px;
+  min-width: 260px; max-width: 380px; padding: 12px 14px;
   border-radius: 10px; background: var(--surface); box-shadow: var(--shadow-pop);
   font-size: 0.8125rem;
   opacity: 0; transform: translateY(100%);
@@ -407,18 +461,109 @@ svg { display: block; flex-shrink: 0; }
 }
 .toast[data-mounted="true"] { opacity: 1; transform: none; }
 .toast[data-leaving="true"] { opacity: 0; transform: translateY(100%); transition-duration: 200ms; transition-timing-function: ease-in-out; }
-.toast-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--green); }
+.toast-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--green); flex-shrink: 0; }
 .toast.error .toast-dot { background: var(--red); }
 .toast small { color: var(--text-3); display: block; }
+.toast .btn { margin-left: auto; }
 
-/* Depth is repeated in the detail panel, so it's the first column to go. */
+/* ─── Config drawer ──────────────────────────────────────
+   Enters along the right edge on the iOS drawer curve and leaves the same
+   way, faster. Transitions (not keyframes) so a close mid-open reverses
+   from wherever it is. */
+.cfg-scrim {
+  position: fixed; inset: 0; z-index: 80; background: var(--scrim);
+  opacity: 0; pointer-events: none; transition: opacity 250ms ease;
+}
+.cfg-scrim.show { opacity: 1; pointer-events: auto; }
+.cfg {
+  position: fixed; top: 0; right: 0; bottom: 0; z-index: 85;
+  width: min(600px, 100vw);
+  display: flex; flex-direction: column;
+  background: var(--surface); box-shadow: var(--shadow-drawer);
+  transform: translateX(100%); visibility: hidden;
+  transition: transform 260ms var(--ease-in-out), visibility 0s linear 260ms;
+}
+.cfg.open { transform: none; visibility: visible; transition: transform 420ms var(--ease-drawer), visibility 0s; }
+.cfg:focus { outline: none; }
+.cfg-head { padding: 16px 20px 12px; display: flex; align-items: flex-start; gap: 12px; }
+.cfg-title { font-size: 1rem; font-weight: 600; letter-spacing: -0.015em; }
+.cfg-head .icon-btn { margin-left: auto; margin-top: -4px; margin-right: -6px; }
+.cfg-index { display: flex; gap: 4px; padding: 0 20px 10px; overflow-x: auto; scrollbar-width: none; box-shadow: inset 0 -1px 0 var(--hairline); }
+.cfg-index::-webkit-scrollbar { display: none; }
+.cfg-index button { height: 26px; padding: 0 9px; border-radius: 6px; font-size: 0.75rem; font-weight: 500; color: var(--text-3); white-space: nowrap; }
+.cfg-index button[aria-current="true"] { background: var(--gray-soft); color: var(--text); }
+@media (hover: hover) and (pointer: fine) { .cfg-index button:hover { color: var(--text); } }
+.cfg-body { flex: 1; overflow-y: auto; overscroll-behavior: contain; padding: 4px 20px 32px; }
+.cfg-section { padding-top: 20px; scroll-margin-top: 4px; }
+.cfg-section + .cfg-section { margin-top: 8px; box-shadow: inset 0 1px 0 var(--hairline); }
+.cfg-section h3 { font-size: 0.8125rem; font-weight: 600; letter-spacing: -0.005em; margin-bottom: 2px; }
+.cfg-section .sec-sub { color: var(--text-3); font-size: 0.75rem; margin-bottom: 12px; min-height: 2px; }
+.fields { display: grid; grid-template-columns: 1fr 1fr; gap: 14px 16px; }
+.field { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.field label { font-size: 0.75rem; font-weight: 500; color: var(--text-2); display: flex; align-items: center; gap: 6px; }
+.field.dirty label::after { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); flex-shrink: 0; }
+.input, .field select {
+  height: 32px; width: 100%; padding: 0 10px; border: 0; border-radius: 7px;
+  background: var(--surface-2); color: var(--text);
+  font: inherit; font-size: 0.8125rem; font-variant-numeric: tabular-nums;
+}
+.field select { padding-right: 6px; }
+.input:focus, .field select:focus { outline: none; box-shadow: 0 0 0 2px var(--accent-line); }
+.field.dirty .input, .field.dirty select { box-shadow: inset 0 0 0 1px var(--accent-line); }
+.field.dirty .input:focus, .field.dirty select:focus { box-shadow: 0 0 0 2px var(--accent-line); }
+/* Hints stay readable at two lines and open fully while the field has focus. */
+.field-hint { font-size: 0.6875rem; color: var(--text-3); line-height: 1.45; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.field:focus-within .field-hint { -webkit-line-clamp: unset; display: block; color: var(--text-2); }
+
+.pairs-tools { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
+.pairs-tools .search { margin-left: 0; flex: 1; width: auto !important; }
+.pairs-tools .search input { width: 100%; padding-right: 10px; }
+.ptable { width: 100%; border-collapse: collapse; }
+.ptable th { text-align: left; font-size: 0.6875rem; font-weight: 500; color: var(--text-3); padding: 6px 4px; white-space: nowrap; }
+.ptable td { padding: 2px; }
+.ptable .input { height: 30px; padding: 0 8px; background: transparent; font-size: 0.75rem; }
+.ptable .input:hover, .ptable .input:focus { background: var(--surface-2); }
+.ptable tr.dirty td:first-child .input { box-shadow: inset 2px 0 0 var(--accent); }
+.ptable .na { color: var(--text-3); padding-left: 8px; font-size: 0.75rem; }
+.mute-btn { height: 26px; padding: 0 8px; border-radius: 6px; font-size: 0.6875rem; font-weight: 600; color: var(--text-2); box-shadow: 0 0 0 1px var(--hairline-strong); white-space: nowrap; }
+.mute-btn.on { background: var(--amber-soft); color: var(--amber-text); box-shadow: none; }
+.del-btn { width: 26px; height: 26px; border-radius: 6px; display: grid; place-items: center; color: var(--text-3); }
+@media (hover: hover) and (pointer: fine) {
+  .del-btn:hover { color: var(--red-text); background: var(--red-soft); }
+  .mute-btn:not(.on):hover { color: var(--text); }
+}
+.add-pair { display: grid; grid-template-columns: 1.4fr 1fr 1fr 1fr 1fr auto; gap: 6px; margin-top: 10px; padding: 8px; border-radius: 10px; background: var(--surface-2); }
+.add-pair .input { background: var(--surface); height: 30px; font-size: 0.75rem; }
+.pairs-note { font-size: 0.6875rem; color: var(--text-3); margin-top: 8px; }
+
+.cfg-foot { padding: 12px 20px calc(12px + env(safe-area-inset-bottom)); display: flex; align-items: center; gap: 8px; box-shadow: inset 0 1px 0 var(--hairline); background: var(--surface); }
+.cfg-status { font-size: 0.75rem; color: var(--text-3); margin-right: auto; }
+.cfg-status.dirty { color: var(--text); font-weight: 500; }
+.cfg-status.err { color: var(--red-text); }
+.cfg-foot .confirm { margin-right: auto; font-weight: 500; }
+
+/* Hold to reset: a slow, deliberate fill while held (2s linear) and a fast
+   snap back on release (200ms ease-out). Asymmetric on purpose. */
+.hold { position: relative; overflow: hidden; }
+.hold .hold-fill {
+  position: absolute; inset: 0; background: var(--red-soft);
+  clip-path: inset(0 100% 0 0);
+  transition: clip-path 200ms var(--ease-out);
+}
+.hold.holding .hold-fill { clip-path: inset(0 0 0 0); transition: clip-path 2s linear; }
+.hold span { position: relative; }
+.hold.holding { color: var(--red-text); }
+
+/* ─── Narrow screens ─────────────────────────────────────── */
 @media (max-width: 1360px) { .col-depth { display: none; } }
-
-/* ─── Narrow screens: detail becomes a bottom sheet ───────── */
 .scrim { display: none; }
+@media (max-width: 1100px) {
+  .charts { grid-template-columns: minmax(0, 1fr); }
+  .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
 @media (max-width: 960px) {
   .grid { grid-template-columns: minmax(0, 1fr); }
-  .col-depth, .col-tg { display: none; }
+  .col-tg { display: none; }
   .detail {
     position: fixed; left: 0; right: 0; bottom: 0; top: auto; z-index: 50;
     max-height: 86vh; border-radius: 16px 16px 0 0;
@@ -437,37 +582,48 @@ svg { display: block; flex-shrink: 0; }
     opacity: 0; pointer-events: none; transition: opacity 300ms ease;
   }
   .scrim.show { opacity: 1; pointer-events: auto; }
-  .hint { display: none; }
+  .hint, .clock, .tabs .k { display: none; }
 }
-@media (max-width: 640px) {
-  .header { padding: 0 16px; gap: 10px; }
-  .brand-sep, .brand-page, .clock { display: none; }
+@media (max-width: 720px) {
+  .header { padding: 0 12px; gap: 8px; }
+  .brand-name, .status-pill #status-text { display: none; }
+  .status-pill { padding: 0 9px; }
+  .t-long { display: none; }
+  .t-short { display: inline; }
+  .tabs .seg-btn { padding: 0 10px; }
   .page { padding: 16px 16px 40px; }
-  .segments, .segments-active { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .segments-active { clip-path: none !important; display: none; }
-  .segments-base .seg[aria-pressed="true"] { background: var(--accent-soft); }
-  .segments-base .seg[aria-pressed="true"] .seg-value, .segments-base .seg[aria-pressed="true"] .seg-label { color: var(--accent); }
-  .seg-value { font-size: 1.25rem; }
+  .filter { --cols: 2; }
+  .f-value { font-size: 1.25rem; }
   .list-head { flex-wrap: wrap; }
   .search { margin-left: 0; width: 100%; }
-  .search input { width: 100%; }
-  .col-mid { display: none; }
-  .spread-bar { display: none; }
-  .delta, .mkt-tag, .th-sub, .search .kbd { display: none; }
-  .search input { padding-right: 10px; }
+  .search input { width: 100%; padding-right: 10px; }
+  .search .kbd { display: none; }
+  .col-mid, .spread-bar, .delta, .mkt-tag, .th-sub { display: none; }
   .table td, .table th { padding-left: 10px; padding-right: 10px; }
   .btn-label { display: none; }
+  .toolbar .live { margin-left: 0; width: 100%; padding: 2px 4px 0; }
+  .toolbar .vsep { display: none; }
+  .fields { grid-template-columns: minmax(0, 1fr); }
+  .add-pair { grid-template-columns: 1fr 1fr; }
+  .ptable .alias { display: none; }
+  .toaster { left: 12px; right: 12px; bottom: 12px; align-items: stretch; }
+  .toast { min-width: 0; max-width: none; }
+  .cfg-foot { flex-wrap: wrap; }
+  .cfg-status { width: 100%; }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .pressable:active { transform: none; }
+  .pressable:active:not(:disabled) { transform: none; }
   .row.enter { animation: none; }
-  .segments-active { transition: none; }
+  .seg-active { transition: none; }
   .tip { transform: none; }
   .toast, .toast[data-leaving="true"] { transform: none; transition: opacity 200ms ease; }
-  .detail { transition: opacity 200ms ease; }
+  .explain summary svg { transition: none; }
+  .cfg { transform: none; opacity: 0; transition: opacity 200ms ease, visibility 0s linear 200ms; }
+  .cfg.open { transform: none; opacity: 1; transition: opacity 200ms ease, visibility 0s; }
+  .hold.holding .hold-fill { transition: none; clip-path: inset(0 0 0 0); }
   @media (max-width: 960px) {
-    .detail { transform: none; opacity: 0; pointer-events: none; }
+    .detail { transform: none; opacity: 0; pointer-events: none; transition: opacity 200ms ease; }
     .detail.open { opacity: 1; pointer-events: auto; }
   }
   .btn[aria-busy="true"] .refresh-icon { animation: none; opacity: .5; }
@@ -482,13 +638,15 @@ svg { display: block; flex-shrink: 0; }
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg>
     </div>
     <span class="brand-name">Market Monitor</span>
-    <span class="brand-sep">/</span>
-    <span class="brand-page">Overview</span>
   </div>
+  <nav class="tabs" id="tabs" aria-label="Views"></nav>
   <div class="header-right">
     <span class="status-pill" id="status-pill" role="status"><span class="status-dot"></span><span id="status-text">Connecting…</span></span>
     <span class="clock num" id="clock">—</span>
     <button class="icon-btn pressable" id="theme-btn" type="button" aria-label="Switch theme"></button>
+    <button class="icon-btn pressable" id="cfg-btn" type="button" aria-label="Configuration" aria-haspopup="dialog">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/></svg>
+    </button>
     <button class="btn pressable" id="refresh-btn" type="button">
       <svg class="refresh-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/></svg>
       <span class="btn-label">Refresh</span>
@@ -499,102 +657,272 @@ svg { display: block; flex-shrink: 0; }
 <main class="page">
   <div class="notice" id="notice" hidden></div>
 
-  <div class="segments-wrap">
-    <div class="segments" id="segments" role="group" aria-label="Filter markets">
-      <div class="segments-layer segments-base" id="seg-base"></div>
-      <div class="segments-active" id="seg-active" aria-hidden="true"></div>
+  <!-- ═══ Overview ═══════════════════════════════════════════════════════ -->
+  <section id="view-overview">
+    <div class="card filter" id="filter"></div>
+
+    <div class="grid">
+      <section class="card" aria-labelledby="list-title">
+        <div class="list-head">
+          <span class="card-title" id="list-title">Markets</span>
+          <span class="muted num" id="list-count"></span>
+          <label class="search">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+            <input id="search" type="search" placeholder="Filter markets" autocomplete="off" spellcheck="false" aria-label="Filter markets" />
+            <span class="kbd" aria-hidden="true">/</span>
+          </label>
+        </div>
+        <div class="table-wrap">
+          <table class="table" aria-label="Markets">
+            <thead>
+              <tr>
+                <th>Market</th>
+                <th class="r col-mid">Mid</th>
+                <th class="r">Spread<span class="th-sub"> vs target</span></th>
+                <th class="r col-depth">Depth bid / ask</th>
+                <th>Issues</th>
+                <th class="col-tg">Telegram</th>
+              </tr>
+            </thead>
+            <tbody id="rows"></tbody>
+          </table>
+        </div>
+        <div class="empty" id="empty" hidden></div>
+      </section>
+
+      <aside class="card detail" id="detail" aria-label="Market detail" tabindex="-1">
+        <div class="sheet-handle" id="sheet-handle" aria-hidden="true"></div>
+        <div class="detail-inner" id="detail-inner"></div>
+      </aside>
     </div>
-  </div>
+  </section>
 
-  <div class="grid">
-    <section class="card" aria-labelledby="list-title">
-      <div class="list-head">
-        <span class="list-title" id="list-title">Markets</span>
-        <span class="list-count num" id="list-count"></span>
-        <label class="search">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
-          <input id="search" type="search" placeholder="Filter markets" autocomplete="off" spellcheck="false" aria-label="Filter markets" />
-          <span class="kbd" aria-hidden="true">/</span>
-        </label>
-      </div>
-      <div class="table-wrap">
-      <table class="table" aria-label="Markets">
-        <thead>
-          <tr>
-            <th>Market</th>
-            <th class="r col-mid">Mid</th>
-            <th class="r">Spread<span class="th-sub"> vs target</span></th>
-            <th class="r col-depth">Depth bid / ask</th>
-            <th>Issues</th>
-            <th class="col-tg">Telegram</th>
-          </tr>
-        </thead>
-        <tbody id="rows"></tbody>
-      </table>
-      </div>
-      <div class="empty" id="empty" hidden></div>
-    </section>
+  <!-- ═══ USDT/NGN depth ═════════════════════════════════════════════════ -->
+  <section id="view-depth" hidden>
+    <div class="notice" id="depth-notice" hidden></div>
 
-    <aside class="card detail" id="detail" aria-label="Market detail" tabindex="-1">
-      <div class="sheet-handle" id="sheet-handle" aria-hidden="true"></div>
-      <div class="detail-inner" id="detail-inner"></div>
-    </aside>
-  </div>
+    <div class="card toolbar">
+      <div class="range" id="range"></div>
+      <div class="vsep" aria-hidden="true"></div>
+      <div class="dates">
+        <span>Archive</span>
+        <input type="date" id="date-start" aria-label="Archive start date" />
+        <span>to</span>
+        <input type="date" id="date-end" aria-label="Archive end date" />
+        <button class="icon-btn pressable" id="date-clear" type="button" aria-label="Clear archive dates" hidden>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg>
+        </button>
+      </div>
+      <span class="live" id="depth-live"><span class="status-dot off"></span><span id="depth-live-text">Loading…</span></span>
+    </div>
+
+    <div class="kpis">
+      <div class="kpi"><div class="kpi-k">Avg buy slippage</div><div class="kpi-v num buy" id="k-buy">—</div><div class="kpi-s" id="k-buy-s">₦ from mid</div></div>
+      <div class="kpi"><div class="kpi-k">Avg sell slippage</div><div class="kpi-v num sell" id="k-sell">—</div><div class="kpi-s" id="k-sell-s">₦ from mid</div></div>
+      <div class="kpi"><div class="kpi-k">G1 partial fills</div><div class="kpi-v num" id="k-g1">—</div><div class="kpi-s" id="k-g1-s">book couldn’t fill the walk</div></div>
+      <div class="kpi"><div class="kpi-k">Samples in window</div><div class="kpi-v num" id="k-n">—</div><div class="kpi-s" id="k-n-s">raw · hourly</div></div>
+      <div class="kpi"><div class="kpi-k" id="k-ask-k">Ask uptime</div><div class="kpi-v num" id="k-ask">—</div><div class="kpi-s" id="k-ask-s">this hour</div></div>
+      <div class="kpi"><div class="kpi-k" id="k-bid-k">Bid uptime</div><div class="kpi-v num" id="k-bid">—</div><div class="kpi-s" id="k-bid-s">this hour</div></div>
+      <div class="kpi"><div class="kpi-k">Spread ≤ ₦1</div><div class="kpi-v num" id="k-gap">—</div><div class="kpi-s" id="k-gap-s">this hour</div></div>
+      <div class="kpi"><div class="kpi-k" id="k-vol-k">Volume · trailing 60m</div><div class="kpi-v num" id="k-vol">—</div><div class="kpi-s" id="k-vol-s">USDT traded</div></div>
+    </div>
+
+    <div class="charts">
+      <section class="card chart-card wide">
+        <div class="chart-head">
+          <div><div class="card-title">Slippage vs mid</div><div class="chart-sub num" id="slip-sub">—</div></div>
+        </div>
+        <div class="legend">
+          <span style="color:var(--green)"><i class="sw"></i><span class="lt" id="lg-buy">Buy</span></span>
+          <span style="color:var(--red)"><i class="sw"></i><span class="lt" id="lg-sell">Sell</span></span>
+          <span style="color:var(--amber)"><i class="sw dot"></i><span class="lt">G1 partial fill</span></span>
+        </div>
+        <div class="chart-box"><canvas id="c-slip" role="img" aria-label="USDT/NGN buy and sell slippage over time"></canvas></div>
+        <details class="explain">
+          <summary><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>How this is measured</summary>
+          <p>Buy slip % = ((weighted avg buy price ÷ mid) − 1) × 100, and the same for sell. Each point walks the visible order book cumulatively until <b id="ex-w">100k USDT</b> is consumed, clipping the boundary layer.</p>
+          <p>Mid is itself a small depth walk — the average of <b id="ex-mid">1k USDT</b> walked on each side, not raw best ask / best bid — so a lone dust order at the touch can’t distort the reference. Points inside the last hour are 5-second snapshots; older points are hourly averages.</p>
+        </details>
+      </section>
+
+      <section class="card chart-card">
+        <div class="chart-head">
+          <div><div class="card-title">Liquidity uptime</div><div class="chart-sub">Trading hours, Mon–Fri 9am–6pm WAT</div></div>
+          <button class="btn sm pressable" id="csv-uptime" type="button">CSV</button>
+        </div>
+        <div class="legend">
+          <span style="color:var(--green)"><i class="sw"></i><span class="lt" id="lg-ask">Ask</span></span>
+          <span style="color:var(--red)"><i class="sw"></i><span class="lt" id="lg-bid">Bid</span></span>
+          <span style="color:var(--blue)"><i class="sw dash"></i><span class="lt">Spread ≤ ₦1</span></span>
+        </div>
+        <div class="chart-box"><canvas id="c-up" role="img" aria-label="USDT/NGN liquidity uptime over time"></canvas></div>
+        <details class="explain">
+          <summary><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>How this is measured</summary>
+          <p>A ±<b class="ex-pct">0.071</b>% band around live mid — that percent is 1₦ ÷ <b id="ex-ref">1400</b>₦ target price, applied multiplicatively so the band tracks mid. Per 5-second poll, a side scores 1 if at least <b id="ex-uw">100k USDT</b> of resting size sits within its band, else 0. Each hourly point is the fraction of that hour’s usable polls that passed. The marked point is the in-progress hour, the same value shown live above. A poll where one side of the book was empty doesn’t count either way.</p>
+          <p>The dashed line is spread ≤ ₦1 compliance: on the same poll, the raw top-of-book gap scores 1 if it’s within ₦1. It’s a fixed ₦1 so stored history stays comparable. Hours recorded before this metric shipped show a gap rather than 0%.</p>
+        </details>
+      </section>
+
+      <section class="card chart-card">
+        <div class="chart-head">
+          <div><div class="card-title">Traded volume</div><div class="chart-sub" id="vol-sub">USDT, all hours</div></div>
+          <button class="btn sm pressable" id="csv-vol" type="button">CSV</button>
+        </div>
+        <div class="legend">
+          <span style="color:var(--accent)"><i class="sw bar"></i><span class="lt" id="lg-vol">Volume per hour</span></span>
+        </div>
+        <div class="chart-box"><canvas id="c-vol" role="img" aria-label="USDT/NGN traded volume"></canvas></div>
+        <div class="chart-note" id="vol-note" hidden></div>
+        <details class="explain">
+          <summary><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>How this is measured</summary>
+          <p>Each bar is one closed WAT hour of base volume — USDT traded, straight from the exchange’s hourly candle. It is not the naira turnover D1 thresholds on. The current hour is never a bar; on the 1h range the card above covers “right now” with a trailing 60 minutes rebuilt from 1-minute candles.</p>
+          <p>The exchange serves 300 candles per request, so a live fetch reaches ~12.5 days back; older hours come from the monitor’s own archive. Over 14 days the bars switch to daily sums. The CSV export stays hourly.</p>
+        </details>
+      </section>
+
+      <section class="card chart-card wide">
+        <div class="chart-head">
+          <div><div class="card-title">Weighted average prices vs mid</div><div class="chart-sub">Raw price levels; hourly points carry mid only</div></div>
+        </div>
+        <div class="legend">
+          <span style="color:var(--accent)"><i class="sw"></i><span class="lt" id="lg-mid">Mid</span></span>
+          <span style="color:var(--green)"><i class="sw dash"></i><span class="lt" id="lg-wb">Weighted avg buy</span></span>
+          <span style="color:var(--red)"><i class="sw dash"></i><span class="lt" id="lg-ws">Weighted avg sell</span></span>
+        </div>
+        <div class="chart-box"><canvas id="c-px" role="img" aria-label="USDT/NGN weighted prices"></canvas></div>
+      </section>
+    </div>
+  </section>
 </main>
+
+<!-- ═══ Configuration drawer ═════════════════════════════════════════════ -->
+<div class="cfg-scrim" id="cfg-scrim"></div>
+<aside class="cfg" id="cfg" role="dialog" aria-modal="true" aria-labelledby="cfg-title" tabindex="-1">
+  <div class="cfg-head">
+    <div>
+      <div class="cfg-title" id="cfg-title">Configuration</div>
+      <div class="muted" style="font-size:.75rem">Saved changes apply on the monitor’s next cycle.</div>
+    </div>
+    <button class="icon-btn pressable" id="cfg-close" type="button" aria-label="Close configuration">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg>
+    </button>
+  </div>
+  <nav class="cfg-index" id="cfg-index" aria-label="Configuration sections"></nav>
+  <div class="cfg-body" id="cfg-body"></div>
+  <div class="cfg-foot" id="cfg-foot"></div>
+</aside>
 
 <div class="scrim" id="scrim"></div>
 <div class="tip" id="tip" role="tooltip"></div>
 <div class="toaster" id="toaster" aria-live="polite"></div>
 
 <script>
-// ── Config ────────────────────────────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════════════
+// Shared
+// ══════════════════════════════════════════════════════════════════════════════
 const params = new URLSearchParams(location.search);
 const API = params.get("api") || (location.protocol === "file:" ? "http://localhost:8765" : "");
-const POLL_MS = 60_000;
 const SNAPSHOT = {"summary":{"total_pairs":37,"healthy":28,"warnings":9,"alerts_fired":7,"last_updated":"2026-08-22 13:15:56","last_updated_age_seconds":4482722.5,"monitor_stale":true,"server_time_ngt":"2026-10-13 10:27:58"},"issue_tiers":{"A1":{"CRITICAL":2,"HIGH":2,"MEDIUM":2},"A2":{"CRITICAL":1,"HIGH":2,"MEDIUM":2},"A3":{"CRITICAL":1,"HIGH":1,"MEDIUM":1},"A4":{"CRITICAL":3,"HIGH":3,"MEDIUM":3},"A5":{"CRITICAL":3,"HIGH":3,"MEDIUM":3},"A6":{"CRITICAL":1,"HIGH":1,"MEDIUM":3},"B1":{"CRITICAL":1,"HIGH":1,"MEDIUM":3},"B2":{"CRITICAL":2,"HIGH":2,"MEDIUM":2},"B3":{"CRITICAL":2,"HIGH":2,"MEDIUM":3},"B4":{"CRITICAL":1,"HIGH":2,"MEDIUM":2},"D1":{"CRITICAL":2,"HIGH":2,"MEDIUM":2},"D2":{"CRITICAL":3,"HIGH":3,"MEDIUM":3},"F1":{"CRITICAL":3,"HIGH":3,"MEDIUM":3},"G2":{"CRITICAL":1,"HIGH":2,"MEDIUM":2},"E1":{"CRITICAL":1,"HIGH":1,"MEDIUM":1},"E2":{"CRITICAL":1,"HIGH":1,"MEDIUM":1}},"pairs":[{"symbol":"aaveusdt","monitor_only":false,"alert_tier":0,"issues":null,"mid_price":125.8135,"current_spread":0.285343,"target_spread":0.3,"percent_diff":-4.89,"depth_bid":"$35.8K","depth_ask":"$16.6K","ask_layers":70,"bid_layers":74,"dws":0.1706,"dws_threshold":0.5,"imbalance_ratio":2.15,"heavier_side":"bids","telegram_fired":false,"telegram_detail":null,"timestamp":"2026-08-22 13:15:56","d1_context":"\u00e2\u2030\u02c60.6x typical (baseline warming 2/4 \u00e2\u20ac\u201d absolute floor active)","g2_worst_swing_pct":3.175,"g2_worst_candle":"10:00 UTC","layer_churn_pct":100.0,"b1_diff_pct":0.2978,"b1_threshold_pct":0.65,"depth_deviation_pct":50.0,"trusted_ref":125.44,"min_orderbook_layers":10,"imbalance_threshold":5.0},{"symbol":"adausdt","monitor_only":false,"alert_tier":0,"issues":null,"mid_price":0.226,"current_spread":0.40708,"target_spread":2.0,"percent_diff":-79.65,"depth_bid":"$53.9K","depth_ask":"$39.1K","ask_layers":25,"bid_layers":25,"dws":0.3672,"dws_threshold":0.5,"imbalance_ratio":1.38,"heavier_side":"bids","telegram_fired":false,"telegram_detail":null,"timestamp":"2026-08-22 13:15:57","d1_context":"\u00e2\u2030\u02c61.2x typical (baseline warming 2/4 \u00e2\u20ac\u201d absolute floor active)","g2_worst_swing_pct":3.3221,"g2_worst_candle":"10:00 UTC","layer_churn_pct":100.0,"b1_diff_pct":-0.0884,"b1_threshold_pct":1.5,"depth_deviation_pct":50.0,"trusted_ref":0.2262,"min_orderbook_layers":10,"imbalance_threshold":5.0},{"symbol":"bchusdt","monitor_only":false,"alert_tier":0,"issues":null,"mid_price":278.5,"current_spread":0.359066,"target_spread":1.2,"percent_diff":-70.08,"depth_bid":"$9.6K","depth_ask":"$10.6K","ask_layers":26,"bid_layers":26,"dws":0.3576,"dws_threshold":0.5,"imbalance_ratio":1.11,"heavier_side":"asks","telegram_fired":false,"telegram_detail":null,"timestamp":"2026-08-22 13:15:57","d1_context":"\u00e2\u2030\u02c60.9x typical (baseline warming 2/4 \u00e2\u20ac\u201d absolute floor active)","g2_worst_swing_pct":2.2969,"g2_worst_candle":"08:00 UTC","layer_churn_pct":100.0,"b1_diff_pct":0.0359,"b1_threshold_pct":1.1,"depth_deviation_pct":50.0,"trusted_ref":278.4,"min_orderbook_layers":10,"imbalance_threshold":5.0},{"symbol":"bnbusdt","monitor_only":false,"alert_tier":0,"issues":null,"mid_price":696.11,"current_spread":0.301676,"target_spread":0.3,"percent_diff":0.56,"depth_bid":"$68.4K","depth_ask":"$68.8K","ask_layers":35,"bid_layers":35,"dws":0.1925,"dws_threshold":0.5,"imbalance_ratio":1.01,"heavier_side":"asks","telegram_fired":false,"telegram_detail":null,"timestamp":"2026-08-22 13:15:57","d1_context":"\u00e2\u2030\u02c60.4x typical (baseline warming 2/4 \u00e2\u20ac\u201d absolute floor active)","g2_worst_swing_pct":2.0527,"g2_worst_candle":"10:00 UTC","layer_churn_pct":100.0,"b1_diff_pct":-0.0187,"b1_threshold_pct":0.65,"depth_deviation_pct":50.0,"trusted_ref":696.24,"min_orderbook_layers":10,"imbalance_threshold":5.0},{"symbol":"bonkusdt","monitor_only":false,"alert_tier":2,"issues":"G2:HIGH","mid_price":3.19e-06,"current_spread":2.069614,"target_spread":2.0,"percent_diff":3.48,"depth_bid":"$3.1K","depth_ask":"$3.2K","ask_layers":25,"bid_layers":25,"dws":1.468,"dws_threshold":0.5,"imbalance_ratio":1.04,"heavier_side":"asks","telegram_fired":false,"telegram_detail":"G2:capped","timestamp":"2026-08-22 13:15:57","d1_context":"\u00e2\u2030\u02c61.2x typical (baseline warming 2/4 \u00e2\u20ac\u201d absolute floor active)","g2_worst_swing_pct":8.0495,"g2_worst_candle":"10:00 UTC","layer_churn_pct":100.0,"b1_diff_pct":-0.4682,"b1_threshold_pct":1.5,"depth_deviation_pct":50.0,"trusted_ref":3.2e-06,"min_orderbook_layers":10,"imbalance_threshold":5.0},{"symbol":"btcusdt","monitor_only":false,"alert_tier":0,"issues":null,"mid_price":77238.1,"current_spread":0.200005,"target_spread":0.2,"percent_diff":0.0,"depth_bid":"$2.67M","depth_ask":"$2.31M","ask_layers":42,"bid_layers":41,"dws":0.1426,"dws_threshold":0.5,"imbalance_ratio":1.15,"heavier_side":"bids","telegram_fired":false,"telegram_detail":null,"timestamp":"2026-08-22 13:15:57","d1_context":"\u00e2\u2030\u02c60.4x typical (baseline warming 2/4 \u00e2\u20ac\u201d absolute floor active)","g2_worst_swing_pct":0.7049,"g2_worst_candle":"10:00 UTC","layer_churn_pct":100.0,"b1_diff_pct":0.0067,"b1_threshold_pct":0.6,"depth_deviation_pct":50.0,"trusted_ref":77232.89,"min_orderbook_layers":10,"imbalance_threshold":5.0},{"symbol":"cfxusdt","monitor_only":false,"alert_tier":2,"issues":"G2:HIGH","mid_price":0.04842,"current_spread":2.023957,"target_spread":2.0,"percent_diff":1.2,"depth_bid":"$16.8K","depth_ask":"$17.6K","ask_layers":25,"bid_layers":25,"dws":1.4725,"dws_threshold":0.5,"imbalance_ratio":1.05,"heavier_side":"asks","telegram_fired":true,"telegram_detail":"G2:fired","timestamp":"2026-08-22 13:15:57","d1_context":"\u00e2\u2030\u02c61.1x typical (baseline warming 2/4 \u00e2\u20ac\u201d absolute floor active)","g2_worst_swing_pct":5.2416,"g2_worst_candle":"10:00 UTC","layer_churn_pct":100.0,"b1_diff_pct":-0.6158,"b1_threshold_pct":1.5,"depth_deviation_pct":50.0,"trusted_ref":0.04872,"min_orderbook_layers":10,"imbalance_threshold":5.0},{"symbol":"dashusdt","monitor_only":false,"alert_tier":0,"issues":null,"mid_price":40.437,"current_spread":2.013008,"target_spread":2.0,"percent_diff":0.65,"depth_bid":"$22.4K","depth_ask":"$24.2K","ask_layers":27,"bid_layers":40,"dws":1.3808,"dws_threshold":0.5,"imbalance_ratio":1.08,"heavier_side":"asks","telegram_fired":false,"telegram_detail":null,"timestamp":"2026-08-22 13:15:57","d1_context":"\u00e2\u2030\u02c60.9x typical (baseline warming 2/4 \u00e2\u20ac\u201d absolute floor active)","g2_worst_swing_pct":4.3546,"g2_worst_candle":"08:00 UTC","layer_churn_pct":97.1,"b1_diff_pct":-0.4015,"b1_threshold_pct":1.5,"depth_deviation_pct":50.0,"trusted_ref":40.6,"min_orderbook_layers":10,"imbalance_threshold":5.0},{"symbol":"dotusdt","monitor_only":false,"alert_tier":0,"issues":null,"mid_price":0.9279,"current_spread":0.301757,"target_spread":0.26,"percent_diff":16.06,"depth_bid":"$9.5K","depth_ask":"$8.6K","ask_layers":34,"bid_layers":34,"dws":0.2007,"dws_threshold":0.5,"imbalance_ratio":1.1,"heavier_side":"bids","telegram_fired":false,"telegram_detail":null,"timestamp":"2026-08-22 13:15:57","d1_context":"\u00e2\u2030\u02c60.5x typical (baseline warming 2/4 \u00e2\u20ac\u201d absolute floor active)","g2_worst_swing_pct":2.5776,"g2_worst_candle":"08:00 UTC","layer_churn_pct":100.0,"b1_diff_pct":-0.0969,"b1_threshold_pct":0.63,"depth_deviation_pct":50.0,"trusted_ref":0.9288,"min_orderbook_layers":10,"imbalance_threshold":5.0},{"symbol":"dogeusdt","monitor_only":false,"alert_tier":0,"issues":null,"mid_price":0.090825,"current_spread":0.275255,"target_spread":0.26,"percent_diff":5.87,"depth_bid":"$57.2K","depth_ask":"$58.3K","ask_layers":93,"bid_layers":93,"dws":0.1855,"dws_threshold":0.5,"imbalance_ratio":1.02,"heavier_side":"asks","telegram_fired":false,"telegram_detail":null,"timestamp":"2026-08-22 13:15:57","d1_context":"\u00e2\u2030\u02c61.2x typical (baseline warming 2/4 \u00e2\u20ac\u201d absolute floor active)","g2_worst_swing_pct":2.9583,"g2_worst_candle":"10:00 UTC","layer_churn_pct":100.0,"b1_diff_pct":-0.0385,"b1_threshold_pct":0.63,"depth_deviation_pct":50.0,"trusted_ref":0.09086,"min_orderbook_layers":10,"imbalance_threshold":5.0},{"symbol":"ethusdt","monitor_only":false,"alert_tier":0,"issues":null,"mid_price":2432.075,"current_spread":0.250403,"target_spread":0.25,"percent_diff":0.16,"depth_bid":"$289.5K","depth_ask":"$269.2K","ask_layers":70,"bid_layers":71,"dws":0.146,"dws_threshold":0.5,"imbalance_ratio":1.08,"heavier_side":"bids","telegram_fired":false,"telegram_detail":null,"timestamp":"2026-08-22 13:15:57","d1_context":"\u00e2\u2030\u02c60.9x typical (baseline warming 2/4 \u00e2\u20ac\u201d absolute floor active)","g2_worst_swing_pct":1.0839,"g2_worst_candle":"08:00 UTC","layer_churn_pct":100.0,"b1_diff_pct":-0.0203,"b1_threshold_pct":0.625,"depth_deviation_pct":50.0,"trusted_ref":2432.57,"min_orderbook_layers":10,"imbalance_threshold":5.0},{"symbol":"fartcoinusdt","monitor_only":false,"alert_tier":2,"issues":"G2:HIGH","mid_price":0.19442,"current_spread":2.016253,"target_spread":2.0,"percent_diff":0.81,"depth_bid":"$21.7K","depth_ask":"$24.0K","ask_layers":25,"bid_layers":25,"dws":1.3898,"dws_threshold":0.5,"imbalance_ratio":1.11,"heavier_side":"asks","telegram_fired":true,"telegram_detail":"G2:fired","timestamp":"2026-08-22 13:15:57","d1_context":"\u00e2\u2030\u02c60.8x typical (baseline warming 2/4 \u00e2\u20ac\u201d absolute floor active)","g2_worst_swing_pct":6.4963,"g2_worst_candle":"10:00 UTC","layer_churn_pct":100.0,"b1_diff_pct":-0.2412,"b1_threshold_pct":1.5,"depth_deviation_pct":50.0,"trusted_ref":0.19489,"min_orderbook_layers":10,"imbalance_threshold":5.0},{"symbol":"hypeusdt","monitor_only":false,"alert_tier":0,"issues":null,"mid_price":78.283,"current_spread":0.209496,"target_spread":2.0,"percent_diff":-89.53,"depth_bid":"$202.4K","depth_ask":"$212.9K","ask_layers":50,"bid_layers":50,"dws":0.3721,"dws_threshold":0.5,"imbalance_ratio":1.05,"heavier_side":"asks","telegram_fired":false,"telegram_detail":null,"timestamp":"2026-08-22 13:15:57","d1_context":"\u00e2\u2030\u02c60.4x typical (baseline warming 2/4 \u00e2\u20ac\u201d absolute floor active)","g2_worst_swing_pct":3.3953,"g2_worst_candle":"10:00 UTC","layer_churn_pct":100.0,"b1_diff_pct":0.2087,"b1_threshold_pct":1.5,"depth_deviation_pct":50.0,"trusted_ref":78.12,"min_orderbook_layers":10,"imbalance_threshold":5.0},{"symbol":"linkusdt","monitor_only":false,"alert_tier":0,"issues":null,"mid_price":11.7735,"current_spread":0.314265,"target_spread":0.26,"percent_diff":20.87,"depth_bid":"$33.3K","depth_ask":"$29.5K","ask_layers":37,"bid_layers":38,"dws":0.1944,"dws_threshold":0.5,"imbalance_ratio":1.13,"heavier_side":"bids","telegram_fired":false,"telegram_detail":null,"timestamp":"2026-08-22 13:15:57","d1_context":"\u00e2\u2030\u02c61.3x typical (baseline warming 2/4 \u00e2\u20ac\u201d absolute floor active)","g2_worst_swing_pct":2.1273,"g2_worst_candle":"08:00 UTC","layer_churn_pct":100.0,"b1_diff_pct":0.0722,"b1_threshold_pct":0.63,"depth_deviation_pct":50.0,"trusted_ref":11.765,"min_orderbook_layers":10,"imbalance_threshold":5.0},{"symbol":"lskusdt","monitor_only":false,"alert_tier":0,"issues":null,"mid_price":0.0893,"current_spread":1.567749,"target_spread":1.5,"percent_diff":4.52,"depth_bid":"$10.8K","depth_ask":"$12.3K","ask_layers":21,"bid_layers":25,"dws":1.4153,"dws_threshold":0.5,"imbalance_ratio":1.14,"heavier_side":"asks","telegram_fired":false,"telegram_detail":null,"timestamp":"2026-08-22 13:15:57","d1_context":"baseline building\u00e2\u20ac\u00a6","g2_worst_swing_pct":0.0,"g2_worst_candle":"11:00 UTC","layer_churn_pct":100.0,"b1_diff_pct":null,"b1_threshold_pct":null,"depth_deviation_pct":50.0,"trusted_ref":null,"min_orderbook_layers":10,"imbalance_threshold":5.0},{"symbol":"ltcusdt","monitor_only":false,"alert_tier":0,"issues":null,"mid_price":51.64,"current_spread":0.302091,"target_spread":0.3,"percent_diff":0.7,"depth_bid":"$53.2K","depth_ask":"$78.6K","ask_layers":35,"bid_layers":37,"dws":0.1908,"dws_threshold":0.5,"imbalance_ratio":1.48,"heavier_side":"asks","telegram_fired":false,"telegram_detail":null,"timestamp":"2026-08-22 13:15:57","d1_context":"\u00e2\u2030\u02c60.5x typical (baseline warming 2/4 \u00e2\u20ac\u201d absolute floor active)","g2_worst_swing_pct":2.6909,"g2_worst_candle":"10:00 UTC","layer_churn_pct":100.0,"b1_diff_pct":-0.0387,"b1_threshold_pct":0.65,"depth_deviation_pct":50.0,"trusted_ref":51.66,"min_orderbook_layers":10,"imbalance_threshold":5.0},{"symbol":"pepeusdt","monitor_only":false,"alert_tier":0,"issues":null,"mid_price":4.04e-06,"current_spread":0.346535,"target_spread":0.5,"percent_diff":-30.69,"depth_bid":"$46.1K","depth_ask":"$55.3K","ask_layers":25,"bid_layers":25,"dws":0.3376,"dws_threshold":0.5,"imbalance_ratio":1.2,"heavier_side":"asks","telegram_fired":false,"telegram_detail":null,"timestamp":"2026-08-22 13:15:57","d1_context":"\u00e2\u2030\u02c60.5x typical (baseline warming 2/4 \u00e2\u20ac\u201d absolute floor active)","g2_worst_swing_pct":3.9005,"g2_worst_candle":"10:00 UTC","layer_churn_pct":100.0,"b1_diff_pct":0.0,"b1_threshold_pct":0.75,"depth_deviation_pct":50.0,"trusted_ref":4.04e-06,"min_orderbook_layers":10,"imbalance_threshold":5.0},{"symbol":"shibusdt","monitor_only":false,"alert_tier":0,"issues":null,"mid_price":5.55e-06,"current_spread":0.302921,"target_spread":0.4,"percent_diff":-24.27,"depth_bid":"$17.1K","depth_ask":"$18.2K","ask_layers":30,"bid_layers":31,"dws":0.1946,"dws_threshold":0.5,"imbalance_ratio":1.06,"heavier_side":"asks","telegram_fired":false,"telegram_detail":null,"timestamp":"2026-08-22 13:15:57","d1_context":"\u00e2\u2030\u02c61.0x typical (baseline warming 2/4 \u00e2\u20ac\u201d absolute floor active)","g2_worst_swing_pct":3.3795,"g2_worst_candle":"10:00 UTC","layer_churn_pct":100.0,"b1_diff_pct":-0.036,"b1_threshold_pct":0.7,"depth_deviation_pct":50.0,"trusted_ref":5.55e-06,"min_orderbook_layers":10,"imbalance_threshold":5.0},{"symbol":"solusdt","monitor_only":false,"alert_tier":0,"issues":null,"mid_price":93.8465,"current_spread":0.250409,"target_spread":0.25,"percent_diff":0.16,"depth_bid":"$144.5K","depth_ask":"$167.0K","ask_layers":75,"bid_layers":68,"dws":0.22,"dws_threshold":0.5,"imbalance_ratio":1.16,"heavier_side":"asks","telegram_fired":false,"telegram_detail":null,"timestamp":"2026-08-22 13:15:57","d1_context":"\u00e2\u2030\u02c60.5x typical (baseline warming 2/4 \u00e2\u20ac\u201d absolute floor active)","g2_worst_swing_pct":2.4723,"g2_worst_candle":"10:00 UTC","layer_churn_pct":100.0,"b1_diff_pct":-0.025,"b1_threshold_pct":0.625,"depth_deviation_pct":50.0,"trusted_ref":93.87,"min_orderbook_layers":10,"imbalance_threshold":5.0},{"symbol":"tonusdt","monitor_only":false,"alert_tier":0,"issues":null,"mid_price":1.444,"current_spread":0.207756,"target_spread":0.3,"percent_diff":-30.75,"depth_bid":"$15.8K","depth_ask":"$13.8K","ask_layers":25,"bid_layers":25,"dws":0.2665,"dws_threshold":0.5,"imbalance_ratio":1.14,"heavier_side":"bids","telegram_fired":false,"telegram_detail":null,"timestamp":"2026-08-22 13:15:57","d1_context":"\u00e2\u2030\u02c61.0x typical (baseline warming 2/4 \u00e2\u20ac\u201d absolute floor active)","g2_worst_swing_pct":2.0443,"g2_worst_candle":"08:00 UTC","layer_churn_pct":100.0,"b1_diff_pct":null,"b1_threshold_pct":null,"depth_deviation_pct":50.0,"trusted_ref":null,"min_orderbook_layers":10,"imbalance_threshold":5.0},{"symbol":"trxusdt","monitor_only":false,"alert_tier":0,"issues":null,"mid_price":0.34315,"current_spread":0.273933,"target_spread":0.3,"percent_diff":-8.69,"depth_bid":"$496.8K","depth_ask":"$594.5K","ask_layers":55,"bid_layers":60,"dws":0.1778,"dws_threshold":0.5,"imbalance_ratio":1.2,"heavier_side":"asks","telegram_fired":false,"telegram_detail":null,"timestamp":"2026-08-22 13:15:57","d1_context":"\u00e2\u2030\u02c61.0x typical (baseline warming 2/4 \u00e2\u20ac\u201d absolute floor active)","g2_worst_swing_pct":0.7516,"g2_worst_candle":"08:00 UTC","layer_churn_pct":100.0,"b1_diff_pct":-0.0146,"b1_threshold_pct":0.65,"depth_deviation_pct":50.0,"trusted_ref":0.3432,"min_orderbook_layers":10,"imbalance_threshold":5.0},{"symbol":"usdcusdt","monitor_only":false,"alert_tier":0,"issues":null,"mid_price":1.0002,"current_spread":0.039992,"target_spread":0.02,"percent_diff":99.96,"depth_bid":"$2.99M","depth_ask":"$2.96M","ask_layers":22,"bid_layers":22,"dws":0.0627,"dws_threshold":0.5,"imbalance_ratio":1.01,"heavier_side":"bids","telegram_fired":false,"telegram_detail":null,"timestamp":"2026-08-22 13:15:58","d1_context":"\u00e2\u2030\u02c61.9x typical (baseline warming 2/4 \u00e2\u20ac\u201d absolute floor active)","g2_worst_swing_pct":0.05,"g2_worst_candle":"10:00 UTC","layer_churn_pct":100.0,"b1_diff_pct":0.009,"b1_threshold_pct":0.51,"depth_deviation_pct":50.0,"trusted_ref":1.00011,"min_orderbook_layers":10,"imbalance_threshold":5.0},{"symbol":"xlmusdt","monitor_only":false,"alert_tier":0,"issues":null,"mid_price":0.2011,"current_spread":0.308304,"target_spread":0.3,"percent_diff":2.77,"depth_bid":"$50.0K","depth_ask":"$44.7K","ask_layers":35,"bid_layers":36,"dws":0.1965,"dws_threshold":0.5,"imbalance_ratio":1.12,"heavier_side":"bids","telegram_fired":false,"telegram_detail":null,"timestamp":"2026-08-22 13:15:58","d1_context":"\u00e2\u2030\u02c61.0x typical (baseline warming 2/4 \u00e2\u20ac\u201d absolute floor active)","g2_worst_swing_pct":3.3509,"g2_worst_candle":"08:00 UTC","layer_churn_pct":100.0,"b1_diff_pct":-0.0497,"b1_threshold_pct":0.65,"depth_deviation_pct":50.0,"trusted_ref":0.2012,"min_orderbook_layers":10,"imbalance_threshold":5.0},{"symbol":"xrpusdt","monitor_only":false,"alert_tier":2,"issues":"G2:HIGH","mid_price":1.5152,"current_spread":0.30359,"target_spread":0.3,"percent_diff":1.2,"depth_bid":"$81.0K","depth_ask":"$72.2K","ask_layers":39,"bid_layers":42,"dws":0.1955,"dws_threshold":0.5,"imbalance_ratio":1.12,"heavier_side":"bids","telegram_fired":true,"telegram_detail":"G2:fired","timestamp":"2026-08-22 13:15:58","d1_context":"\u00e2\u2030\u02c61.1x typical (baseline warming 2/4 \u00e2\u20ac\u201d absolute floor active)","g2_worst_swing_pct":5.4944,"g2_worst_candle":"08:00 UTC","layer_churn_pct":100.0,"b1_diff_pct":-0.0132,"b1_threshold_pct":0.65,"depth_deviation_pct":50.0,"trusted_ref":1.5154,"min_orderbook_layers":10,"imbalance_threshold":5.0},{"symbol":"xyousdt","monitor_only":false,"alert_tier":3,"issues":"A5:MEDIUM","mid_price":0.003179,"current_spread":0.301982,"target_spread":1.0,"percent_diff":-69.8,"depth_bid":"$2.7K","depth_ask":"$170.5K","ask_layers":75,"bid_layers":25,"dws":0.3167,"dws_threshold":0.5,"imbalance_ratio":63.34,"heavier_side":"asks","telegram_fired":false,"telegram_detail":"A5:flag-only","timestamp":"2026-08-22 13:15:58","d1_context":"\u00e2\u2030\u02c61.1x typical (baseline warming 2/4 \u00e2\u20ac\u201d absolute floor active)","g2_worst_swing_pct":1.9655,"g2_worst_candle":"09:00 UTC","layer_churn_pct":74.5,"b1_diff_pct":0.9206,"b1_threshold_pct":1.0,"depth_deviation_pct":50.0,"trusted_ref":0.00315,"min_orderbook_layers":10,"imbalance_threshold":5.0},{"symbol":"usdtcngn","monitor_only":true,"alert_tier":1,"issues":"A2:HIGH|A5:MEDIUM|A6:CRITICAL","mid_price":1394.0,"current_spread":0.143472,"target_spread":null,"percent_diff":null,"depth_bid":"$10.5K","depth_ask":"$15.19M","ask_layers":17,"bid_layers":6,"dws":0.1373,"dws_threshold":0.5,"imbalance_ratio":1451.28,"heavier_side":"asks","telegram_fired":true,"telegram_detail":"A2:fired|A5:flag-only|A6:cooldown","timestamp":"2026-08-22 13:15:58","d1_context":"baseline building\u00e2\u20ac\u00a6","g2_worst_swing_pct":0.1436,"g2_worst_candle":"11:00 UTC","layer_churn_pct":0.0,"b1_diff_pct":null,"b1_threshold_pct":null,"depth_deviation_pct":50.0,"trusted_ref":null,"min_orderbook_layers":10,"imbalance_threshold":5.0},{"symbol":"btcngn","monitor_only":false,"alert_tier":0,"issues":null,"mid_price":107334118.5,"current_spread":0.450113,"target_spread":0.7,"percent_diff":-35.7,"depth_bid":"$3803.72M","depth_ask":"$3714.69M","ask_layers":39,"bid_layers":35,"dws":0.2509,"dws_threshold":0.5,"imbalance_ratio":1.02,"heavier_side":"bids","telegram_fired":false,"telegram_detail":null,"timestamp":"2026-08-22 13:15:58","d1_context":"\u00e2\u2030\u02c61.3x typical (baseline warming 2/4 \u00e2\u20ac\u201d absolute floor active)","g2_worst_swing_pct":1.035,"g2_worst_candle":"10:00 UTC","layer_churn_pct":100.0,"b1_diff_pct":null,"b1_threshold_pct":null,"depth_deviation_pct":50.0,"trusted_ref":null,"min_orderbook_layers":10,"imbalance_threshold":5.0},{"symbol":"usdtngn","monitor_only":false,"alert_tier":2,"issues":"D1:HIGH","mid_price":1391.095,"current_spread":0.085544,"target_spread":0.95,"percent_diff":-91.0,"depth_bid":"$8791.31M","depth_ask":"$7734.69M","ask_layers":52,"bid_layers":59,"dws":0.1515,"dws_threshold":0.5,"imbalance_ratio":1.14,"heavier_side":"bids","telegram_fired":true,"telegram_detail":"D1:fired","timestamp":"2026-08-22 13:15:58","d1_context":"\u00e2\u2030\u02c61.5x typical \u00e2\u20ac\u201d fired on absolute floor \u00e2\u201a\u00a650,000,000 (baseline warming, 2/4 buckets)","g2_worst_swing_pct":0.1437,"g2_worst_candle":"10:00 UTC","layer_churn_pct":83.9,"b1_diff_pct":null,"b1_threshold_pct":null,"depth_deviation_pct":50.0,"trusted_ref":null,"min_orderbook_layers":10,"imbalance_threshold":5.0},{"symbol":"ethngn","monitor_only":false,"alert_tier":0,"issues":null,"mid_price":3379746.0,"current_spread":0.450152,"target_spread":0.75,"percent_diff":-39.98,"depth_bid":"$2373.17M","depth_ask":"$2173.27M","ask_layers":39,"bid_layers":39,"dws":0.2612,"dws_threshold":0.5,"imbalance_ratio":1.09,"heavier_side":"bids","telegram_fired":false,"telegram_detail":null,"timestamp":"2026-08-22 13:15:58","d1_context":"\u00e2\u2030\u02c61.6x typical (baseline warming 2/4 \u00e2\u20ac\u201d absolute floor active)","g2_worst_swing_pct":1.4274,"g2_worst_candle":"10:00 UTC","layer_churn_pct":100.0,"b1_diff_pct":null,"b1_threshold_pct":null,"depth_deviation_pct":50.0,"trusted_ref":null,"min_orderbook_layers":10,"imbalance_threshold":5.0},{"symbol":"trxngn","monitor_only":false,"alert_tier":0,"issues":null,"mid_price":476.57095,"current_spread":0.500513,"target_spread":0.75,"percent_diff":-33.26,"depth_bid":"$596.08M","depth_ask":"$641.62M","ask_layers":46,"bid_layers":36,"dws":0.2861,"dws_threshold":0.5,"imbalance_ratio":1.08,"heavier_side":"asks","telegram_fired":false,"telegram_detail":null,"timestamp":"2026-08-22 13:15:58","d1_context":"\u00e2\u2030\u02c61.1x typical (baseline warming 2/4 \u00e2\u20ac\u201d absolute floor active)","g2_worst_swing_pct":0.8164,"g2_worst_candle":"08:00 UTC","layer_churn_pct":100.0,"b1_diff_pct":null,"b1_threshold_pct":null,"depth_deviation_pct":50.0,"trusted_ref":null,"min_orderbook_layers":10,"imbalance_threshold":5.0},{"symbol":"xrpngn","monitor_only":false,"alert_tier":2,"issues":"G2:HIGH","mid_price":2102.21,"current_spread":0.265435,"target_spread":0.5,"percent_diff":-46.91,"depth_bid":"$198.50M","depth_ask":"$208.12M","ask_layers":71,"bid_layers":44,"dws":0.2529,"dws_threshold":0.5,"imbalance_ratio":1.05,"heavier_side":"asks","telegram_fired":true,"telegram_detail":"G2:fired","timestamp":"2026-08-22 13:15:58","d1_context":"\u00e2\u2030\u02c61.2x typical (baseline warming 2/4 \u00e2\u20ac\u201d absolute floor active)","g2_worst_swing_pct":5.2643,"g2_worst_candle":"08:00 UTC","layer_churn_pct":98.7,"b1_diff_pct":null,"b1_threshold_pct":null,"depth_deviation_pct":50.0,"trusted_ref":null,"min_orderbook_layers":10,"imbalance_threshold":5.0},{"symbol":"dashngn","monitor_only":false,"alert_tier":0,"issues":null,"mid_price":56447.0,"current_spread":0.552731,"target_spread":0.5,"percent_diff":10.55,"depth_bid":"$44.35M","depth_ask":"$47.78M","ask_layers":37,"bid_layers":50,"dws":0.3041,"dws_threshold":0.5,"imbalance_ratio":1.08,"heavier_side":"asks","telegram_fired":false,"telegram_detail":null,"timestamp":"2026-08-22 13:15:58","d1_context":"\u00e2\u2030\u02c60.4x typical (baseline warming 2/4 \u00e2\u20ac\u201d absolute floor active)","g2_worst_swing_pct":3.5547,"g2_worst_candle":"10:00 UTC","layer_churn_pct":100.0,"b1_diff_pct":null,"b1_threshold_pct":null,"depth_deviation_pct":50.0,"trusted_ref":null,"min_orderbook_layers":10,"imbalance_threshold":5.0},{"symbol":"ltcngn","monitor_only":false,"alert_tier":0,"issues":null,"mid_price":71726.0,"current_spread":0.552101,"target_spread":0.5,"percent_diff":10.42,"depth_bid":"$159.63M","depth_ask":"$197.21M","ask_layers":35,"bid_layers":35,"dws":0.3043,"dws_threshold":0.5,"imbalance_ratio":1.24,"heavier_side":"asks","telegram_fired":false,"telegram_detail":null,"timestamp":"2026-08-22 13:15:58","d1_context":"\u00e2\u2030\u02c61.2x typical (baseline warming 2/4 \u00e2\u20ac\u201d absolute floor active)","g2_worst_swing_pct":2.7018,"g2_worst_candle":"08:00 UTC","layer_churn_pct":100.0,"b1_diff_pct":null,"b1_threshold_pct":null,"depth_deviation_pct":50.0,"trusted_ref":null,"min_orderbook_layers":10,"imbalance_threshold":5.0},{"symbol":"solngn","monitor_only":false,"alert_tier":0,"issues":null,"mid_price":130290.495,"current_spread":0.690403,"target_spread":0.8,"percent_diff":-13.7,"depth_bid":"$279.45M","depth_ask":"$274.80M","ask_layers":70,"bid_layers":72,"dws":0.3599,"dws_threshold":0.5,"imbalance_ratio":1.02,"heavier_side":"bids","telegram_fired":false,"telegram_detail":null,"timestamp":"2026-08-22 13:15:58","d1_context":"\u00e2\u2030\u02c61.6x typical (baseline warming 2/4 \u00e2\u20ac\u201d absolute floor active)","g2_worst_swing_pct":2.2633,"g2_worst_candle":"10:00 UTC","layer_churn_pct":100.0,"b1_diff_pct":null,"b1_threshold_pct":null,"depth_deviation_pct":50.0,"trusted_ref":null,"min_orderbook_layers":10,"imbalance_threshold":5.0},{"symbol":"usdcngn","monitor_only":false,"alert_tier":0,"issues":null,"mid_price":1390.345,"current_spread":0.390551,"target_spread":1.2,"percent_diff":-67.45,"depth_bid":"$2777.13M","depth_ask":"$2788.76M","ask_layers":44,"bid_layers":41,"dws":0.2224,"dws_threshold":0.5,"imbalance_ratio":1.0,"heavier_side":"asks","telegram_fired":false,"telegram_detail":null,"timestamp":"2026-08-22 13:15:58","d1_context":"\u00e2\u2030\u02c63.0x typical (baseline warming 2/4 \u00e2\u20ac\u201d absolute floor active)","g2_worst_swing_pct":0.3913,"g2_worst_candle":"10:00 UTC","layer_churn_pct":93.0,"b1_diff_pct":null,"b1_threshold_pct":null,"depth_deviation_pct":50.0,"trusted_ref":null,"min_orderbook_layers":10,"imbalance_threshold":5.0},{"symbol":"cngnngn","monitor_only":true,"alert_tier":1,"issues":"A2:HIGH|A6:CRITICAL","mid_price":1.0,"current_spread":0.1,"target_spread":null,"percent_diff":null,"depth_bid":"$31.45M","depth_ask":"$28.01M","ask_layers":11,"bid_layers":8,"dws":0.1215,"dws_threshold":0.5,"imbalance_ratio":1.12,"heavier_side":"bids","telegram_fired":true,"telegram_detail":"A2:fired|A6:cooldown","timestamp":"2026-08-22 13:15:58","d1_context":"baseline building\u00e2\u20ac\u00a6","g2_worst_swing_pct":0.0,"g2_worst_candle":"11:00 UTC","layer_churn_pct":0.0,"b1_diff_pct":null,"b1_threshold_pct":null,"depth_deviation_pct":50.0,"trusted_ref":null,"min_orderbook_layers":10,"imbalance_threshold":5.0},{"symbol":"usdtghs","monitor_only":false,"alert_tier":0,"issues":null,"mid_price":11.84,"current_spread":1.182432,"target_spread":1.3,"percent_diff":-9.04,"depth_bid":"$4.50M","depth_ask":"$4.49M","ask_layers":23,"bid_layers":20,"dws":0.9792,"dws_threshold":0.5,"imbalance_ratio":1.0,"heavier_side":"bids","telegram_fired":false,"telegram_detail":null,"timestamp":"2026-08-22 13:15:58","d1_context":"\u00e2\u2030\u02c613.6x typical (baseline warming 2/4 \u00e2\u20ac\u201d absolute floor active)","g2_worst_swing_pct":0.341,"g2_worst_candle":"11:00 UTC","layer_churn_pct":100.0,"b1_diff_pct":null,"b1_threshold_pct":null,"depth_deviation_pct":50.0,"trusted_ref":null,"min_orderbook_layers":10,"imbalance_threshold":5.0}]};
-
-const CHECK_NAMES = {
-  A1: "Crossed book", A2: "Spread / thin book", A3: "One-sided market",
-  A4: "Book depth", A5: "Depth imbalance", A6: "Layer churn stall",
-  B1: "Price discrepancy", B2: "Source divergence", B3: "Stale reference feed",
-  B4: "Circuit breaker proximity", D1: "Volume spike", D2: "Fill rate deviation",
-  E1: "Exchange check E1", E2: "Exchange check E2",
-  F1: "Cross-pair arbitrage gap", G2: "Candle wick / anomalous print",
-};
-const TG_STATE = {
-  "fired": "Sent to Telegram", "flag-only": "Dashboard only",
-  "suspended": "Muted — pair suspended", "acked": "Muted — acknowledged",
-  "cooldown": "In cooldown", "capped": "Episode limit reached",
-};
-const SEGMENTS = [
-  { key: "attention", label: "Needs attention" },
-  { key: "flagged",   label: "Flagged" },
-  { key: "healthy",   label: "Healthy" },
-  { key: "all",       label: "All markets" },
-];
-
-// ── State ─────────────────────────────────────────────────────────────────────
-let data = null;
-let source = "live";        // "live" | "sample"
-let filter = "attention";
-let query = "";
-let selected = null;
-let firstPaint = true;
 
 const $ = id => document.getElementById(id);
 const reducedMotion = () => matchMedia("(prefers-reduced-motion: reduce)").matches;
 const isNarrow = () => matchMedia("(max-width: 960px)").matches;
 
-// ── Formatting ────────────────────────────────────────────────────────────────
 function esc(s) {
   return String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
+function cssVar(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
+function setText(id, t) { const el = $(id); if (el) el.textContent = t; }
+
+// ── Segmented control (two layers + clip-path) ───────────────────────────────
+function segmented(root, { items, render, label, onChange, fill = false }) {
+  let value = null;
+  root.classList.toggle("seg-fill", fill);
+  const draw = () => {
+    const list = items();
+    root.innerHTML = `<div class="seg-inner">
+      <div class="seg-base" role="group" aria-label="${esc(label)}">${list.map(it =>
+        `<button type="button" class="seg-btn pressable" data-v="${esc(it.v)}" aria-pressed="${it.v === value}">${render(it)}</button>`).join("")}</div>
+      <div class="seg-active" aria-hidden="true">${list.map(it => `<div class="seg-btn">${render(it)}</div>`).join("")}</div>
+    </div>`;
+  };
+  const place = instant => {
+    const inner = root.querySelector(".seg-inner");
+    const layer = root.querySelector(".seg-active");
+    if (!inner || !layer) return;
+    const btn = value == null ? null : root.querySelector(`.seg-base [data-v="${CSS.escape(String(value))}"]`);
+    if (!btn) { layer.style.clipPath = "inset(0 100% 100% 0)"; return; }
+    const box = inner.getBoundingClientRect(), r = btn.getBoundingClientRect();
+    if (!box.width) return;
+    const pct = (a, b) => ((a / b) * 100).toFixed(3) + "%";
+    const radius = getComputedStyle(root).getPropertyValue("--seg-radius").trim() || "8px";
+    if (instant) layer.classList.add("instant");
+    layer.style.clipPath = `inset(${pct(r.top - box.top, box.height)} ${pct(box.right - r.right, box.width)} ${pct(box.bottom - r.bottom, box.height)} ${pct(r.left - box.left, box.width)} round ${radius})`;
+    if (instant) { layer.offsetWidth; layer.classList.remove("instant"); }
+  };
+  root.addEventListener("click", e => {
+    const b = e.target.closest(".seg-base .seg-btn");
+    if (!b) return;
+    api.set(b.dataset.v);
+    onChange(b.dataset.v);
+  });
+  new ResizeObserver(() => place(true)).observe(root);
+  const api = {
+    get value() { return value; },
+    set(v, { instant = false } = {}) {
+      value = v;
+      root.querySelectorAll(".seg-base .seg-btn").forEach(b => b.setAttribute("aria-pressed", v != null && b.dataset.v === String(v)));
+      place(instant);
+    },
+    refresh() { draw(); place(true); },
+  };
+  draw();
+  return api;
+}
+
+// ── Toasts ───────────────────────────────────────────────────────────────────
+// Timers pause while the tab is hidden, so a toast is never missed. A toast
+// with an action (Undo) stays up a little longer.
+function toast(title, sub = "", { error = false, duration = 4000, action = null } = {}) {
+  const t = document.createElement("div");
+  t.className = "toast" + (error ? " error" : "");
+  t.setAttribute("role", error ? "alert" : "status");
+  t.innerHTML = `<span class="toast-dot"></span><div>${esc(title)}${sub ? `<small>${esc(sub)}</small>` : ""}</div>`;
+  if (action) {
+    const b = document.createElement("button");
+    b.type = "button"; b.className = "btn sm pressable"; b.textContent = action.label;
+    b.addEventListener("click", () => { action.run(); dismiss(); });
+    t.appendChild(b);
+    duration = Math.max(duration, 6000);
+  }
+  $("toaster").appendChild(t);
+  requestAnimationFrame(() => requestAnimationFrame(() => t.dataset.mounted = "true"));
+  let remaining = duration, started = Date.now(), timer = null;
+  function dismiss() {
+    if (t.dataset.leaving) return;
+    clearTimeout(timer);
+    t.dataset.leaving = "true";
+    document.removeEventListener("visibilitychange", onVis);
+    setTimeout(() => t.remove(), 220);
+  }
+  function run() { started = Date.now(); timer = setTimeout(dismiss, remaining); }
+  function onVis() {
+    if (document.hidden) { clearTimeout(timer); remaining -= Date.now() - started; }
+    else run();
+  }
+  document.addEventListener("visibilitychange", onVis);
+  run();
+  const live = $("toaster").querySelectorAll(".toast:not([data-leaving])");
+  if (live.length > 3) { live[0].dataset.leaving = "true"; setTimeout(() => live[0].remove(), 220); }
+}
+
+// ── Formatting ────────────────────────────────────────────────────────────────
 function symParts(symbol) {
   const s = (symbol || "").toUpperCase();
   for (const q of ["USDT", "NGN", "GHS"]) if (s.endsWith(q)) return { base: s.slice(0, -q.length), quote: q };
   return { base: s.slice(0, -3), quote: s.slice(-3) };
 }
-// Significant digits for small prices: BONK at 0.0000123 must not render as "0".
+// Significant digits for small prices: BONK at 0.0000032 must not render as "0".
 function fmtPrice(v) {
   if (v == null || isNaN(v)) return "—";
   v = Number(v);
@@ -610,6 +938,70 @@ function fmtAge(sec) {
   if (sec < 48 * 3600) return `${Math.round(sec / 3600)} h`;
   return `${Math.round(sec / 86400)} days`;
 }
+function ngtTime() { return new Date().toLocaleTimeString("en-GB", { timeZone: "Africa/Lagos", hour12: false }); }
+function infoIcon() {
+  return `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 8v5M12 16.5v.01"/></svg>`;
+}
+function downloadCsv(filename, lines) {
+  const blob = new Blob([lines.join("\r\n")], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click(); a.remove();
+  URL.revokeObjectURL(url);
+}
+const csvCell = v => { const s = String(v ?? ""); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Views
+// ══════════════════════════════════════════════════════════════════════════════
+let view = "overview";
+const tabs = segmented($("tabs"), {
+  label: "Views",
+  items: () => [
+    { v: "overview", t: "Overview", s: "Overview", k: "1" },
+    { v: "depth", t: "USDT/NGN depth", s: "Depth", k: "2" },
+  ],
+  render: it => `<span class="t-long">${esc(it.t)}</span><span class="t-short">${esc(it.s)}</span><span class="k">${it.k}</span>`,
+  onChange: v => showView(v),
+});
+function showView(v, { instant = false } = {}) {
+  view = v;
+  tabs.set(v, { instant });
+  $("view-overview").hidden = v !== "overview";
+  $("view-depth").hidden = v !== "depth";
+  $("notice").hidden = v !== "overview" || !$("notice").innerHTML;
+  if (sheetOpen && v !== "overview") closeSheet();
+  if (v === "depth") depthEnter(); else depthLeave();
+  window.scrollTo(0, 0);
+  try { history.replaceState(null, "", v === "depth" ? "#depth" : location.pathname + location.search); } catch (e) {}
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Overview
+// ══════════════════════════════════════════════════════════════════════════════
+const POLL_MS = 60_000;
+const CHECK_NAMES = {
+  A1: "Crossed book", A2: "Spread / thin book", A3: "One-sided market",
+  A4: "Book depth", A5: "Depth imbalance", A6: "Layer churn stall",
+  B1: "Price discrepancy", B2: "Source divergence", B3: "Stale reference feed",
+  B4: "Circuit breaker proximity", D1: "Volume spike", D2: "Fill rate deviation",
+  E1: "Exchange check E1", E2: "Exchange check E2",
+  F1: "Cross-pair arbitrage gap", G2: "Candle wick / anomalous print",
+};
+const TG_STATE = {
+  "fired": "Sent to Telegram", "flag-only": "Dashboard only",
+  "suspended": "Muted — pair suspended", "acked": "Muted — acknowledged",
+  "cooldown": "In cooldown", "capped": "Episode limit reached",
+};
+
+let data = null;
+let source = "live";        // "live" | "sample"
+let filter = "attention";
+let query = "";
+let selected = null;
+let firstPaint = true;
+
 function quidaxUrl(symbol) {
   const { base, quote } = symParts(symbol);
   return `https://pro.quidax.io/en_US/trade/${encodeURIComponent(base + "_" + quote)}`;
@@ -644,9 +1036,7 @@ function tgSummary(p) {
   const s = states[0].val;
   return { sent: false, text: s === "flag-only" ? "Dashboard" : s === "cooldown" ? "Cooldown" : s === "capped" ? "Capped" : s === "acked" || s === "suspended" ? "Muted" : s };
 }
-
-// ── Derived lists ─────────────────────────────────────────────────────────────
-function tierOf(p) { return p.alert_tier ?? 0; }
+const tierOf = p => p.alert_tier ?? 0;
 function bucket(p) {
   const t = tierOf(p);
   return t === 1 || t === 2 ? "attention" : t === 3 ? "flagged" : "healthy";
@@ -657,61 +1047,40 @@ function sorted(pairs) {
     rank(tierOf(a)) - rank(tierOf(b)) ||
     Math.abs(b.percent_diff ?? 0) - Math.abs(a.percent_diff ?? 0));
 }
-function visiblePairs() {
-  if (!data) return [];
+function visiblePairs(d = data) {
+  if (!d) return [];
   const q = query.trim().toLowerCase().replace("/", "");
-  return sorted(data.pairs).filter(p =>
+  return sorted(d.pairs).filter(p =>
     (filter === "all" || bucket(p) === filter) &&
     (!q || p.symbol.toLowerCase().includes(q)));
 }
 
-// ── Segments ──────────────────────────────────────────────────────────────────
-function segmentHTML(active) {
-  const pairs = data ? data.pairs : [];
-  const count = k => k === "all" ? pairs.length : pairs.filter(p => bucket(p) === k).length;
-  const t1 = pairs.filter(p => tierOf(p) === 1).length;
-  const t2 = pairs.filter(p => tierOf(p) === 2).length;
-  const sent = pairs.filter(p => p.telegram_fired).length;
-  const sub = {
-    attention: `${t1} tier 1 · ${t2} tier 2`,
-    flagged: "Dashboard only",
-    healthy: "No open issues",
-    all: `${sent} sent to Telegram`,
-  };
-  return SEGMENTS.map(s => active
-    ? `<div class="seg"><span class="seg-label">${s.label}</span><span class="seg-value num">${data ? count(s.key) : "—"}</span><span class="seg-sub">${sub[s.key]}</span></div>`
-    : `<button type="button" class="seg pressable" data-key="${s.key}" aria-pressed="${s.key === filter}"><span class="seg-label">${s.label}</span><span class="seg-value num">${data ? count(s.key) : "—"}</span><span class="seg-sub">${sub[s.key]}</span></button>`
-  ).join("");
-}
-function renderSegments() {
-  $("seg-base").innerHTML = segmentHTML(false);
-  $("seg-active").innerHTML = segmentHTML(true);
-  positionIndicator(true);
-}
-function positionIndicator(instant) {
-  const layer = $("seg-active");
-  const btn = $("seg-base").querySelector(`[data-key="${filter}"]`);
-  if (!btn) return;
-  const box = layer.getBoundingClientRect();
-  const r = btn.getBoundingClientRect();
-  if (!box.width) return;
-  const left = ((r.left - box.left) / box.width) * 100;
-  const right = ((box.right - r.right) / box.width) * 100;
-  if (instant) layer.classList.add("instant");
-  layer.style.clipPath = `inset(0 ${right.toFixed(3)}% 0 ${left.toFixed(3)}% round 9px)`;
-  if (instant) { layer.offsetWidth; layer.classList.remove("instant"); }
-}
-$("seg-base").addEventListener("click", e => {
-  const btn = e.target.closest(".seg");
-  if (!btn) return;
-  filter = btn.dataset.key;
-  $("seg-base").querySelectorAll(".seg").forEach(b => b.setAttribute("aria-pressed", b.dataset.key === filter));
-  positionIndicator(false);
-  renderRows();
+// ── Filter (the summary numbers ARE the filter) ──────────────────────────────
+const filterSeg = segmented($("filter"), {
+  label: "Filter markets", fill: true,
+  items: () => {
+    const pairs = data ? data.pairs : [];
+    const count = k => k === "all" ? pairs.length : pairs.filter(p => bucket(p) === k).length;
+    const t1 = pairs.filter(p => tierOf(p) === 1).length;
+    const t2 = pairs.filter(p => tierOf(p) === 2).length;
+    const sent = pairs.filter(p => p.telegram_fired).length;
+    const n = k => data ? count(k) : "—";
+    return [
+      { v: "attention", t: "Needs attention", n: n("attention"), s: `${t1} tier 1 · ${t2} tier 2` },
+      { v: "flagged",   t: "Flagged",         n: n("flagged"),   s: "Dashboard only" },
+      { v: "healthy",   t: "Healthy",         n: n("healthy"),   s: "No open issues" },
+      { v: "all",       t: "All markets",     n: n("all"),       s: `${sent} sent to Telegram` },
+    ];
+  },
+  render: it => `<span class="f-label">${it.t}</span><span class="f-value num">${it.n}</span><span class="f-sub">${esc(it.s)}</span>`,
+  onChange: v => { filter = v; renderRows(); },
 });
-addEventListener("resize", () => positionIndicator(true));
+filterSeg.set(filter, { instant: true });
 
 // ── Rows ──────────────────────────────────────────────────────────────────────
+function sendIcon(size) {
+  return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m22 2-7 20-4-9-9-4z"/><path d="M22 2 11 13"/></svg>`;
+}
 function rowHTML(p, i) {
   const { base, quote } = symParts(p.symbol);
   const t = tierOf(p);
@@ -733,9 +1102,9 @@ function rowHTML(p, i) {
     <td><div class="mkt"><span class="tier-dot ${t ? "t" + t : ""}" aria-label="${t ? "Tier " + t : "Healthy"}"></span><span><span class="mkt-name">${esc(base)}</span><span class="mkt-quote">/${esc(quote)}</span>${p.monitor_only ? `<span class="mkt-tag"> · monitor</span>` : ""}</span></div></td>
     <td class="r num col-mid">${fmtPrice(p.mid_price)}</td>
     <td class="r"><div class="spread"><span class="num">${fmtPct(p.current_spread)}</span><span class="spread-bar${ratio == null ? " none" : ""}" aria-hidden="true"><span class="spread-fill ${level}" style="transform:scaleX(${fill.toFixed(3)})"></span><span class="spread-target"></span></span><span class="delta num ${deltaCls}">${diff == null ? "" : (diff > 0 ? "+" : "") + Number(diff).toFixed(1) + "%"}</span></div></td>
-    <td class="r num col-depth">${esc(p.depth_bid || "—")} <span style="color:var(--text-3)">/</span> ${esc(p.depth_ask || "—")}</td>
+    <td class="r num col-depth">${esc(p.depth_bid || "—")} <span class="muted">/</span> ${esc(p.depth_ask || "—")}</td>
     <td><div class="chips">${chips}</div></td>
-    <td class="col-tg"><span class="tg ${tg.sent ? "sent" : ""}">${tg.sent ? `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m22 2-7 20-4-9-9-4z"/><path d="M22 2 11 13"/></svg>` : ""}${esc(tg.text)}</span></td>
+    <td class="col-tg"><span class="tg ${tg.sent ? "sent" : ""}">${tg.sent ? sendIcon(12) : ""}${esc(tg.text)}</span></td>
   </tr>`;
 }
 function renderRows() {
@@ -766,37 +1135,29 @@ function select(sym, { open = false, scroll = false } = {}) {
   renderDetail();
   if (scroll) {
     const row = document.querySelector(`.row[data-sym="${CSS.escape(sym)}"]`);
-    // Keyboard navigation: instant, never smooth.
-    if (row) row.scrollIntoView({ block: "nearest" });
+    if (row) row.scrollIntoView({ block: "nearest" });   // keyboard: instant, never smooth
   }
   if (open && isNarrow()) openSheet();
 }
 function renderDetail() {
   const el = $("detail-inner");
   const p = data && data.pairs.find(x => x.symbol === selected);
-  if (!p) {
-    el.innerHTML = `<div class="d-empty">Select a market to see its checks.</div>`;
-    return;
-  }
+  if (!p) { el.innerHTML = `<div class="d-empty">Select a market to see its checks.</div>`; return; }
   const { base, quote } = symParts(p.symbol);
   const t = tierOf(p);
   const issues = parsePairs(p.issues);
   const tg = Object.fromEntries(parsePairs(p.telegram_detail).map(x => [x.id, x.val]));
   const diff = p.percent_diff;
   const metric = (k, v, cls = "") => `<div class="metric"><div class="metric-k">${k}</div><div class="metric-v num ${cls}">${v}</div></div>`;
-  const tierChip = t === 1 ? `<span class="chip t1">Tier 1</span>` : t === 2 ? `<span class="chip t2">Tier 2</span>` : t === 3 ? `<span class="chip">Flagged</span>` : `<span class="chip" style="background:var(--green-soft);color:var(--green-text)">Healthy</span>`;
-
+  const tierChip = t === 1 ? `<span class="chip t1">Tier 1</span>` : t === 2 ? `<span class="chip t2">Tier 2</span>` : t === 3 ? `<span class="chip">Flagged</span>` : `<span class="chip good">Healthy</span>`;
   el.innerHTML = `
     <div class="d-head">
-      <div>
-        <div class="d-title">${esc(base)}<span class="mkt-quote">/${esc(quote)}</span></div>
-      </div>
+      <div class="d-title">${esc(base)}<span class="mkt-quote">/${esc(quote)}</span></div>
       <div style="margin-top:3px">${tierChip}</div>
       <a class="d-link pressable" href="${quidaxUrl(p.symbol)}" target="_blank" rel="noopener noreferrer">Order book
         <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 17 17 7"/><path d="M8 7h9v9"/></svg></a>
     </div>
     <div class="d-sub">${p.monitor_only ? "Monitor only" : "Managed"} · cycle ${esc((p.timestamp || "").split(" ").pop() || "—")}</div>
-
     <div class="metrics">
       ${metric("Mid", fmtPrice(p.mid_price))}
       ${metric("Spread", fmtPct(p.current_spread))}
@@ -805,7 +1166,6 @@ function renderDetail() {
       ${metric("DWS", p.dws == null ? "—" : Number(p.dws).toFixed(3), p.dws > (p.dws_threshold ?? Infinity) ? "warn" : "")}
       ${metric("Imbalance", p.imbalance_ratio == null ? "—" : Number(p.imbalance_ratio).toFixed(2) + "×")}
     </div>
-
     ${issues.length ? `
       <div class="section-k">Open issues · ${issues.length}</div>
       <div class="issues">
@@ -817,12 +1177,11 @@ function renderDetail() {
             <div class="issue-top"><span class="issue-name">${esc(CHECK_NAMES[id] || id)}</span><span class="issue-id">${esc(id)} · ${esc(val.toLowerCase())}</span>
               <span class="chip ${it === 1 ? "t1" : it === 2 ? "t2" : ""}">${it ? "Tier " + it : "—"}</span></div>
             ${ev ? `<div class="issue-evidence">${esc(ev)}</div>` : ""}
-            ${st ? `<div class="issue-tg">${st === "fired" ? `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="color:var(--accent)"><path d="m22 2-7 20-4-9-9-4z"/><path d="M22 2 11 13"/></svg>` : ""}${esc(TG_STATE[st] || st)}</div>` : ""}
+            ${st ? `<div class="issue-tg">${st === "fired" ? `<span style="color:var(--accent)">${sendIcon(11)}</span>` : ""}${esc(TG_STATE[st] || st)}</div>` : ""}
           </div>`;
         }).join("")}
       </div>` : `
       <div class="all-clear"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>All checks passing</div>`}
-
     <div class="section-k">Book</div>
     <dl class="kv num">
       <dt>Depth bid / ask</dt><dd>${esc(p.depth_bid || "—")} / ${esc(p.depth_ask || "—")}</dd>
@@ -830,21 +1189,23 @@ function renderDetail() {
       <dt>Reference price</dt><dd>${fmtPrice(p.trusted_ref)}</dd>
       <dt>Heavier side</dt><dd>${esc(p.heavier_side || "—")}</dd>
     </dl>
-
-    <div class="hint"><span><span class="kbd">↑</span><span class="kbd">↓</span>move</span><span><span class="kbd">/</span>filter</span><span><span class="kbd">Esc</span>clear</span></div>
+    <div class="hint"><span><span class="kbd">↑</span><span class="kbd">↓</span> move</span><span><span class="kbd">/</span> filter</span><span><span class="kbd">1</span><span class="kbd">2</span> views</span></div>
   `;
 }
 
-// ── Keyboard: instant, no animation ──────────────────────────────────────────
+// ── Keyboard: instant, never animated ────────────────────────────────────────
 document.addEventListener("keydown", e => {
+  if (cfgOpen) return;                              // the drawer has its own handler
   const inField = !!(e.target.matches && e.target.matches("input, textarea, select"));
-  if (e.key === "/" && !inField) { e.preventDefault(); $("search").focus(); $("search").select(); return; }
   if (e.key === "Escape") {
-    if (inField) { $("search").blur(); return; }
-    if (sheetOpen) { closeSheet(); return; }
+    if (inField) { e.target.blur(); return; }
+    if (sheetOpen) closeSheet();
     return;
   }
   if (inField || e.metaKey || e.ctrlKey || e.altKey) return;
+  if (e.key === "1" || e.key === "2") { showView(e.key === "1" ? "overview" : "depth", { instant: true }); return; }
+  if (view !== "overview") return;
+  if (e.key === "/") { e.preventDefault(); $("search").focus(); $("search").select(); return; }
   const down = e.key === "ArrowDown" || e.key === "j";
   const up = e.key === "ArrowUp" || e.key === "k";
   if (!down && !up) return;
@@ -857,7 +1218,7 @@ document.addEventListener("keydown", e => {
 });
 $("search").addEventListener("input", e => { query = e.target.value; renderRows(); });
 
-// ── Tooltip (chips) ──────────────────────────────────────────────────────────
+// ── Tooltip (issue chips) ────────────────────────────────────────────────────
 const tip = $("tip");
 let tipTimer = null, tipHideTimer = null, tipWarm = false;
 function showTip(chip) {
@@ -871,10 +1232,9 @@ function showTip(chip) {
   const tr = tip.getBoundingClientRect();
   const left = Math.max(8, Math.min(innerWidth - tr.width - 8, r.left + r.width / 2 - tr.width / 2));
   const above = r.top - tr.height - 8 > 8;
-  const top = above ? r.top - tr.height - 6 : r.bottom + 6;
-  tip.style.left = left + "px"; tip.style.top = top + "px";
-  // Scale from the chip, not from the tooltip's centre.
-  tip.style.transformOrigin = `${r.left + r.width / 2 - left}px ${above ? "100%" : "0%"}`;
+  tip.style.left = left + "px";
+  tip.style.top = (above ? r.top - tr.height - 6 : r.bottom + 6) + "px";
+  tip.style.transformOrigin = `${r.left + r.width / 2 - left}px ${above ? "100%" : "0%"}`;   // from the chip
   tip.classList.toggle("instant", tipWarm);
   tip.classList.add("show");
   tipWarm = true;
@@ -899,33 +1259,6 @@ document.addEventListener("pointerout", e => {
 });
 addEventListener("scroll", hideTip, { passive: true });
 
-// ── Toasts ───────────────────────────────────────────────────────────────────
-// Timers pause while the tab is hidden, so a toast is never missed.
-function toast(title, sub = "", { error = false, duration = 4000 } = {}) {
-  const t = document.createElement("div");
-  t.className = "toast" + (error ? " error" : "");
-  t.setAttribute("role", error ? "alert" : "status");
-  t.innerHTML = `<span class="toast-dot"></span><div>${esc(title)}${sub ? `<small>${esc(sub)}</small>` : ""}</div>`;
-  $("toaster").appendChild(t);
-  requestAnimationFrame(() => requestAnimationFrame(() => t.dataset.mounted = "true"));
-  let remaining = duration, started = Date.now(), timer = null;
-  const dismiss = () => {
-    t.dataset.leaving = "true";
-    document.removeEventListener("visibilitychange", onVis);
-    setTimeout(() => t.remove(), 220);
-  };
-  const run = () => { started = Date.now(); timer = setTimeout(dismiss, remaining); };
-  const onVis = () => {
-    if (document.hidden) { clearTimeout(timer); remaining -= Date.now() - started; }
-    else run();
-  };
-  document.addEventListener("visibilitychange", onVis);
-  run();
-  // Keep at most three on screen.
-  const all = $("toaster").querySelectorAll(".toast:not([data-leaving])");
-  if (all.length > 3) all[0].dataset.leaving = "true", setTimeout(() => all[0].remove(), 220);
-}
-
 // ── Mobile sheet with drag-to-dismiss ────────────────────────────────────────
 let sheetOpen = false;
 function openSheet() {
@@ -941,8 +1274,6 @@ function closeSheet() {
   d.classList.remove("open", "dragging");
   d.style.transform = "";
   $("scrim").classList.remove("show");
-  const row = document.querySelector(`.row[data-sym="${CSS.escape(selected || "")}"]`);
-  if (row) row.focus?.();
 }
 $("scrim").addEventListener("click", closeSheet);
 (function () {
@@ -958,8 +1289,7 @@ $("scrim").addEventListener("click", closeSheet);
   handle.addEventListener("pointermove", e => {
     if (!dragging || e.pointerId !== pid) return;
     const raw = e.clientY - startY;
-    // Down follows the finger 1:1; up meets increasing resistance.
-    dy = raw >= 0 ? raw : -Math.sqrt(-raw) * 2;
+    dy = raw >= 0 ? raw : -Math.sqrt(-raw) * 2;   // down 1:1, up with friction
     d.style.transform = `translateY(${dy}px)`;
   });
   const end = e => {
@@ -973,45 +1303,39 @@ $("scrim").addEventListener("click", closeSheet);
   handle.addEventListener("pointerup", end);
   handle.addEventListener("pointercancel", end);
 })();
-matchMedia("(max-width: 960px)").addEventListener("change", e => { if (!e.matches && sheetOpen) closeSheet(); positionIndicator(true); });
+matchMedia("(max-width: 960px)").addEventListener("change", e => { if (!e.matches && sheetOpen) closeSheet(); });
 
 // ── Status ───────────────────────────────────────────────────────────────────
 function renderStatus(err) {
   const pill = $("status-pill"), text = $("status-text"), notice = $("notice");
   pill.className = "status-pill";
-  notice.hidden = true; notice.className = "notice";
+  notice.className = "notice"; notice.innerHTML = "";
   if (source === "sample") {
     pill.classList.add("sample");
     text.textContent = "Sample data";
-    notice.hidden = false; notice.classList.add("neutral");
+    notice.classList.add("neutral");
     notice.innerHTML = `${infoIcon()}<div>Can’t reach the API at <b>${esc(API || location.origin)}</b>, so this is a saved snapshot. Start the API and refresh to see live numbers.</div>`;
-    return;
-  }
-  if (err) {
+  } else if (err) {
     pill.classList.add("offline");
     text.textContent = "Offline";
-    notice.hidden = false; notice.classList.add("error");
+    notice.classList.add("error");
     notice.innerHTML = `${infoIcon()}<div><b>Can’t reach the API.</b> Showing the last numbers loaded. ${esc(err)}</div>`;
-    return;
-  }
-  const s = data.summary || {};
-  if (s.monitor_stale) {
-    pill.classList.add("stale");
-    text.textContent = `Stale · ${fmtAge(s.last_updated_age_seconds)}`;
-    notice.hidden = false;
-    notice.innerHTML = `${infoIcon()}<div><b>The monitor stopped ${fmtAge(s.last_updated_age_seconds)} ago.</b> Everything below is from its last cycle (${esc(s.last_updated || "unknown")}). The API is up; check that the monitor process is running.</div>`;
   } else {
-    text.textContent = `Live · ${fmtAge(s.last_updated_age_seconds)} ago`;
+    const s = data.summary || {};
+    if (s.monitor_stale) {
+      pill.classList.add("stale");
+      text.textContent = `Stale · ${fmtAge(s.last_updated_age_seconds)}`;
+      notice.innerHTML = `${infoIcon()}<div><b>The monitor stopped ${fmtAge(s.last_updated_age_seconds)} ago.</b> Market numbers are from its last cycle (${esc(s.last_updated || "unknown")}). The API is up; check that the monitor process is running.</div>`;
+    } else {
+      text.textContent = `Live · ${fmtAge(s.last_updated_age_seconds)} ago`;
+    }
   }
-}
-function infoIcon() {
-  return `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 8v5M12 16.5v.01"/></svg>`;
+  pill.title = text.textContent;
+  notice.hidden = view !== "overview" || !notice.innerHTML;
 }
 
 // ── Data ─────────────────────────────────────────────────────────────────────
 async function load({ manual = false } = {}) {
-  const btn = $("refresh-btn");
-  if (manual) btn.setAttribute("aria-busy", "true");
   let err = null;
   try {
     const res = await fetch(`${API}/api/status`, { cache: "no-store" });
@@ -1021,15 +1345,14 @@ async function load({ manual = false } = {}) {
   } catch (e) {
     err = e.message;
     if (!data && SNAPSHOT) { data = SNAPSHOT; source = "sample"; err = null; }
-  } finally {
-    btn.removeAttribute("aria-busy");
   }
   if (data) {
     if (!selected || !data.pairs.some(p => p.symbol === selected)) {
-      const first = visiblePairsFor(data)[0];
+      const first = visiblePairs(data)[0];
       selected = first ? first.symbol : null;
     }
-    renderSegments();
+    filterSeg.refresh();
+    filterSeg.set(filter, { instant: true });
     renderRows();
     renderDetail();
   }
@@ -1040,12 +1363,997 @@ async function load({ manual = false } = {}) {
     else toast("Up to date", `Last cycle ${data.summary?.last_updated || "unknown"}`);
   }
 }
-function visiblePairsFor(d) { const keep = data; data = d; const v = visiblePairs(); data = keep; return v; }
-
-$("refresh-btn").addEventListener("click", () => load({ manual: true }));
+$("refresh-btn").addEventListener("click", async () => {
+  const btn = $("refresh-btn");
+  if (btn.getAttribute("aria-busy") === "true") return;
+  btn.setAttribute("aria-busy", "true");
+  try {
+    if (view === "depth") await fetchDepth({ manual: true });
+    else await load({ manual: true });
+  } finally { btn.removeAttribute("aria-busy"); }
+});
 setInterval(() => { if (!document.hidden) load(); }, POLL_MS);
 
-// ── Theme ────────────────────────────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════════════
+// USDT/NGN depth (ported from the Slippage tab; same endpoints, same maths)
+// ══════════════════════════════════════════════════════════════════════════════
+const DEPTH_POLL_MS = 5000;
+let depthRange = "1h";
+let dateStart = null, dateEnd = null;
+let depthTimer = null;
+let charts = null;
+let walkW = 100_000, midW = 1_000, depthPollS = 5;
+let upRef = 1400, upBandPct = 1 / 1400 * 100, upW = 100_000;
+let lastUptimeCsv = [], lastUptimeWin = { start: null, end: null }, lastVolumeRows = [];
+let depthSeq = 0;
+
+const rangeSeg = segmented($("range"), {
+  label: "Time range",
+  items: () => ["1h", "24h", "7d", "30d"].map(v => ({ v })),
+  render: it => it.v,
+  onChange: v => {
+    depthRange = v; dateStart = dateEnd = null;
+    $("date-start").value = ""; $("date-end").value = "";
+    $("date-clear").hidden = true;
+    fetchDepth();
+  },
+});
+rangeSeg.set("1h", { instant: true });
+function onDates() {
+  dateStart = $("date-start").value || null;
+  dateEnd = $("date-end").value || null;
+  const archive = !!(dateStart || dateEnd);
+  $("date-clear").hidden = !archive;
+  rangeSeg.set(archive ? null : depthRange);       // an archive range overrides the preset
+  fetchDepth();
+}
+$("date-start").addEventListener("change", onDates);
+$("date-end").addEventListener("change", onDates);
+$("date-clear").addEventListener("click", () => { $("date-start").value = ""; $("date-end").value = ""; onDates(); });
+
+function depthEnter() {
+  initCharts();
+  fetchDepth();
+  clearInterval(depthTimer);
+  depthTimer = setInterval(() => {
+    // Archive views are static; live views refresh quietly every 5s.
+    if (!document.hidden && !dateStart && !dateEnd) fetchDepth({ silent: true });
+  }, DEPTH_POLL_MS);
+}
+function depthLeave() { clearInterval(depthTimer); depthTimer = null; }
+
+function depthWindow() {
+  const now = new Date();
+  if (dateStart || dateEnd) {
+    return {
+      start: dateStart ? new Date(dateStart + "T00:00:00+01:00") : null,
+      end:   dateEnd   ? new Date(dateEnd   + "T23:59:59+01:00") : null,
+      mode: "archive",
+    };
+  }
+  const hours = { "1h": 1, "24h": 24, "7d": 168, "30d": 720 }[depthRange] || 1;
+  return { start: new Date(now - hours * 3600e3), end: now, mode: "range" };
+}
+const inWindow = (ts, start, end) => { const t = new Date(ts); return (!start || t >= start) && (!end || t <= end); };
+const longWindow = () => ["7d", "30d"].includes(depthRange) || !!(dateStart || dateEnd);
+
+function fmtUsdt(v) {
+  const n = Number(v);
+  if (v == null || !isFinite(n)) return "—";
+  if (n >= 1e6) return (n / 1e6).toFixed(n % 1e6 === 0 ? 0 : 1) + "M USDT";
+  if (n >= 1e3) return (n / 1e3).toFixed(n % 1e3 === 0 ? 0 : 1) + "k USDT";
+  return n + " USDT";
+}
+function fmtVol(v) {
+  const n = Number(v);
+  if (v == null || !isFinite(n)) return "—";
+  const a = Math.abs(n);
+  if (n === 0) return "0";
+  if (a >= 1e9) return (n / 1e9).toFixed(2) + "B";
+  if (a >= 1e6) return (n / 1e6).toFixed(2) + "M";
+  if (a >= 1e3) return (n / 1e3).toFixed(1) + "k";
+  return n.toFixed(a >= 1 ? 1 : 4);
+}
+function fmtNaira(v) {
+  if (v == null || isNaN(v)) return "—";
+  return (v > 0 ? "+" : v < 0 ? "−" : "") + "₦" + Math.abs(v).toFixed(4);
+}
+const pct1 = v => v == null ? "—" : (v * 100).toFixed(1) + "%";
+const mean = vals => { const c = vals.filter(v => v != null && !isNaN(v)); return c.length ? c.reduce((a, b) => a + b, 0) / c.length : null; };
+function feedAge(sec) {
+  if (sec == null) return "never";
+  if (sec < 90) return `${Math.round(sec)}s`;
+  if (sec < 5400) return `${Math.round(sec / 60)} min`;
+  return fmtAge(sec);
+}
+
+// Trading hours: Mon–Fri, bucket start in [09:00, 18:00) WAT.
+const NGT_PARTS = new Intl.DateTimeFormat("en-GB", { timeZone: "Africa/Lagos", hour: "numeric", weekday: "short", hour12: false });
+function isTradingHour(ts) {
+  try {
+    const parts = NGT_PARTS.formatToParts(new Date(ts));
+    const wd = parts.find(p => p.type === "weekday").value;
+    if (wd === "Sat" || wd === "Sun") return false;
+    let h = parseInt(parts.find(p => p.type === "hour").value, 10);
+    if (h === 24) h = 0;
+    return h >= 9 && h < 18;
+  } catch { return false; }
+}
+const NGT_DAY = new Intl.DateTimeFormat("en-CA", { timeZone: "Africa/Lagos", year: "numeric", month: "2-digit", day: "2-digit" });
+const NGT_HM = new Intl.DateTimeFormat("en-GB", { timeZone: "Africa/Lagos", hour: "2-digit", minute: "2-digit", hour12: false });
+function labelFor(ts, hourly) {
+  const d = new Date(ts);
+  const hh = String(d.getHours()).padStart(2, "0");
+  const mm = hourly ? "00" : String(d.getMinutes()).padStart(2, "0");
+  if (!longWindow()) return `${hh}:${mm}`;
+  return `${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")} ${hh}:${mm}`;
+}
+
+function liveUptime(samples) {
+  let ap = 0, an = 0, bp = 0, bn = 0;
+  samples.forEach(s => {
+    if (s.uptime_ask_ok != null) { an++; if (s.uptime_ask_ok) ap++; }
+    if (s.uptime_bid_ok != null) { bn++; if (s.uptime_bid_ok) bp++; }
+  });
+  return { ask: an ? ap / an : null, bid: bn ? bp / bn : null, askN: an, bidN: bn, count: Math.max(an, bn) };
+}
+function liveGap(samples) {
+  let p = 0, n = 0;
+  samples.forEach(s => { if (s.spread_gap_ok != null) { n++; if (s.spread_gap_ok) p++; } });
+  return { pct: n ? p / n : null, n };
+}
+// Sample-weighted, not a mean of hourly percentages.
+function windowAverage(points) {
+  let ap = 0, an = 0, bp = 0, bn = 0, gp = 0, gn = 0, hours = 0;
+  points.forEach(p => {
+    if (p.ask != null && p.ask_samples) { ap += p.ask * p.ask_samples; an += p.ask_samples; }
+    if (p.bid != null && p.bid_samples) { bp += p.bid * p.bid_samples; bn += p.bid_samples; }
+    if (p.gap != null && p.gap_samples) { gp += p.gap * p.gap_samples; gn += p.gap_samples; }
+    if (p.ask != null || p.bid != null || p.gap != null) hours++;
+  });
+  return { ask: an ? ap / an : null, bid: bn ? bp / bn : null, gap: gn ? gp / gn : null, askN: an, bidN: bn, gapN: gn, hours };
+}
+
+async function fetchDepth({ silent = false, manual = false } = {}) {
+  const seq = ++depthSeq;                      // a slower, older response must not overwrite a newer one
+  const { start, end, mode } = depthWindow();
+  const needHistory = mode === "archive" || depthRange !== "1h";
+  let ok = true;
+  try {
+    const qs = [start && `start=${encodeURIComponent(start.toISOString())}`, end && `end=${encodeURIComponent(end.toISOString())}`].filter(Boolean).join("&");
+    const [rawRes, histRes] = await Promise.all([
+      fetch(`${API}/api/usdtngn-slippage/raw`, { cache: "no-store" }),
+      needHistory ? fetch(`${API}/api/usdtngn-slippage/history${qs ? "?" + qs : ""}`, { cache: "no-store" }) : Promise.resolve(null),
+    ]);
+    if (!rawRes.ok) throw new Error(`HTTP ${rawRes.status}`);
+    const raw = await rawRes.json();
+    const hist = histRes && histRes.ok ? await histRes.json() : { points: [] };
+    if (seq !== depthSeq) return;
+    const samples = raw.samples || [];
+
+    if (raw.config) {
+      if (raw.config.weight_usdt != null) walkW = raw.config.weight_usdt;
+      if (raw.config.mid_weight_usdt != null) midW = raw.config.mid_weight_usdt;
+      if (raw.config.poll_interval_seconds != null) depthPollS = raw.config.poll_interval_seconds;
+      const up = raw.config.uptime || {};
+      if (up.reference_price != null) upRef = up.reference_price;
+      if (up.band_pct != null) upBandPct = up.band_pct;
+      if (up.weight_usdt != null) upW = up.weight_usdt;
+    }
+    applyDepthLabels();
+
+    // Slippage: hourly-condensed history (older) + raw 5s samples (newer).
+    const points = [
+      ...(hist.points || []).map(p => ({ ts: p.ts, buy: p.buy_slip_pct, sell: p.sell_slip_pct, mid: p.mid, wb: null, ws: null, g1: !!p.g1, raw: false })),
+      ...samples.map(p => ({ ts: p.ts, buy: p.buy_slip_pct, sell: p.sell_slip_pct, mid: p.mid, wb: p.weighted_avg_buy, ws: p.weighted_avg_sell, g1: !!p.g1, raw: true })),
+    ].filter(p => inWindow(p.ts, start, end)).sort((a, b) => new Date(a.ts) - new Date(b.ts));
+    renderSlippage(points);
+
+    // Uptime: hourly points + the live in-progress hour.
+    const up = (hist.points || [])
+      .filter(p => !(p.uptime_ask == null && p.uptime_bid == null && p.spread_gap == null))
+      .map(p => ({
+        ts: p.ts, ask: p.uptime_ask, bid: p.uptime_bid,
+        ask_samples: p.uptime_ask_samples ?? p.sample_count ?? null,
+        bid_samples: p.uptime_bid_samples ?? p.sample_count ?? null,
+        gap: p.spread_gap ?? null, gap_samples: p.spread_gap_samples ?? null,
+        sample_count: p.sample_count ?? null, live: false,
+      }));
+    const lu = liveUptime(samples), lg = liveGap(samples);
+    if (lu.count > 0) {
+      up.push({ ts: raw.bucket_start || (samples[samples.length - 1] || {}).ts, ask: lu.ask, bid: lu.bid,
+        ask_samples: lu.askN, bid_samples: lu.bidN, gap: lg.pct, gap_samples: lg.n, sample_count: lu.count, live: true });
+    }
+    const upChart = up.filter(p => inWindow(p.ts, start, end)).sort((a, b) => new Date(a.ts) - new Date(b.ts)).filter(p => isTradingHour(p.ts));
+    lastUptimeCsv = upChart.filter(p => !p.live);
+    lastUptimeWin = { start, end };
+    renderUptime(upChart);
+
+    // Feed health decides whether the "this hour" figures may claim to be live.
+    const age = samples.length ? (Date.now() - new Date(samples[samples.length - 1].ts)) / 1000 : null;
+    const stale = age == null || age > Math.max(120, (depthPollS || 5) * 24);
+    renderDepthHealth(stale, age, samples.length, mode);
+
+    if (mode !== "archive" && depthRange === "1h") {
+      const note = stale ? `feed stopped · last poll ${feedAge(age)} ago` : null;
+      const u = stale ? { ask: null, bid: null, askN: 0, bidN: 0 } : lu;
+      const g = stale ? { pct: null, n: 0 } : lg;
+      const sub = (n, v) => note || (n ? `${Math.round((v || 0) * n)}/${n} polls · this hour` : "this hour");
+      setText("k-ask", pct1(u.ask)); setText("k-ask-s", sub(u.askN, u.ask));
+      setText("k-bid", pct1(u.bid)); setText("k-bid-s", sub(u.bidN, u.bid));
+      setText("k-gap", pct1(g.pct)); setText("k-gap-s", sub(g.n, g.pct));
+    } else {
+      const a = windowAverage(upChart.filter(p => !p.live));
+      const label = mode === "archive" ? "archive avg" : `${depthRange} avg`;
+      const sub = (n, v) => n ? `${Math.round(v * n)}/${n} polls · ${label} · trading hrs` : `${label} · no completed hours yet`;
+      setText("k-ask", pct1(a.ask)); setText("k-ask-s", sub(a.askN, a.ask));
+      setText("k-bid", pct1(a.bid)); setText("k-bid-s", sub(a.bidN, a.bid));
+      setText("k-gap", pct1(a.gap));
+      setText("k-gap-s", a.gapN ? sub(a.gapN, a.gap) : (a.hours ? `${label} · no spread data in window yet` : `${label} · no completed hours yet`));
+    }
+  } catch (err) {
+    if (seq !== depthSeq) return;
+    ok = false;
+    if (!silent) toast("Couldn’t load depth data", err.message, { error: true });
+    renderDepthHealth(null, null, 0, mode, err.message);
+  }
+  await fetchVolume(seq);
+  if (manual && ok) toast("Depth data reloaded", `${ngtTime()} WAT`);
+}
+
+function renderDepthHealth(stale, age, n, mode, err) {
+  const notice = $("depth-notice"), dot = $("depth-live").querySelector(".status-dot");
+  dot.className = "status-dot";
+  notice.className = "notice";
+  if (err) {
+    notice.hidden = false; notice.classList.add("error");
+    notice.innerHTML = `${infoIcon()}<div><b>Can’t reach the depth endpoints.</b> ${esc(err)}. This view needs the API at ${esc(API || location.origin)}.</div>`;
+    dot.classList.add("off"); setText("depth-live-text", "Offline");
+    return;
+  }
+  setText("depth-live-text", mode === "archive" ? "Archive · static" : stale ? "Feed stopped" : `Live · every ${depthPollS}s`);
+  if (mode === "archive") dot.classList.add("off");
+  else if (stale) dot.classList.add("stale");
+  // In archive mode the dead live feed is beside the point: the window is history.
+  notice.hidden = !stale || mode === "archive";
+  if (stale) {
+    notice.innerHTML = `${infoIcon()}<div>${n
+      ? `<b>The depth-walk feed stopped ${feedAge(age)} ago.</b> The monitor’s ${depthPollS}s poller wrote its last sample then, so nothing here is live. Check that the monitor is running and look for <code>Depth-walk</code> errors in its log. Pick archive dates to review older data.`
+      : `<b>No depth-walk samples yet.</b> The monitor hasn’t written any USDT/NGN depth polls — check that it is running.`}</div>`;
+  }
+}
+
+function applyDepthLabels() {
+  const w = fmtUsdt(walkW), m = fmtUsdt(midW), uw = fmtUsdt(upW);
+  const p = Number(upBandPct).toLocaleString(undefined, { maximumFractionDigits: 4 });
+  setText("lg-buy", `Buy (${w} walk)`); setText("lg-sell", `Sell (${w} walk)`);
+  setText("lg-mid", `Mid (${m} walk)`); setText("lg-wb", `Weighted avg buy (${w})`); setText("lg-ws", `Weighted avg sell (${w})`);
+  setText("k-buy-s", `₦ from mid · ${w} walk`); setText("k-sell-s", `₦ from mid · ${w} walk`);
+  setText("k-g1-s", `book couldn’t fill ${w}`);
+  setText("ex-w", w); setText("ex-mid", m); setText("ex-uw", uw); setText("ex-ref", Number(upRef).toLocaleString());
+  document.querySelectorAll(".ex-pct").forEach(el => el.textContent = p);
+  setText("k-ask-k", `Ask uptime · ±${p}%`); setText("k-bid-k", `Bid uptime · ±${p}%`);
+  setText("lg-ask", `Ask (≥ ${uw} within ±${p}%)`); setText("lg-bid", `Bid (≥ ${uw} within ±${p}%)`);
+}
+
+function renderSlippage(points) {
+  const buyN = points.map(p => p.buy != null && p.mid != null ? p.buy / 100 * p.mid : null);
+  const sellN = points.map(p => p.sell != null && p.mid != null ? p.sell / 100 * p.mid : null);
+  setText("k-buy", fmtNaira(mean(buyN)));
+  setText("k-sell", fmtNaira(mean(sellN)));
+  const g1 = points.filter(p => p.g1).length;
+  setText("k-g1", g1.toLocaleString());
+  $("k-g1").classList.toggle("warn", g1 > 0);
+  setText("k-n", points.length.toLocaleString());
+  const raws = points.filter(p => p.raw).length;
+  setText("k-n-s", `${raws} raw · ${points.length - raws} hourly`);
+  const scope = dateStart || dateEnd ? `${dateStart || "…"} → ${dateEnd || "…"}` : depthRange;
+  setText("slip-sub", `${fmtUsdt(walkW)} depth walk · ${scope} · ${points.length} point${points.length === 1 ? "" : "s"}`);
+
+  const labels = points.map(p => labelFor(p.ts, !p.raw));
+  const c = charts.slip;
+  c.data.labels = labels;
+  c.data.datasets[0].data = points.map(p => p.buy);
+  c.data.datasets[1].data = points.map(p => p.sell);
+  c.data.datasets[2].data = points.map(p => p.g1 ? p.buy : NaN);
+  c.update("none");
+  const x = charts.px;
+  x.data.labels = labels;
+  x.data.datasets[0].data = points.map(p => p.mid);
+  x.data.datasets[1].data = points.map(p => p.wb);
+  x.data.datasets[2].data = points.map(p => p.ws);
+  x.update("none");
+}
+
+function renderUptime(points) {
+  const c = charts.up;
+  const live = points.map(p => !!p.live);
+  c._live = live;
+  c.data.labels = points.map(p => labelFor(p.ts, true));
+  c.data.datasets[0].data = points.map(p => p.ask != null ? p.ask * 100 : null);
+  c.data.datasets[1].data = points.map(p => p.bid != null ? p.bid * 100 : null);
+  c.data.datasets[2].data = points.map(p => p.gap != null ? p.gap * 100 : null);
+  c.data.datasets.forEach(ds => { ds.pointRadius = live.map(f => f ? 4 : 0); });
+  c.update("none");
+}
+
+async function fetchVolume(seq) {
+  const { start, end, mode } = depthWindow();
+  const liveHour = mode !== "archive" && depthRange === "1h";
+  const qs = [start && `start=${encodeURIComponent(start.toISOString())}`, end && `end=${encodeURIComponent(end.toISOString())}`].filter(Boolean).join("&");
+  try {
+    const [winRes, rollRes] = await Promise.all([
+      fetch(`${API}/api/usdtngn-volume${qs ? "?" + qs : ""}`, { cache: "no-store" }),
+      liveHour ? fetch(`${API}/api/usdtngn-volume/rolling`, { cache: "no-store" }) : Promise.resolve(null),
+    ]);
+    if (!winRes.ok) throw new Error(`HTTP ${winRes.status}`);
+    const win = await winRes.json();
+    const roll = liveHour ? (rollRes && rollRes.ok ? await rollRes.json() : { stale: true }) : null;
+    if (seq !== depthSeq) return;
+    if (liveHour) renderVolumeRolling(roll); else renderVolumeTotal(win, mode);
+    renderVolumeChart(win);
+  } catch (err) {
+    if (seq === depthSeq) renderVolumeRolling({ stale: true });
+  }
+}
+function renderVolumeRolling(roll) {
+  setText("k-vol-k", "Volume · trailing 60m");
+  if (!roll || roll.stale || roll.volume == null) { setText("k-vol", "—"); setText("k-vol-s", "feed unavailable"); return; }
+  setText("k-vol", fmtVol(roll.volume));
+  const gaps = (roll.expected_count || 0) - (roll.retrieved_count || 0);
+  const span = `${NGT_HM.format(new Date(roll.start))}–${NGT_HM.format(new Date(roll.end))}`;
+  setText("k-vol-s", gaps > 0 ? `USDT · ${span} · ${gaps} min missing` : `USDT · ${span}`);
+}
+function renderVolumeTotal(win, mode) {
+  setText("k-vol-k", `Volume · ${mode === "archive" ? "archive" : depthRange} total`);
+  const pts = (win && win.points) || [];
+  if (!pts.length) { setText("k-vol", "—"); setText("k-vol-s", win && win.stale ? "feed unavailable" : "no data in window"); return; }
+  setText("k-vol", fmtVol(win.total));
+  const want = win.expected_count || pts.length;
+  setText("k-vol-s", pts.length < want ? `USDT · ${pts.length} of ${want} hours` : `USDT · ${pts.length} hours`);
+}
+function renderVolumeChart(win) {
+  const points = (win && win.points) || [];
+  lastVolumeRows = points;
+  const archived = new Set(points.slice(0, win.archive_only_points || 0).map(p => p.ts));
+  const byTs = new Map(points.map(p => [new Date(p.ts).getTime(), p]));
+  const s = new Date(win.start).getTime(), e = new Date(win.end).getTime();
+  const hours = [];
+  for (let t = s; t < e; t += 3600e3) {
+    const p = byTs.get(t);
+    hours.push({ ms: t, v: p ? p.volume : null, present: !!p, archived: p ? archived.has(p.ts) : false });
+  }
+  // Long windows bucket into daily bars; volume is additive, so a day is the sum of its hours.
+  const daily = (e - s) / 3600e3 > 14 * 24;
+  const c = charts.vol;
+  if (!daily) {
+    c.data.labels = hours.map(h => labelFor(new Date(h.ms).toISOString(), true));
+    c.data.datasets[0].data = hours.map(h => h.v);
+    c._meta = hours.map(h => ({ archived: h.archived ? 1 : 0, present: 1, total: 1 }));
+  } else {
+    const order = [], groups = new Map();
+    hours.forEach(h => {
+      const k = NGT_DAY.format(new Date(h.ms));
+      if (!groups.has(k)) { groups.set(k, { sum: 0, present: 0, total: 0, archived: 0 }); order.push(k); }
+      const g = groups.get(k); g.total++;
+      if (h.present) { g.sum += h.v || 0; g.present++; if (h.archived) g.archived++; }
+    });
+    c.data.labels = order.map(k => k.slice(5));
+    c.data.datasets[0].data = order.map(k => groups.get(k).present ? groups.get(k).sum : null);
+    c._meta = order.map(k => groups.get(k));
+  }
+  c.update("none");
+  setText("lg-vol", daily ? "Volume per day" : "Volume per hour");
+  setText("vol-sub", `USDT, all hours${daily ? " · daily bars" : ""}`);
+  const short = Math.max(0, (win.expected_count || 0) - points.length);
+  const parts = [];
+  if (win.stale) parts.push("Live feed unavailable");
+  if (win.archive_only_points) parts.push(`${win.archive_only_points} hour${win.archive_only_points === 1 ? "" : "s"} from the monitor’s archive`);
+  if (short) parts.push(`${short} hour${short === 1 ? "" : "s"} unavailable (past the exchange’s 300-candle reach, not yet archived)`);
+  $("vol-note").hidden = !parts.length;
+  $("vol-note").textContent = parts.join(" · ");
+}
+
+// ── Charts ───────────────────────────────────────────────────────────────────
+// Functional graphs: no animation, hairline grid, tooltips in the page's
+// inverted tooltip style. Colours come from the theme tokens.
+function chartColors() {
+  return {
+    buy: cssVar("--green"), sell: cssVar("--red"), g1: cssVar("--amber"), gap: cssVar("--blue"),
+    mid: cssVar("--accent"), grid: cssVar("--hairline"), tick: cssVar("--text-3"),
+    tipBg: cssVar("--text"), tipFg: cssVar("--bg"),
+  };
+}
+function alpha(hex, a) {
+  if (!/^#[0-9a-f]{6}$/i.test(hex)) return hex;
+  const n = parseInt(hex.slice(1), 16);
+  return `rgba(${n >> 16 & 255}, ${n >> 8 & 255}, ${n & 255}, ${a})`;
+}
+function baseOptions(yTick, extra = {}) {
+  return {
+    responsive: true, maintainAspectRatio: false, animation: false,
+    interaction: { mode: "index", intersect: false },
+    plugins: { legend: { display: false }, tooltip: { boxWidth: 8, boxHeight: 8, padding: 8, cornerRadius: 8, titleFont: { weight: "600" }, ...(extra.tooltip || {}) } },
+    scales: {
+      x: { grid: { display: false }, border: { display: false }, ticks: { maxRotation: 0, autoSkip: true, autoSkipPadding: 16, maxTicksLimit: 8, font: { size: 10 } } },
+      y: { border: { display: false }, ticks: { font: { size: 10 }, callback: yTick, maxTicksLimit: 6 }, ...(extra.y || {}) },
+    },
+    elements: { line: { borderWidth: 1.75, tension: 0.25 }, point: { radius: 0, hoverRadius: 3 } },
+  };
+}
+function initCharts() {
+  if (charts || !window.Chart) return;
+  Chart.defaults.font.family = getComputedStyle(document.body).fontFamily;
+  const slip = new Chart($("c-slip"), {
+    type: "line",
+    data: { labels: [], datasets: [
+      { label: "Buy slip %", data: [], fill: "origin" },
+      { label: "Sell slip %", data: [], fill: "origin" },
+      { label: "G1 partial fill", data: [], type: "scatter", pointRadius: 3.5, pointHoverRadius: 5, showLine: false },
+    ]},
+    options: baseOptions(v => v.toFixed(2) + "%", { tooltip: { callbacks: { label: i => `${i.dataset.label}: ${i.parsed.y != null && !isNaN(i.parsed.y) ? i.parsed.y.toFixed(4) + "%" : "—"}` } } }),
+  });
+  const px = new Chart($("c-px"), {
+    type: "line",
+    data: { labels: [], datasets: [
+      { label: "Mid", data: [] },
+      { label: "Weighted avg buy", data: [], borderDash: [4, 3], borderWidth: 1.25 },
+      { label: "Weighted avg sell", data: [], borderDash: [4, 3], borderWidth: 1.25 },
+    ]},
+    options: baseOptions(v => v.toLocaleString()),
+  });
+  const up = new Chart($("c-up"), {
+    type: "line",
+    data: { labels: [], datasets: [
+      { label: "Ask uptime", data: [], spanGaps: true, fill: "origin" },
+      { label: "Bid uptime", data: [], spanGaps: true, fill: "origin" },
+      { label: "Spread ≤ ₦1", data: [], spanGaps: true, borderDash: [5, 3] },
+    ]},
+    options: baseOptions(v => v + "%", {
+      y: { min: 0, max: 100 },
+      tooltip: { callbacks: {
+        title: items => (items[0] ? items[0].label : "") + (up._live && items[0] && up._live[items[0].dataIndex] ? " · in progress" : ""),
+        label: i => `${i.dataset.label}: ${i.parsed.y != null ? i.parsed.y.toFixed(1) + "%" : "—"}`,
+      } },
+    }),
+  });
+  const vol = new Chart($("c-vol"), {
+    type: "bar",
+    data: { labels: [], datasets: [{ label: "Volume", data: [], borderRadius: 2, maxBarThickness: 18 }] },
+    options: baseOptions(v => fmtVol(v), {
+      y: { beginAtZero: true },
+      tooltip: { callbacks: {
+        title: items => {
+          const m = vol._meta && items[0] && vol._meta[items[0].dataIndex];
+          const src = m && m.archived ? (m.archived === m.present ? " · from archive" : " · partly from archive") : "";
+          return (items[0] ? items[0].label : "") + src;
+        },
+        label: i => {
+          const out = [`${i.parsed.y != null ? i.parsed.y.toLocaleString(undefined, { maximumFractionDigits: 4 }) : "—"} USDT`];
+          const m = vol._meta && vol._meta[i.dataIndex];
+          if (m && m.present < m.total) out.push(`${m.present} of ${m.total} hours`);
+          return out;
+        },
+      } },
+    }),
+  });
+  charts = { slip, px, up, vol };
+  themeCharts();
+  // Tick labels are measured in the web font; re-measure once it has loaded.
+  if (document.fonts) document.fonts.ready.then(() => Object.values(charts).forEach(c => c.update("none")));
+}
+function themeCharts() {
+  if (!charts) return;
+  const k = chartColors();
+  const s = charts.slip.data.datasets;
+  s[0].borderColor = k.buy;  s[0].backgroundColor = alpha(k.buy, 0.08);
+  s[1].borderColor = k.sell; s[1].backgroundColor = alpha(k.sell, 0.08);
+  s[2].borderColor = k.g1;   s[2].backgroundColor = k.g1;
+  const p = charts.px.data.datasets;
+  p[0].borderColor = k.mid; p[1].borderColor = k.buy; p[2].borderColor = k.sell;
+  const u = charts.up.data.datasets;
+  u[0].borderColor = k.buy;  u[0].backgroundColor = alpha(k.buy, 0.07);
+  u[1].borderColor = k.sell; u[1].backgroundColor = alpha(k.sell, 0.06);
+  u[2].borderColor = k.gap;
+  u.forEach(ds => { ds.pointBackgroundColor = ds.borderColor; ds.pointBorderColor = ds.borderColor; ds.pointStyle = "rectRot"; });
+  const v = charts.vol.data.datasets[0];
+  v.backgroundColor = alpha(k.mid, 0.55); v.hoverBackgroundColor = k.mid;
+  Object.values(charts).forEach(c => {
+    c.options.scales.x.ticks.color = k.tick;
+    c.options.scales.y.ticks.color = k.tick;
+    c.options.scales.y.grid = { color: k.grid, drawTicks: false };
+    Object.assign(c.options.plugins.tooltip, { backgroundColor: k.tipBg, titleColor: k.tipFg, bodyColor: k.tipFg });
+    // A full update, not "none": "none" reuses cached element styles, so new
+    // colours wouldn't reach the bars. Animation is off, so this is still instant.
+    c.update();
+  });
+}
+
+// ── CSV ──────────────────────────────────────────────────────────────────────
+const dayTag = d => NGT_DAY.format(d || new Date());
+function ngtStamp(iso, seconds) {
+  try {
+    const parts = new Intl.DateTimeFormat("en-GB", { timeZone: "Africa/Lagos", day: "numeric", month: "numeric", year: "numeric",
+      hour: "numeric", minute: "2-digit", ...(seconds ? { second: "2-digit" } : {}), hour12: false }).formatToParts(new Date(iso));
+    const g = t => (parts.find(p => p.type === t) || {}).value || "";
+    let h = parseInt(g("hour"), 10); if (h === 24) h = 0;
+    return `${parseInt(g("day"), 10)}/${parseInt(g("month"), 10)}/${g("year")} ${h}:${g("minute")}${seconds ? ":" + g("second") : ""}`;
+  } catch { return iso; }
+}
+$("csv-uptime").addEventListener("click", () => {
+  const rows = lastUptimeCsv;
+  if (!rows.length) { toast("Nothing to download", "No completed trading-hour buckets in this window.", { error: true }); return; }
+  const pct = v => v == null ? "" : (v * 100).toFixed(4);
+  const lines = [["timestamp", "ask_uptime_pct", "bid_uptime_pct", "spread_lte_1ngn_pct", "spread_samples", "sample_count"].join(",")];
+  rows.forEach(r => lines.push([ngtStamp(r.ts, true), pct(r.ask), pct(r.bid), pct(r.gap), r.gap_samples ?? "", r.sample_count ?? ""].map(csvCell).join(",")));
+  downloadCsv(`uptime_${dayTag(lastUptimeWin.start)}_${dayTag(lastUptimeWin.end)}.csv`, lines);
+  toast(`Downloaded ${rows.length} hourly bucket${rows.length === 1 ? "" : "s"}`);
+});
+$("csv-vol").addEventListener("click", () => {
+  const rows = lastVolumeRows;
+  if (!rows.length) { toast("Nothing to download", "No hourly volume in this window.", { error: true }); return; }
+  const { start, end } = depthWindow();
+  const lines = [["hour_ngt", "volume_usdt"].join(",")];
+  rows.forEach(r => lines.push([ngtStamp(r.ts, false), r.volume ?? ""].map(csvCell).join(",")));
+  downloadCsv(`usdtngn_volume_${dayTag(start)}_${dayTag(end)}.csv`, lines);
+  toast(`Downloaded ${rows.length} hourly bar${rows.length === 1 ? "" : "s"}`);
+});
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Configuration drawer
+// ══════════════════════════════════════════════════════════════════════════════
+// One schema drives rendering, loading and the save payload, so the three can
+// never drift apart. Paths and payload shape match dashboard.html exactly.
+const CFG = [
+  { id: "timing", title: "Timing", fields: [
+    { k: "timing.cycle_sleep_seconds", l: "Cycle interval (seconds)", min: 10, step: 5,
+      h: "Sleep time between full scan cycles. Every issue detected in a cycle fires immediately — there is no alert delay or cooldown." },
+  ]},
+  { id: "orderbook", title: "Order book", fields: [
+    { k: "orderbook.min_orderbook_layers", l: "Min order book layers", min: 1, step: 1, h: "Fewer layers on either side triggers a shallow book warning." },
+    { k: "orderbook.depth_deviation_pct", l: "Depth deviation threshold (%)", min: 1, max: 99, step: 1, h: "A4 — how far whole-book depth must fall below this market’s own rolling average before it fires. 50 = half its usual depth. Clamped to 1–99." },
+    { k: "orderbook.depth_baseline_buckets", l: "Depth baseline cycles", min: 1, step: 1, h: "A4 — how many prior cycles the depth average covers. Needs 5 readings before A4 says anything at all." },
+    { k: "orderbook.dws_poor_threshold", l: "DWS poor threshold", min: 0, step: 0.01, h: "Dynamic Weighted Spread above this is considered “poor” quality." },
+    { k: "orderbook.min_abs_spread_diff_pct", l: "Min abs spread diff (pp)", min: 0, step: 0.001, h: "Minimum percentage-point spread deviation before A2 triggers. Protects tiny-target pairs." },
+    { k: "orderbook.depth_limit", l: "Depth limit (levels)", min: 1, step: 1, h: "Max order book levels per side fetched from the API." },
+    { k: "orderbook.depth_imbalance_ratio", l: "Depth imbalance ratio", min: 1, step: 0.1, h: "A5 fires when one side’s depth is this many times heavier than the other." },
+  ]},
+  { id: "pricing", title: "Pricing", sub: "Reference prices and the circuit breaker", fields: [
+    { k: "pricing.price_discrepancy_pct", l: "Price discrepancy tolerance (%)", min: 0, step: 0.01, h: "B1 — extra tolerance beyond each pair’s own expected offset (target_spread / 2) from the MEXC/KuCoin reference. The bot doesn’t quote symmetrically on the reference, so some offset is normal; this is the extra room allowed before B1 fires. USDT-quoted pairs only." },
+    { k: "pricing.source_divergence_pct", l: "Source divergence (%)", min: 0, step: 0.01, h: "B2 — % diff between MEXC and KuCoin themselves before one is flagged an outlier." },
+    { k: "pricing.stale_reference_cycles", l: "Stale reference cycles (unavailable)", min: 1, step: 1, h: "B1 stale-reference — consecutive failed-to-resolve reads before a dead feed fires (Tier 1; this count is the confirmation). API error, unlisted, or wrong alias." },
+    { k: "pricing.stale_unchanged_cycles", l: "Stale unchanged cycles", min: 1, step: 1, h: "B1 stale-reference — consecutive unchanged reads before the cross-source liveness check runs. Fires Telegram only if the peer source is still moving; otherwise it’s dashboard-only." },
+    { k: "pricing.stale_movement_epsilon_pct", l: "Stale movement epsilon (%)", min: 0, step: 0.001, h: "B1 stale-reference — a move ≤ this % counts as “unchanged”; the same threshold decides whether a peer is “moving”. 0 = exact equality. Raise slightly to absorb sub-tick wiggle." },
+    { k: "pricing.circuit_breaker_pct", l: "Circuit breaker (%)", min: 0, step: 0.1, h: "B4 — total price move % within the k-line window treated as breaker-risk territory." },
+    { k: "pricing.circuit_breaker_warn_ratio", l: "Circuit breaker warn ratio", min: 0, max: 1, step: 0.05, h: "B4 — fires HIGH at this fraction of the breaker %, CRITICAL at 100%+." },
+    { k: "pricing.arb_gap_pct", l: "Arb gap threshold (%)", min: 0, step: 0.01, h: "F1 — % gap between a pair’s quoted price and its implied cross-rate before flagging." },
+  ]},
+  { id: "kline", title: "K-line", sub: "Feeds both B4 (circuit breaker) and G2 (candle wicks)", fields: [
+    { k: "kline.candle_minutes", l: "Candle size (minutes)", min: 1, step: 1, h: "B4 and G2 — candle period requested from the API (usually 1). Larger candles keep anomalies in view longer but blur a brief wick into a whole candle’s range, which is what G2 exists to catch. Independent of D1’s own candle size." },
+    { k: "kline.lookback_minutes", l: "Lookback window (minutes)", min: 1, step: 1, h: "B4 and G2 — how far back both checks look. B4 measures price now against the open of the oldest candle; G2 rescans every candle each cycle, so this is also how long an anomalous print stays visible." },
+  ]},
+  { id: "volume", title: "Volume spike", sub: "D1", fields: [
+    { k: "volume_spike.mode", l: "Trigger mode", type: "select", def: "baseline_relative", options: [["baseline_relative", "Baseline-relative"], ["absolute", "Absolute (legacy flat threshold)"]], h: "Baseline-relative fires on an unusual surge for this pair, with the absolute threshold kept as a floor. Absolute reverts to the flat per-pair threshold — an instant rollback without a redeploy." },
+    { k: "volume_spike.spike_ratio", l: "Spike ratio (× baseline)", min: 1, step: 0.1, h: "Baseline-relative only. Fires when window volume ≥ this multiple of the pair’s baseline (and still clears the absolute floor)." },
+    { k: "volume_spike.min_baseline_buckets", l: "Min baseline windows (trust gate)", min: 2, step: 1, h: "How many recorded windows the baseline needs before it’s trusted. Keep ≤ “Baseline windows”, or the baseline never becomes ready. Warm-up ≈ this × D1 lookback after a cold start." },
+    { k: "volume_spike.warmup_fallback", l: "Warm-up fallback", type: "select", def: "absolute", options: [["absolute", "Absolute floor (no blind spot)"], ["suppress", "Suppress until baseline ready"]], h: "Behaviour before the baseline is trusted, including just after an OOM reset. Absolute keeps firing on the flat threshold; suppress goes silent until enough history exists." },
+    { k: "volume_spike.candle_minutes", l: "Candle size (minutes)", min: 1, step: 1, h: "D1’s own candle period — a separate call from the K-line section, so tuning this never touches the circuit breaker. Larger candles avoid sparse near-zero bars on illiquid pairs." },
+    { k: "volume_spike.lookback_minutes", l: "Lookback window (minutes)", min: 1, step: 1, h: "D1’s own rolling window. Fetches lookback ÷ candle-size candles." },
+    { k: "volume_spike.baseline_buckets", l: "Baseline windows", min: 2, step: 1, h: "How many prior lookback windows to average. Only the fallback now: used while the hourly archive fills and whenever the model is flat mean. Effective span = this × lookback." },
+    { k: "volume_spike.baseline_model", l: "Baseline model", type: "select", def: "seasonal_median", options: [["seasonal_median", "Seasonal median (same hour of day)"], ["flat_mean", "Flat mean (legacy)"]], h: "Seasonal compares this hour against the median of the same hour of day over the last N days, so a normal daily shape stops reading as an anomaly. Flat mean restores the old all-hours average." },
+    { k: "volume_spike.baseline_days", l: "Baseline window (days)", min: 1, step: 1, h: "How far back the seasonal baseline looks. Backfills ~12.5 days from Quidax on first run and accumulates from there." },
+    { k: "volume_spike.min_slot_samples", l: "Min samples per hour slot", min: 2, step: 1, h: "Prior days at this hour required before the slot median is trusted. Days, not windows — not interchangeable with the trust gate." },
+  ]},
+  { id: "churn", title: "Layer churn", sub: "A6", fields: [
+    { k: "layer_churn.top_pct", l: "Near-touch layer %", min: 0.05, max: 1, step: 0.05, h: "Fraction of each side’s layers (nearest to mid) considered near-touch for churn comparison." },
+    { k: "layer_churn.baseline_buckets", l: "Baseline window (cycles)", min: 2, step: 1, h: "How many prior cycles’ churn scores to average for this pair’s own baseline." },
+    { k: "layer_churn.ratio_threshold", l: "Churn ratio threshold", min: 0, max: 1, step: 0.05, h: "A6 fires when this cycle’s churn drops below this fraction of the pair’s baseline." },
+  ]},
+  { id: "fill", title: "Fill rate", sub: "D2", fields: [
+    { k: "fill_rate.poll_interval_seconds", l: "Poll interval (seconds)", min: 5, step: 1, h: "One batched call covers every market. 5s is the floor — Quidax only rebuilds its ticker about that often." },
+    { k: "fill_rate.baseline_buckets", l: "Baseline window (hours)", min: 2, step: 1, h: "How many prior closed hours to average for this market’s fill-rate baseline." },
+    { k: "fill_rate.min_baseline_buckets", l: "Minimum baseline (hours)", min: 1, step: 1, h: "D2 stays silent until this many closed hours exist for the market." },
+    { k: "fill_rate.min_baseline_events", l: "Minimum baseline (events/hour)", min: 0, step: 1, h: "Below this rate a market is too thin for a change test — hourly noise is roughly the square root of the count. Reported, never alerted." },
+    { k: "fill_rate.pct_change_threshold", l: "Deviation threshold (% from baseline)", min: 1, max: 100, step: 5, h: "Fires when the trailing hour’s fills differ from baseline by more than this, in either direction. CRITICAL only on a complete stop. Capped at 100." },
+    { k: "fill_rate.baseline_model", l: "Baseline model", type: "select", def: "seasonal_median", options: [["seasonal_median", "Seasonal median (same hour of day)"], ["flat_mean", "Flat mean (legacy)"]], h: "Seasonal compares against the median of the same hour of day over the last N days. Flat mean restores the old all-hours average." },
+    { k: "fill_rate.baseline_days", l: "Baseline window (days)", min: 1, step: 1, h: "How far back the seasonal baseline looks. Unlike D1 this can’t be backfilled — the window fills only by waiting." },
+    { k: "fill_rate.min_slot_samples", l: "Min samples per hour slot", min: 2, step: 1, h: "Prior days at this hour required before the slot median is trusted." },
+  ]},
+  { id: "walk", title: "Depth walk", sub: "G1 · USDT/NGN only", fields: [
+    { k: "depth_walk.weight_usdt", l: "Walk weight (USDT)", min: 0, step: 1000, h: "Quantity walked cumulatively down each side of the book; the boundary layer is clipped. Shared by buy and sell walks." },
+    { k: "depth_walk.mid_weight_usdt", l: "Mid walk weight (USDT)", min: 0, step: 100, h: "Mid is the average of two small walks of this weight, not raw best ask / bid. Falls back to top-of-book (flagged) if a side can’t supply it." },
+    { k: "depth_walk.poll_interval_seconds", l: "Poll interval (seconds)", min: 1, step: 1, h: "How often the depth-walk task samples USDT/NGN. Independent of the main cycle." },
+    { k: "depth_walk.raw_retention_seconds", l: "Raw bucket length (seconds)", min: 60, step: 60, h: "How long a raw-sample bucket stays open before condensing to one hourly point. 3600 = one hour." },
+    { k: "depth_walk.condensed_retention_days", l: "Condensed retention (days)", min: 1, step: 1, h: "How long hourly averages are kept. The archive date picker can reach back this far." },
+  ]},
+  { id: "uptime", title: "Liquidity uptime", sub: "USDT/NGN only", fields: [
+    { k: "depth_walk.uptime.reference_price", l: "Target price · s (₦)", min: 0, step: 1, h: "Band anchor. Half-width p = 1₦ ÷ s × 100, applied to live mid as mid × (1 ± p/100) — ±1₦ only when mid = s. Lower s ⇒ wider band. ≤ 0 falls back to the default." },
+    { k: "depth_walk.uptime.weight_usdt", l: "In-band weight (USDT)", min: 0, step: 1000, h: "A side scores 1 for a poll when at least this much resting size sits inside the band. Independent of the G1 walk weight." },
+  ]},
+  { id: "alerts", title: "Alerts", fields: [
+    { k: "alerts.suspend_minutes", l: "Mute duration (minutes)", min: 1, step: 1, h: "How long a pair’s Telegram alerts stay muted when you tap Mute in the pairs table. The pair is still monitored and shown; only Telegram delivery pauses. Save first if you change this — Mute uses the saved value." },
+  ]},
+  { id: "pairs", title: "Pairs & spread targets", short: "Pairs", pairs: true },
+];
+const CFG_FIELDS = CFG.flatMap(s => s.fields || []);
+const fieldId = k => "cf-" + k.replace(/\./g, "-");
+const getPath = (o, path) => path.split(".").reduce((a, k) => (a == null ? a : a[k]), o);
+const setPath = (o, path, v) => { const ks = path.split("."); let c = o; ks.slice(0, -1).forEach(k => { c = c[k] = c[k] || {}; }); c[ks[ks.length - 1]] = v; };
+
+let cfgOpen = false, cfgLoaded = null, cfgOverrides = {}, cfgBaseline = null, cfgPairsBaseline = null;
+let suspensions = {}, suspendMinutes = 30, suspendTicker = null, cfgReturnFocus = null;
+let confirmingClose = false, footMsg = null;
+
+function renderCfgShell() {
+  $("cfg-index").innerHTML = CFG.map(s => `<button type="button" data-sec="${s.id}">${esc(s.short || s.title)}</button>`).join("");
+  $("cfg-body").innerHTML = CFG.map(s => `<section class="cfg-section" id="sec-${s.id}">
+    <h3>${esc(s.title)}</h3><div class="sec-sub">${esc(s.sub || "")}</div>
+    ${s.pairs ? pairsShell() : `<div class="fields">${s.fields.map(f => `<div class="field" data-k="${f.k}">
+      <label for="${fieldId(f.k)}">${esc(f.l)}</label>
+      ${f.type === "select"
+        ? `<select id="${fieldId(f.k)}">${f.options.map(([v, t]) => `<option value="${v}">${esc(t)}</option>`).join("")}</select>`
+        : `<input class="input" type="number" id="${fieldId(f.k)}"${f.min != null ? ` min="${f.min}"` : ""}${f.max != null ? ` max="${f.max}"` : ""}${f.step != null ? ` step="${f.step}"` : ""} inputmode="decimal" />`}
+      <div class="field-hint">${esc(f.h)}</div>
+    </div>`).join("")}</div>`}
+  </section>`).join("");
+}
+function pairsShell() {
+  return `<div class="pairs-tools">
+      <label class="search"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+        <input id="pairs-q" type="search" placeholder="Find a pair" autocomplete="off" spellcheck="false" aria-label="Find a pair" /></label>
+      <span class="muted num" id="pairs-count"></span>
+    </div>
+    <table class="ptable">
+      <thead><tr><th>Symbol</th><th>Target %</th><th>B2 div %</th><th class="alias">MEXC alias</th><th class="alias">KuCoin alias</th><th>Alerts</th><th><span hidden>Remove</span></th></tr></thead>
+      <tbody id="pairs-tbody"></tbody>
+    </table>
+    <div class="add-pair">
+      <input class="input" id="np-sym" placeholder="symbol, e.g. solusdt" spellcheck="false" aria-label="New pair symbol" />
+      <input class="input" id="np-tgt" type="number" min="0" step="0.01" placeholder="target %" aria-label="New pair target spread" />
+      <input class="input" id="np-b2" type="number" min="0" step="0.01" placeholder="B2 div %" aria-label="New pair B2 divergence" />
+      <input class="input" id="np-mexc" placeholder="MEXC alias" spellcheck="false" aria-label="New pair MEXC alias" />
+      <input class="input" id="np-kucoin" placeholder="KuCoin alias" spellcheck="false" aria-label="New pair KuCoin alias" />
+      <button class="btn sm pressable" id="np-add" type="button">Add</button>
+    </div>
+    <div class="pairs-note">Blank target = monitor only. Aliases are only needed when an exchange lists the asset under a different ticker (RNDR is RENDER on MEXC). B2 div % overrides the global source-divergence threshold for one USDT pair; blank uses the global value.</div>`;
+}
+
+function pairRowHTML(p) {
+  const sym = Array.isArray(p) ? p[0] : p.symbol;
+  const tgt = Array.isArray(p) ? p[1] : p.target;
+  const al = (Array.isArray(p) ? p[2] : p.aliases) || {};
+  const key = String(sym || "").toLowerCase();
+  const ov = cfgOverrides[key];
+  return `<tr data-sym="${esc(key)}">
+    <td><input class="input" data-col="sym" value="${esc(sym)}" spellcheck="false" aria-label="Symbol" /></td>
+    <td><input class="input" data-col="tgt" type="number" min="0" step="0.01" value="${tgt != null ? esc(tgt) : ""}" placeholder="monitor only" aria-label="Target spread % for ${esc(key)}" /></td>
+    <td>${key.endsWith("usdt") ? `<input class="input" data-col="b2div" type="number" min="0" step="0.01" value="${ov != null ? esc(ov) : ""}" placeholder="global" aria-label="B2 divergence % for ${esc(key)}" />` : `<span class="na">—</span>`}</td>
+    <td class="alias"><input class="input" data-col="mexc_alias" value="${esc(al.mexc || "")}" placeholder="—" spellcheck="false" aria-label="MEXC alias for ${esc(key)}" /></td>
+    <td class="alias"><input class="input" data-col="kucoin_alias" value="${esc(al.kucoin || "")}" placeholder="—" spellcheck="false" aria-label="KuCoin alias for ${esc(key)}" /></td>
+    <td class="mute-cell" data-sym="${esc(key)}">${muteHTML(key)}</td>
+    <td><button class="del-btn pressable" type="button" aria-label="Remove ${esc(key)}"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M5 7l1 12a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2l1-12M9 7V4h6v3"/></svg></button></td>
+  </tr>`;
+}
+function muteHTML(key) {
+  const until = suspensions[key];
+  const left = until ? new Date(until).getTime() - Date.now() : 0;
+  if (until && left > 0) return `<button class="mute-btn on pressable" type="button" data-act="resume" title="Resume Telegram alerts for ${esc(key.toUpperCase())} now">Muted ${Math.max(1, Math.ceil(left / 60000))}m</button>`;
+  return `<button class="mute-btn pressable" type="button" data-act="mute" title="Mute ${esc(key.toUpperCase())} Telegram alerts for ${suspendMinutes}m">Mute</button>`;
+}
+function tickMutes() { document.querySelectorAll("#pairs-tbody .mute-cell").forEach(td => td.innerHTML = muteHTML(td.dataset.sym)); }
+
+function readPairs() {
+  const pairs = [];
+  document.querySelectorAll("#pairs-tbody tr").forEach(row => {
+    const v = c => { const el = row.querySelector(`[data-col="${c}"]`); return el ? el.value.trim() : ""; };
+    const sym = v("sym").toLowerCase();
+    if (!sym) return;
+    const tgt = v("tgt") === "" ? null : parseFloat(v("tgt"));
+    const aliases = {};
+    if (v("mexc_alias")) aliases.mexc = v("mexc_alias").toUpperCase();
+    if (v("kucoin_alias")) aliases.kucoin = v("kucoin_alias").toUpperCase();
+    const r = [sym, isNaN(tgt) ? null : tgt];
+    if (Object.keys(aliases).length) r.push(aliases);
+    pairs.push(r);
+  });
+  return pairs;
+}
+function readOverrides() {
+  const out = {};
+  document.querySelectorAll("#pairs-tbody tr").forEach(row => {
+    const s = row.querySelector('[data-col="sym"]'), b = row.querySelector('[data-col="b2div"]');
+    if (!s || !b) return;
+    const sym = s.value.trim().toLowerCase();
+    if (!sym || !sym.endsWith("usdt") || b.value.trim() === "") return;
+    const val = parseFloat(b.value.trim());
+    if (!isNaN(val) && val >= 0) out[sym] = val;
+  });
+  return out;
+}
+function buildPayload() {
+  const out = {};
+  CFG_FIELDS.forEach(f => {
+    const el = $(fieldId(f.k));
+    setPath(out, f.k, f.type === "select" ? (el.value || f.def) : parseFloat(el.value));
+  });
+  out.pricing.source_divergence_overrides = readOverrides();
+  out.pairs = readPairs();
+  return out;
+}
+
+function populate(cfg) {
+  cfgLoaded = cfg;
+  cfgOverrides = { ...((cfg.pricing || {}).source_divergence_overrides || {}) };
+  CFG_FIELDS.forEach(f => {
+    const v = getPath(cfg, f.k);
+    if (v !== undefined && v !== null) $(fieldId(f.k)).value = v;
+  });
+  $("pairs-tbody").innerHTML = (cfg.pairs || []).map(pairRowHTML).join("");
+  filterPairs();
+  cfgBaseline = Object.fromEntries(CFG_FIELDS.map(f => [f.k, $(fieldId(f.k)).value]));
+  cfgPairsBaseline = JSON.stringify([readPairs(), readOverrides()]);
+  footMsg = null;
+  renderFoot();
+}
+function filterPairs() {
+  const q = ($("pairs-q").value || "").trim().toLowerCase();
+  let shown = 0, total = 0;
+  document.querySelectorAll("#pairs-tbody tr").forEach(r => {
+    total++;
+    const hit = !q || r.querySelector('[data-col="sym"]').value.toLowerCase().includes(q);
+    r.hidden = !hit; if (hit) shown++;
+  });
+  $("pairs-count").textContent = q ? `${shown} of ${total}` : `${total} pairs`;
+}
+
+function dirtyCount() {
+  if (!cfgBaseline) return 0;
+  let n = 0;
+  CFG_FIELDS.forEach(f => {
+    const d = $(fieldId(f.k)).value !== cfgBaseline[f.k];
+    $(fieldId(f.k)).closest(".field").classList.toggle("dirty", d);
+    if (d) n++;
+  });
+  const pairsDirty = JSON.stringify([readPairs(), readOverrides()]) !== cfgPairsBaseline;
+  return n + (pairsDirty ? 1 : 0);
+}
+function renderFoot(state) {
+  const foot = $("cfg-foot");
+  const n = dirtyCount();
+  if (state === "confirm-close") {
+    foot.innerHTML = `<div class="confirm">Discard ${n} unsaved change${n === 1 ? "" : "s"}?</div>
+      <button class="btn pressable" type="button" data-act="keep">Keep editing</button>
+      <button class="btn primary pressable" type="button" data-act="discard">Discard</button>`;
+    foot.querySelector('[data-act="keep"]').focus();
+    return;
+  }
+  confirmingClose = false;
+  const msg = n ? null : footMsg;
+  const status = msg ? `<span class="cfg-status ${msg.err ? "err" : ""}">${esc(msg.text)}</span>`
+    : n ? `<span class="cfg-status dirty">${n} unsaved change${n === 1 ? "" : "s"}${n && dirtyPairsOnly(n) ? " (pairs)" : ""}</span>`
+    : `<span class="cfg-status">${cfgLoaded ? "No changes" : "Loading…"}</span>`;
+  foot.innerHTML = `${status}
+    <button class="btn hold pressable" type="button" id="cfg-reset" ${cfgLoaded ? "" : "disabled"} title="Press and hold to reset every setting to its default"><i class="hold-fill"></i><span>Hold to reset</span></button>
+    <button class="btn pressable" type="button" data-act="revert" ${n ? "" : "disabled"}>Revert</button>
+    <button class="btn primary pressable" type="button" data-act="save" ${n && cfgLoaded ? "" : "disabled"}>Save</button>`;
+  bindHold($("cfg-reset"), resetDefaults);
+}
+function dirtyPairsOnly(n) {
+  return n === 1 && JSON.stringify([readPairs(), readOverrides()]) !== cfgPairsBaseline;
+}
+$("cfg-foot").addEventListener("click", e => {
+  const b = e.target.closest("[data-act]");
+  if (!b) return;
+  if (b.dataset.act === "save") saveCfg();
+  if (b.dataset.act === "revert" && cfgLoaded) { populate(cfgLoaded); toast("Changes reverted"); }
+  if (b.dataset.act === "keep") renderFoot();
+  if (b.dataset.act === "discard") { populate(cfgLoaded); closeCfg(true); }
+});
+
+// Hold to confirm: press and hold for 2s, with pointer or Space/Enter.
+function bindHold(btn, onDone) {
+  if (!btn) return;
+  let timer = null;
+  const start = () => {
+    if (btn.disabled || timer) return;
+    btn.classList.add("holding");
+    timer = setTimeout(() => { timer = null; btn.classList.remove("holding"); onDone(); }, 2000);
+  };
+  const stop = () => { clearTimeout(timer); timer = null; btn.classList.remove("holding"); };
+  btn.addEventListener("pointerdown", e => { if (e.button === 0) start(); });
+  ["pointerup", "pointerleave", "pointercancel"].forEach(t => btn.addEventListener(t, stop));
+  btn.addEventListener("keydown", e => { if ((e.key === " " || e.key === "Enter") && !e.repeat) { e.preventDefault(); start(); } });
+  btn.addEventListener("keyup", e => { if (e.key === " " || e.key === "Enter") stop(); });
+}
+
+async function loadCfg() {
+  cfgLoaded = null; cfgBaseline = null; footMsg = null;
+  renderFoot();
+  try {
+    const res = await fetch(`${API}/api/config`, { cache: "no-store" });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    populate(await res.json());
+    await fetchSuspensions();
+  } catch (err) {
+    footMsg = { text: `Can’t load configuration — ${err.message}. This needs the API.`, err: true };
+    renderFoot();
+  }
+}
+async function fetchSuspensions() {
+  try {
+    const res = await fetch(`${API}/api/suspensions`, { cache: "no-store" });
+    if (!res.ok) throw new Error();
+    const d = await res.json();
+    suspensions = d.suspensions || {};
+    if (typeof d.suspend_minutes === "number") suspendMinutes = d.suspend_minutes;
+  } catch { suspensions = {}; }
+  tickMutes();
+}
+async function setMute(key, suspend) {
+  try {
+    const res = await fetch(`${API}/api/suspensions`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ symbol: key, suspend }),
+    });
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || res.statusText);
+    const d = await res.json();
+    suspensions = d.suspensions || {};
+    if (typeof d.minutes === "number") suspendMinutes = d.minutes;
+    tickMutes();
+    toast(suspend ? `${key.toUpperCase()} muted for ${suspendMinutes}m` : `${key.toUpperCase()} alerts resumed`, suspend ? "Still monitored; Telegram delivery paused." : "");
+  } catch (err) {
+    toast(suspend ? "Mute failed" : "Resume failed", err.message, { error: true });
+  }
+}
+async function saveCfg() {
+  footMsg = { text: "Saving…" };
+  $("cfg-foot").querySelector(".cfg-status").textContent = "Saving…";
+  try {
+    const res = await fetch(`${API}/api/config`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(buildPayload()),
+    });
+    if (!res.ok) throw new Error((await res.json().catch(() => ({ detail: res.statusText }))).detail || res.statusText);
+    populate((await res.json()).config);
+    footMsg = { text: `Saved at ${ngtTime()} WAT` };
+    renderFoot();
+    toast("Configuration saved", "Takes effect on the next monitor cycle.");
+  } catch (err) {
+    footMsg = { text: `Save failed — ${err.message}`, err: true };
+    $("cfg-foot").querySelector(".cfg-status").textContent = footMsg.text;
+    $("cfg-foot").querySelector(".cfg-status").className = "cfg-status err";
+    toast("Save failed", err.message, { error: true });
+  }
+}
+async function resetDefaults() {
+  try {
+    const res = await fetch(`${API}/api/config`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ _reset: true }),
+    });
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || res.statusText);
+    populate((await res.json()).config);
+    toast("Reset to defaults", "Every setting is back to its default value.");
+  } catch (err) {
+    toast("Reset failed", err.message, { error: true });
+  }
+}
+
+// Pairs table and field interactions
+$("cfg-body").addEventListener("input", e => {
+  if (e.target.id === "pairs-q") { filterPairs(); return; }
+  if (e.target.closest(".add-pair")) return;
+  const row = e.target.closest("#pairs-tbody tr");
+  if (row) row.classList.add("dirty");
+  renderFoot();
+});
+$("cfg-body").addEventListener("change", e => { if (e.target.closest(".field")) renderFoot(); });
+$("cfg-body").addEventListener("click", e => {
+  const mute = e.target.closest(".mute-btn");
+  if (mute) { setMute(mute.closest(".mute-cell").dataset.sym, mute.dataset.act === "mute"); return; }
+  const del = e.target.closest(".del-btn");
+  if (del) {
+    const row = del.closest("tr"), next = row.nextElementSibling, parent = row.parentNode;
+    const sym = row.querySelector('[data-col="sym"]').value;
+    row.remove(); filterPairs(); renderFoot();
+    toast(`Removed ${sym.toUpperCase()}`, "Not saved yet.", { action: { label: "Undo", run: () => {
+      parent.insertBefore(row, next && next.parentNode === parent ? next : null); filterPairs(); renderFoot();
+    } } });
+    return;
+  }
+  if (e.target.closest("#np-add")) addPair();
+});
+$("cfg-body").addEventListener("keydown", e => { if (e.key === "Enter" && e.target.closest(".add-pair")) { e.preventDefault(); addPair(); } });
+function addPair() {
+  const sym = $("np-sym").value.trim().toLowerCase();
+  if (!sym) { $("np-sym").focus(); toast("Enter a symbol first", "", { error: true }); return; }
+  if ([...document.querySelectorAll('#pairs-tbody [data-col="sym"]')].some(i => i.value.trim().toLowerCase() === sym)) {
+    toast(`${sym.toUpperCase()} is already in the list`, "", { error: true }); return;
+  }
+  const tgt = $("np-tgt").value.trim() === "" ? null : parseFloat($("np-tgt").value);
+  const al = {};
+  if ($("np-mexc").value.trim()) al.mexc = $("np-mexc").value.trim().toUpperCase();
+  if ($("np-kucoin").value.trim()) al.kucoin = $("np-kucoin").value.trim().toUpperCase();
+  const b2 = parseFloat($("np-b2").value);
+  if (sym.endsWith("usdt") && !isNaN(b2) && b2 >= 0) cfgOverrides[sym] = b2;
+  const row = [sym, isNaN(tgt) ? null : tgt];
+  if (Object.keys(al).length) row.push(al);
+  $("pairs-tbody").insertAdjacentHTML("beforeend", pairRowHTML(row));
+  const added = $("pairs-tbody").lastElementChild;
+  added.classList.add("dirty");
+  ["np-sym", "np-tgt", "np-b2", "np-mexc", "np-kucoin"].forEach(id => $(id).value = "");
+  $("pairs-q").value = ""; filterPairs(); renderFoot();
+  added.scrollIntoView({ block: "nearest" });
+  $("np-sym").focus();
+}
+
+// Section index: jump on click, follow the scroll position.
+$("cfg-index").addEventListener("click", e => {
+  const b = e.target.closest("[data-sec]");
+  if (b) $("sec-" + b.dataset.sec).scrollIntoView({ behavior: reducedMotion() ? "auto" : "smooth", block: "start" });
+});
+function syncIndex() {
+  const body = $("cfg-body"), top = body.getBoundingClientRect().top + 24;
+  let current = CFG[0].id;
+  CFG.forEach(s => { if ($("sec-" + s.id).getBoundingClientRect().top <= top) current = s.id; });
+  if (body.scrollTop + body.clientHeight >= body.scrollHeight - 4) current = CFG[CFG.length - 1].id;
+  document.querySelectorAll("#cfg-index [data-sec]").forEach(b => {
+    const on = b.dataset.sec === current;
+    if (on && b.getAttribute("aria-current") !== "true") {
+      const idx = $("cfg-index");
+      idx.scrollLeft = Math.max(0, b.offsetLeft - idx.clientWidth / 2 + b.offsetWidth / 2);
+    }
+    b.setAttribute("aria-current", on);
+  });
+}
+$("cfg-body").addEventListener("scroll", syncIndex, { passive: true });
+
+function openCfg() {
+  if (cfgOpen) return;
+  cfgOpen = true;
+  cfgReturnFocus = document.activeElement;
+  $("cfg").classList.add("open");
+  $("cfg-scrim").classList.add("show");
+  document.body.classList.add("locked");
+  requestAnimationFrame(() => $("cfg").focus({ preventScroll: true }));
+  $("cfg-body").scrollTop = 0; syncIndex();
+  loadCfg();
+  clearInterval(suspendTicker);
+  suspendTicker = setInterval(tickMutes, 30000);
+}
+function closeCfg(force = false) {
+  if (!cfgOpen) return;
+  if (!force && cfgLoaded && dirtyCount() > 0) { confirmingClose = true; renderFoot("confirm-close"); return; }
+  cfgOpen = false;
+  $("cfg").classList.remove("open");
+  $("cfg-scrim").classList.remove("show");
+  document.body.classList.remove("locked");
+  clearInterval(suspendTicker);
+  if (cfgReturnFocus && document.contains(cfgReturnFocus)) cfgReturnFocus.focus({ preventScroll: true });
+}
+$("cfg-btn").addEventListener("click", openCfg);
+$("cfg-close").addEventListener("click", () => closeCfg());
+$("cfg-scrim").addEventListener("click", () => closeCfg());
+document.addEventListener("keydown", e => {
+  if (!cfgOpen) return;
+  if (e.key === "Escape") {
+    e.preventDefault();
+    if (confirmingClose) { renderFoot(); return; }
+    closeCfg(); return;
+  }
+  if (e.key !== "Tab") return;
+  const focusable = [...$("cfg").querySelectorAll('button:not([disabled]), input:not([disabled]), select:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])')].filter(el => el.offsetParent !== null);
+  if (!focusable.length) return;
+  const first = focusable[0], last = focusable[focusable.length - 1];
+  if (e.shiftKey && (document.activeElement === first || document.activeElement === $("cfg"))) { e.preventDefault(); last.focus(); }
+  else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+});
+renderCfgShell();
+renderFoot();
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Theme, clock, boot
+// ══════════════════════════════════════════════════════════════════════════════
 const SUN = `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>`;
 const MOON = `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>`;
 function syncThemeBtn() {
@@ -1060,19 +2368,17 @@ $("theme-btn").addEventListener("click", () => {
   root.dataset.theme = next;
   try { localStorage.setItem("ohm-sample-theme", next); } catch (e) {}
   syncThemeBtn();
+  themeCharts();
   root.offsetWidth;
   requestAnimationFrame(() => root.classList.remove("no-transitions"));
 });
 syncThemeBtn();
 
-// ── Clock + header edge ──────────────────────────────────────────────────────
-function tick() {
-  $("clock").textContent = new Date().toLocaleTimeString("en-GB", { timeZone: "Africa/Lagos", hour12: false }) + " WAT";
-}
+function tick() { $("clock").textContent = ngtTime() + " WAT"; }
 tick(); setInterval(tick, 1000);
 addEventListener("scroll", () => $("header").classList.toggle("scrolled", scrollY > 0), { passive: true });
 
-renderSegments();
+showView(location.hash === "#depth" ? "depth" : "overview", { instant: true });
 load();
 </script>
 </body>
