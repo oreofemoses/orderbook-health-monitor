@@ -94,10 +94,12 @@ Two important properties:
 |---|---|---|---|
 | Quidax depth | `GET /markets/{symbol}/depth?limit=200` | 1 call **per pair** | A1–A6 (structure), B1 (mid vs reference), F1 (cross-pair mids) |
 | Quidax k-line | `GET /markets/{symbol}/k?period=1&limit=60` | 1 call **per pair** | B4 (window move), D1 (rolling volume) |
-| MEXC | `GET /api/v3/ticker/price` | 1 batch call total | B1/B2/B3 reference price |
-| KuCoin | `GET /api/v1/market/allTickers` | 1 batch call total | B1/B2/B3 reference price |
+| MEXC | `GET /api/v3/ticker/bookTicker` | 1 batch call total | B1/B2/B3 reference price (bid/ask mid) |
+| KuCoin | `GET /api/v1/market/orderbook/level1?symbol={ASSET}-USDT` | 1 call **per USDT asset** | B1/B2/B3 reference price (bid/ask mid) |
 
-**Concurrency:** per-pair Quidax fetches run concurrently (bounded, e.g. 10 in flight). Reference calls happen once at the top of the cycle and are shared across all pairs.
+**Concurrency:** per-pair Quidax fetches run concurrently (bounded, e.g. 10 in flight). Reference calls happen once at the top of the cycle and are shared across all pairs; KuCoin's per-asset calls run up to 8 in flight.
+
+**Why not KuCoin `allTickers`:** it intermittently serves a stale cached snapshot (observed on ~48% of fetches, up to 7% off KuCoin's own live book), which produced false B2 alerts.
 
 **Pair configuration:** each pair carries a symbol, an optional target spread %, and an optional per-exchange alias map for cases where the reference ticker name differs from Quidax's (e.g. Quidax `rndrusdt` → MEXC `RENDER/USDT`).
 

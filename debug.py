@@ -19,13 +19,13 @@ Endpoints used:
                         B4's window deliberately: tuning D1's candle size/lookback (e.g. to
                         avoid sparse near-zero-volume 1-min candles on illiquid pairs) no
                         longer changes B4's circuit-breaker window, and vice versa.)
-  MEXC               : GET /api/v3/ticker/price        (all symbols, one call — price only,
-                                                     no 24h stats requested or needed)
-  KuCoin        : GET /api/v1/market/allTickers    (all symbols, one call — this is the
-                                                     *only* batched ticker endpoint KuCoin's
-                                                     spot API exposes, so 24h fields ride
-                                                     along whether we want them or not; we
-                                                     just never read anything but `last`)
+  MEXC               : GET /api/v3/ticker/bookTicker   (all symbols, one call — best bid/ask
+                                                     only; we use the mid)
+  KuCoin             : GET /api/v1/market/orderbook/level1?symbol=X-USDT
+                                                    (one call per USDT asset — best bid/ask,
+                                                     we use the mid. allTickers is NOT used:
+                                                     it intermittently serves a stale cached
+                                                     snapshot; see fetch_kucoin_tickers)
 
 Alert scope (see OHM spec doc for full definitions):
   A1 Crossed Orderbook        — implemented
@@ -136,10 +136,8 @@ covered instead by F1, which checks them against the implied cross-rate built fr
 own USDT leg + the usdtngn/usdtghs bridge rate, all sourced from Quidax itself.
 
 NOTE on 24h data: nothing in this monitor needs it. B1/B2/B4 only ever use the
-*current* price. MEXC's ticker/price endpoint returns price only (no volume at all),
-so that's enforced at the fetch layer. KuCoin's allTickers payload still technically
-contains 24h fields since there's no lighter batched alternative on their side — we
-simply never read them. D1's context line used to borrow external 24h volume for
+*current* price. Both reference feeds are read as best bid/ask only (MEXC bookTicker,
+KuCoin level1), neither of which carries 24h fields. D1's context line used to borrow external 24h volume for
 this; it's now built entirely from Quidax's own k-line history instead (see
 update_volume_baseline below) — no external volume data is fetched or used anywhere.
 
@@ -265,8 +263,10 @@ BASE_API_URL        = "https://openapi.quidax.io/exchange-open-api/api/v1"
 # D2's feed — every Quidax market's ticker in one response. Not a per-pair URL on
 # purpose; see fetch_quidax_tickers.
 QUIDAX_TICKERS_URL   = f"{BASE_API_URL}/markets/tickers"
-MEXC_TICKER_URL      = "https://api.mexc.com/api/v3/ticker/price"
-KUCOIN_TICKER_URL    = "https://api.kucoin.com/api/v1/market/allTickers"
+MEXC_TICKER_URL      = "https://api.mexc.com/api/v3/ticker/bookTicker"
+# Per-symbol on purpose — see fetch_kucoin_tickers for why allTickers is not used.
+KUCOIN_TICKER_URL    = "https://api.kucoin.com/api/v1/market/orderbook/level1?symbol={symbol}"
+KUCOIN_MAX_CONCURRENT = 8
 
 # ── Persistence ───────────────────────────────────────────────────────────────
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -987,11 +987,24 @@ async def fetch_quidax_tickers(session: aiohttp.ClientSession) -> dict[str, dict
     return out
 
 
+def _mid_or_none(bid, ask) -> Optional[float]:
+    # Bid/ask mid, or None if either side is missing, non-numeric or empty (0).
+    try:
+        b, a = float(bid), float(ask)
+    except (TypeError, ValueError):
+        return None
+    if b <= 0 or a <= 0:
+        return None
+    return (b + a) / 2
+
+
 async def fetch_mexc_tickers(session: aiohttp.ClientSession) -> dict[str, dict]:
     """
-    One batched call covering every MEXC symbol's *price only* — this endpoint doesn't
-    even return volume, so there's nothing to accidentally over-fetch. Returns
-    {ASSET: {"price":}} keyed by base asset, for every ...USDT pair MEXC lists.
+    One batched call covering every MEXC symbol's best bid/ask. Returns
+    {ASSET: {"price":}} keyed by base asset, for every ...USDT pair MEXC lists,
+    where price is the bid/ask MID — the same measure KuCoin is read as below, so
+    B2 compares like with like. (It used to be /ticker/price, the last trade, which
+    on a quiet market can sit at a stale level while the book moves underneath it.)
     """
     data = await _request_json(session, MEXC_TICKER_URL, timeout=15)
     out = {}
@@ -999,44 +1012,61 @@ async def fetch_mexc_tickers(session: aiohttp.ClientSession) -> dict[str, dict]:
         sym = row.get("symbol", "")
         if not sym.endswith("USDT"):
             continue
-        base = sym[:-4].upper()
-        try:
-            out[base] = {"price": float(row["price"])}
-        except (KeyError, ValueError, TypeError):
-            continue
+        price = _mid_or_none(row.get("bidPrice"), row.get("askPrice"))
+        if price is not None:
+            out[sym[:-4].upper()] = {"price": price}
     return out
 
 
-async def fetch_kucoin_tickers(session: aiohttp.ClientSession) -> dict[str, dict]:
-    payload = await _request_json(session, KUCOIN_TICKER_URL, timeout=15)
-    out = {}
-    for row in payload.get("data", {}).get("ticker", []):
-        sym = row.get("symbol", "")
-        if not sym.endswith("-USDT"):
+async def fetch_kucoin_tickers(session: aiohttp.ClientSession,
+                               assets: set[str]) -> dict[str, dict]:
+    """
+    KuCoin best bid/ask per asset, one level1 call per asset in `assets` (already
+    alias-resolved KuCoin keys). Returns {ASSET: {"price":}} with price = mid.
+
+    NOT allTickers, deliberately. A 10-minute sample (2026-10-13, BCH/DOGE/DOT)
+    found allTickers serving a stale cached snapshot on ~48% of fetches — whole
+    snapshot at once (24h vol/high/low all rewound), up to 40s at a stretch,
+    pricing DOT up to 7% away from KuCoin's own level1 at the same instant. That
+    outlasted TIER2_CONFIRM_CYCLES and was the source of most B2 alerts. level1 on
+    the same symbols never strayed more than 0.05% from MEXC.
+
+    A failed or unlisted symbol is simply absent from the result, so it surfaces
+    as that asset's KuCoin feed being unavailable (B1), not as a feed-wide outage.
+    Raises only if EVERY symbol failed, which is the caller's E2 condition.
+    """
+    sem = asyncio.Semaphore(KUCOIN_MAX_CONCURRENT)
+
+    async def one(asset: str):
+        async with sem:
+            payload = await _request_json(
+                session, KUCOIN_TICKER_URL.format(symbol=f"{asset}-USDT"), timeout=15)
+        data = payload.get("data") if isinstance(payload, dict) else None
+        if not data:   # unlisted symbol -> data: null
+            return asset, None
+        return asset, _mid_or_none(data.get("bestBid"), data.get("bestAsk"))
+
+    results = await asyncio.gather(*(one(a) for a in assets), return_exceptions=True)
+    out, errors = {}, []
+    for r in results:
+        if isinstance(r, BaseException):
+            errors.append(r)
             continue
-        base = sym[:-5].upper()
-        try:
-            buy  = row.get("buy")
-            sell = row.get("sell")
-            if buy is None or sell is None:
-                # fall back to last if bid/ask absent
-                last = row.get("last")
-                if last is None:
-                    continue
-                price = float(last)
-            else:
-                price = (float(buy) + float(sell)) / 2
-        except (ValueError, TypeError):
-            continue
-        out[base] = {"price": price}
+        asset, price = r
+        if price is not None:
+            out[asset] = {"price": price}
+    if assets and len(errors) == len(assets):
+        raise errors[0]
     return out
 
 
-async def fetch_reference_data(session: aiohttp.ClientSession) -> tuple[dict, dict, list]:
+async def fetch_reference_data(session: aiohttp.ClientSession,
+                               kucoin_assets: set[str]) -> tuple[dict, dict, list]:
     """
     Fetches both reference exchanges. Each is independent — if one fails, the other
     can still be used (B1/B2 logic below degrades gracefully to single-source).
-    Returns (mexc_map, kucoin_map, e2_issues).
+    `kucoin_assets` is the set of KuCoin base tickers to price (KuCoin is fetched
+    per symbol). Returns (mexc_map, kucoin_map, e2_issues).
     """
     mexc_map, kucoin_map = {}, {}
     e2_issues = []
@@ -1046,7 +1076,7 @@ async def fetch_reference_data(session: aiohttp.ClientSession) -> tuple[dict, di
         print(f"⚠️  MEXC reference feed failed: {e}")
         e2_issues.append(("E2", "CRITICAL", f"MEXC reference feed unreachable: {e}"))
     try:
-        kucoin_map = await fetch_kucoin_tickers(session)
+        kucoin_map = await fetch_kucoin_tickers(session, kucoin_assets)
     except Exception as e:
         print(f"⚠️  KuCoin reference feed failed: {e}")
         e2_issues.append(("E2", "CRITICAL", f"KuCoin reference feed unreachable: {e}"))
@@ -4394,10 +4424,9 @@ async def run_cycle(shared_state: dict, session: aiohttp.ClientSession, cycle_nu
     cycle_start = ngt_now()
     semaphore   = asyncio.Semaphore(MAX_CONCURRENT_PAIRS)
 
-    # ── Step 1: reference exchange data, once per cycle (E2 gate) ──────────────
-    mexc_map, kucoin_map, e2_issues = await fetch_reference_data(session)
-
-    # ── Step 2: resolve a trusted price per asset (B2/B3), USDT-quoted pairs only
+    # ── Step 1/2: reference exchange data (E2 gate), then a trusted price per
+    # asset (B2/B3), USDT-quoted pairs only. Aliases are resolved first because
+    # KuCoin is fetched per symbol and needs to know which ones to ask for.
     ref_hist_root = shared_state.setdefault("_ref_hist", {})
     vol_hist_root = shared_state.setdefault("_vol_hist", {})
     layer_hist_root = shared_state.setdefault("_layer_hist", {})
@@ -4420,6 +4449,9 @@ async def run_cycle(shared_state: dict, session: aiohttp.ClientSession, cycle_nu
             asset_aliases[base.upper()] = PAIR_ALIASES.get(sym, {})
             asset_divergence_pct[base.upper()] = SOURCE_DIVERGENCE_OVERRIDES.get(
                 sym, SOURCE_DIVERGENCE_PCT)
+
+    kucoin_assets = {(asset_aliases.get(a, {}).get("kucoin") or a).upper() for a in assets}
+    mexc_map, kucoin_map, e2_issues = await fetch_reference_data(session, kucoin_assets)
 
     trusted_prices: dict[str, Optional[float]] = {}
     ref_issues_by_asset: dict[str, list] = {}

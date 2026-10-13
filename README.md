@@ -156,10 +156,11 @@ the shipped default.
 
 Every 60 seconds (`timing.cycle_sleep_seconds`) the monitor runs a full pass:
 
-1. **Fetch the reference exchanges once.** Two batched calls — MEXC's
-   `ticker/price` and KuCoin's `allTickers` — give a price for every asset both
-   exchanges list against USDT. One call each, not one per pair. If either call
-   throws, that's **E2**.
+1. **Fetch the reference exchanges once.** MEXC's `ticker/bookTicker` (one
+   batched call) and KuCoin's `orderbook/level1` (one call per USDT asset) give a
+   best bid/ask for each asset; the mid is used as the price on both sides. KuCoin's
+   batched `allTickers` is avoided because it intermittently serves a stale
+   snapshot. If MEXC fails, or every KuCoin call fails, that's **E2**.
 2. **Resolve one "trusted price" per asset.** For each USDT-quoted asset, the two
    reference prices are checked for staleness (**B1**) and disagreement (**B2**),
    and whatever survives is averaged into a single trusted number. This happens
