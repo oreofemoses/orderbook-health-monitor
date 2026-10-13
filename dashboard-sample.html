@@ -384,14 +384,6 @@ a.btn { text-decoration: none; }
 .progress i { display: block; height: 100%; background: var(--accent); transform: scaleX(0); transform-origin: left; transition: transform 400ms var(--ease-out); }
 .progress.error i { background: var(--red); }
 
-/* Spread over the session: a functional graph, so no animation. */
-.spark { margin-bottom: 18px; }
-.spark svg { display: block; width: 100%; height: 56px; overflow: visible; }
-.spark .line { fill: none; stroke: var(--accent); stroke-width: 1.5; vector-effect: non-scaling-stroke; }
-.spark .tgt { stroke: var(--text-3); stroke-width: 1; stroke-dasharray: 3 3; vector-effect: non-scaling-stroke; }
-.spark .dot { fill: var(--accent); }
-.spark-meta { display: flex; justify-content: space-between; font-size: 0.6875rem; color: var(--text-3); margin-top: 4px; }
-.spark-empty { font-size: 0.75rem; color: var(--text-3); padding: 10px 12px; border-radius: 8px; box-shadow: 0 0 0 1px var(--hairline); }
 .tg { display: inline-flex; align-items: center; gap: 5px; font-size: 0.75rem; color: var(--text-3); }
 .tg.sent { color: var(--text); }
 .tg.sent svg { color: var(--accent); }
@@ -1675,7 +1667,6 @@ function renderDetail() {
       ${metric("DWS", p.dws == null ? "—" : Number(p.dws).toFixed(3), p.dws > (p.dws_threshold ?? Infinity) ? "warn" : "")}
       ${metric("Imbalance", p.imbalance_ratio == null ? "—" : Number(p.imbalance_ratio).toFixed(2) + "×")}
     </div>
-    ${sparkHTML(p)}
     ${issueCards(p, tg)}
     <div class="section-k">Book</div>
     <dl class="kv num">
@@ -1686,44 +1677,6 @@ function renderDetail() {
     </dl>
     <div class="hint"><span><span class="kbd">↑</span><span class="kbd">↓</span> move</span><span><span class="kbd">/</span> filter</span><span><span class="kbd">1</span>–<span class="kbd">4</span> views</span></div>
   `;
-}
-
-// ── Spread over the session ──────────────────────────────────────────────────
-// The current dashboard's spread chart, per market: one point per monitor cycle
-// since this page opened, up to the last 30, against the market's target. The
-// API keeps no spread history (the daily log stores issues only), so like the
-// original it builds while the page stays open.
-const spreadHist = {};
-function recordSpreads(d) {
-  (d.pairs || []).forEach(p => {
-    const v = num(p.current_spread);
-    if (v === null) return;
-    const h = spreadHist[p.symbol] || (spreadHist[p.symbol] = []);
-    if (h.length && h[h.length - 1].ts === p.timestamp) return;   // same cycle polled twice
-    h.push({ ts: p.timestamp, v });
-    if (h.length > 30) h.shift();
-  });
-}
-function sparkHTML(p) {
-  const h = spreadHist[p.symbol] || [];
-  const head = `<div class="section-k">Spread this session</div>`;
-  if (h.length < 2) return `<div class="spark">${head}<div class="spark-empty">Builds while this page stays open: one point per monitor cycle, up to the last 30.</div></div>`;
-  const tgt = num(p.target_spread);
-  const vals = h.map(o => o.v).concat(tgt !== null ? [tgt] : []);
-  let lo = Math.min(...vals), hi = Math.max(...vals);
-  const pad = (hi - lo) * 0.12 || Math.abs(hi) * 0.05 || 0.01;
-  lo -= pad; hi += pad;
-  const X = i => (i / (h.length - 1)) * 100, Y = v => 40 - ((v - lo) / (hi - lo)) * 40;
-  const pts = h.map((o, i) => `${X(i).toFixed(2)},${Y(o.v).toFixed(2)}`).join(" ");
-  const last = h[h.length - 1].v;
-  const time = ts => String(ts || "").split(" ").pop().slice(0, 5);
-  return `<div class="spark">${head}
-    <svg viewBox="0 0 100 40" preserveAspectRatio="none" role="img" aria-label="Spread over the last ${h.length} cycles, now ${pctS(last, 3)}${tgt !== null ? `, target ${pctS(tgt, 2)}` : ""}">
-      ${tgt !== null ? `<line class="tgt" x1="0" x2="100" y1="${Y(tgt).toFixed(2)}" y2="${Y(tgt).toFixed(2)}" />` : ""}
-      <polyline class="line" points="${pts}" />
-    </svg>
-    <div class="spark-meta num"><span>${h.length} cycles · since ${esc(time(h[0].ts))}</span><span>now ${pctS(last, 3)}${tgt !== null ? ` · target ${pctS(tgt, 2)} (dashed)` : ""}</span></div>
-  </div>`;
 }
 
 // ── Issue cards + other checks ───────────────────────────────────────────────
@@ -1995,10 +1948,9 @@ async function load({ manual = false } = {}) {
     const [d] = await Promise.all([res.json(), loadAcks()]);   // acks first, so switches never flash off
     data = d;
     source = "live";
-    recordSpreads(d);
   } catch (e) {
     err = e.message;
-    if (!data && SNAPSHOT) { data = SNAPSHOT; source = "sample"; err = null; recordSpreads(data); }
+    if (!data && SNAPSHOT) { data = SNAPSHOT; source = "sample"; err = null; }
   }
   if (data) {
     if (!selected || !data.pairs.some(p => p.symbol === selected)) {
