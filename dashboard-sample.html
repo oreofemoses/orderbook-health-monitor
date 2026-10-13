@@ -205,7 +205,7 @@ svg { display: block; flex-shrink: 0; }
 @media (prefers-reduced-transparency: reduce) {
   .header { background: var(--bg); -webkit-backdrop-filter: none; backdrop-filter: none; }
 }
-.brand { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.brand { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
 /* Quidax mark, from the repo's favicon.ico (32×28). object-fit fills the
    rounded square with its purple field. Swap for an SVG for sharper edges. */
 .brand-mark { width: 26px; height: 26px; border-radius: 7px; object-fit: cover; flex-shrink: 0; display: block; }
@@ -226,6 +226,15 @@ svg { display: block; flex-shrink: 0; }
   white-space: nowrap;
 }
 .status-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--green); flex-shrink: 0; }
+.status-pill { font-variant-numeric: tabular-nums; }   /* the countdown ticks without jitter */
+.status-pill .status-dot { position: relative; }
+.status-pill .status-dot::after {
+  content: ""; position: absolute; inset: -5px; border-radius: 50%;
+  box-shadow: 0 0 0 1.5px var(--green); opacity: 0; pointer-events: none;
+}
+.status-pill.ping .status-dot::after { animation: ping 900ms var(--ease-out); }
+@keyframes ping { from { opacity: .9; transform: scale(.35); } to { opacity: 0; transform: scale(1.5); } }
+@keyframes pingFade { from { opacity: .8; } to { opacity: 0; } }
 .status-pill.stale .status-dot, .status-dot.stale { background: var(--amber); }
 .status-pill.offline .status-dot { background: var(--red); }
 .status-pill.sample .status-dot, .status-dot.off { background: var(--text-3); }
@@ -752,6 +761,14 @@ a.btn { text-decoration: none; }
 .hold.holding { color: var(--red-text); }
 
 /* ─── Narrow screens ─────────────────────────────────────── */
+/* The header sheds text as it narrows: product name and long tab labels
+   first, then the Refresh label. The logo never shrinks. */
+@media (max-width: 1180px) {
+  .brand-name, .t-long { display: none; }
+  .t-short { display: inline; }
+}
+@media (max-width: 960px) { .btn-label { display: none; } }
+
 /* Columns leave in order of how much the detail panel already repeats them:
    depth, then Telegram state and the order-book link, then mid price. */
 @media (max-width: 1360px) { .col-depth { display: none; } }
@@ -785,12 +802,15 @@ a.btn { text-decoration: none; }
   .scrim.show { opacity: 1; pointer-events: auto; }
   .hint, .clock, .tabs .k { display: none; }
 }
-@media (max-width: 720px) {
-  /* Four views don't fit beside the controls: tabs take their own row. */
+/* Four views don't fit beside the controls below ~780px: tabs take their own
+   row (measured: one row overflows from ~735px down). */
+@media (max-width: 780px) {
   :root { --header-h: 92px; }
   .header { padding: 8px 12px; gap: 8px; height: auto; flex-wrap: wrap; }
   .tabs { order: 3; width: 100%; overflow-x: auto; scrollbar-width: none; }
   .tabs::-webkit-scrollbar { display: none; }
+}
+@media (max-width: 720px) {
   .ro-pill { padding: 0 8px; }
   .status-seg { --cols: 2; }
   .brand-name, .status-pill #status-text { display: none; }
@@ -827,6 +847,7 @@ a.btn { text-decoration: none; }
   .toast, .toast[data-leaving="true"] { transform: none; transition: opacity 200ms ease; }
   .explain summary svg, .how svg, .more svg { transition: none; }
   .switch input::after { transition: none; }
+  .status-pill.ping .status-dot::after { animation: pingFade 700ms ease; }
   .progress i { transition: none; }
   .switch input:active:not(:disabled)::after { transform: none; }
   .switch input:checked:active:not(:disabled)::after { transform: translateX(12px); }
@@ -1880,7 +1901,9 @@ matchMedia("(max-width: 960px)").addEventListener("change", e => { if (!e.matche
 // ── Status ───────────────────────────────────────────────────────────────────
 function renderStatus(err) {
   const pill = $("status-pill"), text = $("status-text"), notice = $("notice");
+  const pinging = pill.classList.contains("ping");
   pill.className = "status-pill";
+  if (pinging) pill.classList.add("ping");     // don't cut short a ping that just started
   notice.className = "notice"; notice.innerHTML = "";
   if (source === "sample") {
     pill.classList.add("sample");
@@ -1899,12 +1922,84 @@ function renderStatus(err) {
       text.textContent = `Stale · ${fmtAge(s.last_updated_age_seconds)}`;
       notice.innerHTML = `${infoIcon()}<div><b>The monitor stopped ${fmtAge(s.last_updated_age_seconds)} ago.</b> Market numbers are from its last cycle (${esc(s.last_updated || "unknown")}). The API is up; check that the monitor process is running.</div>`;
     } else {
-      text.textContent = `Live · ${fmtAge(s.last_updated_age_seconds)} ago`;
+      liveText();
     }
   }
-  pill.title = text.textContent;
+  pill.title = pill.classList.contains("stale") || pill.classList.contains("offline") || source === "sample"
+    ? text.textContent : `Last cycle ${data.summary.last_updated} WAT`;
   notice.hidden = view !== "overview" || !notice.innerHTML;
 }
+
+// ── Cycle clock ──────────────────────────────────────────────────────────────
+// The pill counts down to the monitor's next cycle instead of showing a frozen
+// "18s ago". Landing time comes from the API's own age figure (fetch time minus
+// age), so the count is right even if this computer's clock isn't. The period
+// is the median of observed gaps between cycles (sleep + the cycle's own
+// work, ~63s in production); until two have been seen it falls back to the
+// configured sleep and says so with "~".
+const cycle = { last: null, landedAt: null, gaps: [], configured: null };
+async function loadCycleConfig() {
+  try { cycle.configured = (await getJSON(`${API}/api/config`)).timing?.cycle_sleep_seconds ?? null; } catch (_) {}
+}
+function noteCycle(s, fetchedAt) {
+  if (!s || !s.last_updated) return false;
+  const landedAt = fetchedAt - (Number(s.last_updated_age_seconds) || 0) * 1000;
+  const isNew = cycle.last !== null && s.last_updated !== cycle.last;
+  if (isNew && cycle.landedAt) {
+    const gap = (landedAt - cycle.landedAt) / 1000;
+    if (gap > 5 && gap < 600) { cycle.gaps.push(gap); if (cycle.gaps.length > 7) cycle.gaps.shift(); }
+  }
+  if (s.last_updated !== cycle.last) { cycle.last = s.last_updated; cycle.landedAt = landedAt; }
+  return isNew;
+}
+function cyclePeriod() {
+  if (cycle.gaps.length) {
+    const g = [...cycle.gaps].sort((a, b) => a - b);
+    return { sec: g[Math.floor(g.length / 2)], measured: true };
+  }
+  return { sec: cycle.configured || 60, measured: false };
+}
+const mss = sec => `${Math.floor(sec / 60)}:${String(Math.floor(sec % 60)).padStart(2, "0")}`;
+function liveText() {
+  const text = $("status-text");
+  if (!cycle.landedAt) { text.textContent = "Live"; return; }
+  const { sec, measured } = cyclePeriod();
+  const left = (cycle.landedAt + sec * 1000 - Date.now()) / 1000;
+  text.textContent = left > 0 ? `Live · next in ${measured ? "" : "~"}${mss(Math.ceil(left))}`
+    : left > -10 ? "Live · cycle due"
+    : `Live · cycle ${mss(-left)} late`;
+}
+// One ring out from the dot when a new cycle lands, so a cycle that changed no
+// numbers still registers. One-shot, transform and opacity only.
+function pingStatus() {
+  const pill = $("status-pill");
+  pill.classList.remove("ping");
+  void pill.offsetWidth;            // restart if a ping is somehow still running
+  pill.classList.add("ping");
+}
+$("status-pill").addEventListener("animationend", () => $("status-pill").classList.remove("ping"));
+
+// Poll on the monitor's rhythm, not a fixed 60s: read again just after the next
+// cycle is due, then every 5s while it's late (15s once it's very late), so new
+// data shows up within seconds of landing rather than up to a minute later.
+let pollTimer = null;
+function schedulePoll() {
+  clearTimeout(pollTimer);
+  let wait = POLL_MS;
+  if (source === "live" && cycle.landedAt && data && !(data.summary || {}).monitor_stale) {
+    const { sec } = cyclePeriod();
+    const due = cycle.landedAt + sec * 1000 + 2500 - Date.now();
+    wait = due > 0 ? due : (-due > sec * 2000 ? 15000 : 5000);
+    wait = Math.min(Math.max(wait, 3000), POLL_MS);
+  }
+  pollTimer = setTimeout(() => { if (document.hidden) schedulePoll(); else load(); }, wait);
+}
+// Catch up when the tab comes back, but not on every flicker of visibility:
+// only if the last read is more than 10s old.
+let lastStatusAt = 0;
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden && source === "live" && Date.now() - lastStatusAt > 10_000) load();
+});
 
 // ── Data ─────────────────────────────────────────────────────────────────────
 // Per-(market, issue) mutes: { symbol: { issueId: isoTimestamp } }, and the ids
@@ -1942,9 +2037,11 @@ async function load({ manual = false } = {}) {
   try {
     const res = await fetch(`${API}/api/status`, { cache: "no-store" });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const fetchedAt = lastStatusAt = Date.now();
     const [d] = await Promise.all([res.json(), loadAcks()]);   // acks first, so switches never flash off
     data = d;
     source = "live";
+    if (noteCycle(d.summary, fetchedAt)) pingStatus();
   } catch (e) {
     err = e.message;
     if (!data && SNAPSHOT) { data = SNAPSHOT; source = "sample"; err = null; }
@@ -1960,6 +2057,7 @@ async function load({ manual = false } = {}) {
     renderDetail();
   }
   renderStatus(err);
+  schedulePoll();
   if (manual) {
     if (err) toast("Refresh failed", err, { error: true });
     else if (source === "sample") toast("Still showing the snapshot", "The API didn’t answer.");
@@ -2037,7 +2135,6 @@ $("refresh-btn").addEventListener("click", async () => {
     else await load({ manual: true });
   } finally { btn.removeAttribute("aria-busy"); }
 });
-setInterval(() => { if (!document.hidden) load(); }, POLL_MS);
 
 // ══════════════════════════════════════════════════════════════════════════════
 // USDT/NGN depth (ported from the Slippage tab; same endpoints, same maths)
@@ -3454,12 +3551,17 @@ $("theme-btn").addEventListener("click", () => {
 });
 syncThemeBtn();
 
-function tick() { $("clock").textContent = ngtTime() + " WAT"; }
+function tick() {
+  $("clock").textContent = ngtTime() + " WAT";
+  const pill = $("status-pill");
+  if (source === "live" && data && !pill.classList.contains("stale") && !pill.classList.contains("offline")) liveText();
+}
 tick(); setInterval(tick, 1000);
 addEventListener("scroll", () => $("header").classList.toggle("scrolled", scrollY > 0), { passive: true });
 
 if (!CAN_WRITE) { $("ro-pill").hidden = false; $("ro-pill").title = READ_ONLY_MSG; }
 showView(location.hash.slice(1) || "overview", { instant: true });
+loadCycleConfig();
 load();
 refreshPendingToday();
 </script>
