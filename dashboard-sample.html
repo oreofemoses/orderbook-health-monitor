@@ -1290,12 +1290,12 @@ function showView(v, { instant = false } = {}) {
 // ══════════════════════════════════════════════════════════════════════════════
 const POLL_MS = 60_000;
 const CHECK_NAMES = {
-  A1: "Crossed book", A2: "Spread / thin book", A3: "One-sided market",
-  A4: "Book depth", A5: "Depth imbalance", A6: "Layer churn stall",
-  B1: "Price discrepancy", B2: "Source divergence", B3: "Stale reference feed",
-  B4: "Circuit breaker proximity", D1: "Volume spike", D2: "Fill rate deviation",
-  E1: "Exchange check E1", E2: "Exchange check E2",
-  F1: "Cross-pair arbitrage gap", G2: "Candle wick / anomalous print",
+  A1: "Crossed Book", A2: "Spread / Thin Book", A3: "One-Sided Market",
+  A4: "Book Depth", A5: "Depth Imbalance", A6: "Layer Churn Stall",
+  B1: "Price Discrepancy", B2: "Source Divergence", B3: "Stale Reference Feed",
+  B4: "Circuit Breaker Proximity", D1: "Volume Spike", D2: "Fill Rate Deviation",
+  E1: "Exchange Check", E2: "Exchange Check",
+  F1: "Cross-Pair Arbitrage Gap", G2: "Candle Wick / Anomalous Print",
 };
 const TG_STATE = {
   "fired": "Sent to Telegram", "flag-only": "Dashboard only",
@@ -1360,51 +1360,51 @@ function checksFor(p) {
   const a2Spread = spreadFiring || (!!active.A2 && active.A2 !== "CRITICAL" && !thin);
   const b1Price = p.b1_price_diff_fired === true || (!!active.B1 && p.b1_price_diff_fired == null && !p.b1_stale_fired);
   const list = [
-    { id: "A1", name: "Crossed book", alertId: "A1", severity: "CRITICAL",
+    { id: "A1", name: "Crossed Book", alertId: "A1", severity: "CRITICAL",
       state: active.A1 ? "crit" : "pass",
       desc: `Best bid ${px(p.best_bid)} vs best ask ${px(p.best_ask)}` + (num(p.best_ask) !== null && num(p.best_bid) !== null ? ` — gap ${px(num(p.best_ask) - num(p.best_bid))}` : ""),
       figs: [["Best bid", px(p.best_bid)], ["Best ask", px(p.best_ask)]],
       note: "Fires when best bid ≥ best ask: someone is bidding at or above the offer. Sends to Telegram after 3 consecutive cycles, then a 15-minute cooldown. A cross the maker corrects clears long before the third cycle, so what confirms is a book still crossed minutes later." },
-    { id: "A2-Spread", name: "Spread widening", alertId: "A2", severity: "HIGH", tierSeverity: "HIGH",
+    { id: "A2-Spread", name: "Spread Widening", alertId: "A2", severity: "HIGH", tierSeverity: "HIGH",
       state: p.monitor_only ? "na" : a2Spread ? "warn" : "pass",
       desc: `Spread ${pctS(p.current_spread, 4)} vs target ${num(p.target_spread) !== null ? pctS(p.target_spread, 2) : "N/A"} — ${pctS(p.percent_diff, 1, true)} relative, ${pctS(p.spread_diff_pp, 3)} absolute`,
       figs: [["Spread", pctS(p.current_spread, 3)], ["Target", pctS(p.target_spread, 2)], ["vs target", pctS(p.percent_diff, 1, true)]],
       note: `Fires past +100% / −75% of target, but only if the absolute miss is ≥ ${pctS(p.min_abs_spread_diff_pct, 2)} AND DWS is poor (${qty(p.dws, 4)} vs ${qty(p.dws_threshold, 2)}). The depth-weighted spread is what tells a hollow book from one stray order at the touch.`,
       naDesc: "Monitor-only pair — no target spread to deviate from" },
-    { id: "A2-Depth", name: "Shallow book", alertId: "A2", severity: "HIGH", tierSeverity: "HIGH",
+    { id: "A2-Depth", name: "Shallow Book", alertId: "A2", severity: "HIGH", tierSeverity: "HIGH",
       state: thin ? "warn" : "pass",
       desc: `${qty(p.ask_layers)} ask layers, ${qty(p.bid_layers)} bid layers`,
       figs: [["Ask layers", qty(p.ask_layers)], ["Bid layers", qty(p.bid_layers)]],
       note: `Fires when either side has fewer than ${qty(minLayers)} price levels. Shares the A2 id with spread widening, so muting one mutes both.` },
-    { id: "A2-Empty", name: "One-sided market", alertId: "A2", severity: "CRITICAL", tierSeverity: "CRITICAL",
+    { id: "A2-Empty", name: "One-Sided Market", alertId: "A2", severity: "CRITICAL", tierSeverity: "CRITICAL",
       state: active.A2 === "CRITICAL" ? "crit" : "pass",
       desc: active.A2 === "CRITICAL" ? `No ${num(p.ask_layers) === 0 ? "ask" : "bid"} orders at all — no mid price exists` : `Both sides quoting — ${qty(p.ask_layers)} asks, ${qty(p.bid_layers)} bids`,
       figs: [["Asks", qty(p.ask_layers)], ["Bids", qty(p.bid_layers)]],
       note: "An empty side short-circuits the cycle: every other check is skipped. Fires as A2 critical — Tier 1, pages on sight, unlike A2’s other two cases." },
-    { id: "A4", name: "Book depth", alertId: "A4", severity: "MEDIUM",
+    { id: "A4", name: "Book Depth", alertId: "A4", severity: "MEDIUM",
       state: active.A4 ? "info" : num(p.depth_baseline_value) === null ? "na" : "pass",
       desc: `${money(p.depth_book_value, cur)} resting across the whole book vs ${money(p.depth_baseline_value, cur)} typical` + (num(p.depth_ratio) !== null ? ` — ${pctS(num(p.depth_ratio) * 100, 0)} of normal` : ""),
       figs: [["Now", money(p.depth_book_value, cur)], ["Normal", money(p.depth_baseline_value, cur)], ["Of normal", num(p.depth_ratio) === null ? "—" : pctS(num(p.depth_ratio) * 100, 0)]],
       note: `Fires when depth falls ${pctS(p.depth_deviation_pct, 0)} or more below this market’s own rolling average. Baseline: ${qty(p.depth_baseline_samples)} of ${qty(p.depth_min_history ?? 5)} readings needed. Drops only — a depth spike is not an alert. Dashboard only; never sends Telegram.`,
       naDesc: "Baseline still building — not enough cycle history for this pair yet" },
-    { id: "A5", name: "Depth imbalance", alertId: "A5", severity: "MEDIUM",
+    { id: "A5", name: "Depth Imbalance", alertId: "A5", severity: "MEDIUM",
       state: active.A5 ? "warn" : "pass",
       desc: `${ratio(p.imbalance_ratio)}${p.heavier_side ? " — " + p.heavier_side + " heavier" : ""} (bids ${money(p.book_bid_value, cur)} vs asks ${money(p.book_ask_value, cur)})`,
       figs: [["Imbalance", ratio(p.imbalance_ratio)], ["Bids", money(p.book_bid_value, cur)], ["Asks", money(p.book_ask_value, cur)]],
       note: `Fires at ${ratio(p.imbalance_threshold, 0)} or worse, HIGH when one side is empty. Compares total resting value per side across the whole book, so it reads inventory lopsidedness, not a skew at the touch.` },
-    { id: "A6", name: "Layer churn stall", alertId: "A6", severity: active.A6 === "CRITICAL" ? "CRITICAL" : "HIGH",
+    { id: "A6", name: "Layer Churn Stall", alertId: "A6", severity: active.A6 === "CRITICAL" ? "CRITICAL" : "HIGH",
       state: active.A6 === "CRITICAL" ? "crit" : active.A6 ? "warn" : num(p.layer_churn_baseline_pct) === null ? "na" : "pass",
       desc: `${pctS(p.layer_churn_pct, 1)} of near-touch slots changed this cycle vs ${pctS(p.layer_churn_baseline_pct, 1)} typical` + (num(p.layer_churn_ratio) !== null ? ` — ratio ${qty(p.layer_churn_ratio, 2)}` : ""),
       figs: [["Churn now", pctS(p.layer_churn_pct, 0)], ["Normal", pctS(p.layer_churn_baseline_pct, 0)], ["Ratio", ratio(p.layer_churn_ratio)]],
       note: `Compared against this market’s own history, not a fixed cutoff. Fires below ${qty(p.layer_churn_ratio_floor, 2)}× its baseline, critical below half that. Baseline: ${qty(p.layer_churn_samples)} of ${qty(p.layer_churn_min_history ?? 5)} readings needed.`,
       naDesc: "Baseline still building — not enough cycle history for this pair yet" },
-    { id: "B1", name: "Price discrepancy", alertId: "B1", severity: active.B1 === "CRITICAL" ? "CRITICAL" : "HIGH",
+    { id: "B1", name: "Price Discrepancy", alertId: "B1", severity: active.B1 === "CRITICAL" ? "CRITICAL" : "HIGH",
       state: num(p.trusted_ref) === null ? "na" : b1Price ? (active.B1 === "CRITICAL" ? "crit" : "warn") : "pass",
       desc: `Quidax ${px(p.mid_price)} vs reference ${px(p.trusted_ref)} — ${pctS(p.b1_diff_pct, 2, true)}`,
       figs: [["Quidax", px(p.mid_price)], ["Reference", px(p.trusted_ref)], ["Diff", pctS(p.b1_diff_pct, 2, true)]],
       note: `Fires past ±${pctS(p.b1_threshold_pct, 2)} for this pair. The maker quotes a markup, so a ~${pctS(p.b1_expected_offset_pct, 2)} offset is expected from its target spread; the tolerance sits on top of that.`,
       naDesc: "No external reference — MEXC/KuCoin only quote against USDT (see F1 instead)" },
-    { id: "B2", name: "Source divergence", alertId: "B2", severity: "HIGH",
+    { id: "B2", name: "Source Divergence", alertId: "B2", severity: "HIGH",
       state: active.B2 ? "warn" : num(p.trusted_ref) === null ? "na" : "pass",
       desc: (num(p.ref_mexc) === null || num(p.ref_kucoin) === null)
         ? `Only ${num(p.ref_mexc) !== null ? "MEXC " + px(p.ref_mexc) : num(p.ref_kucoin) !== null ? "KuCoin " + px(p.ref_kucoin) : "no source"} priced this cycle — nothing to compare against`
@@ -1412,29 +1412,29 @@ function checksFor(p) {
       figs: [["MEXC", px(p.ref_mexc)], ["KuCoin", px(p.ref_kucoin)], ["Apart", pctS(p.ref_divergence_pct, 3)]],
       note: `Fires past ${pctS(p.ref_divergence_threshold_pct, 2)} for this asset. The source further from its own recent mean is dropped and the other becomes the trusted price. Dashboard only: B1 pages if the surviving price is still wrong.`,
       naDesc: "No external reference for this pair" },
-    { id: "B1-Stale", name: "Stale reference feed", alertId: "B1", severity: p.b1_stale_severity || "HIGH",
+    { id: "B1-Stale", name: "Stale Reference Feed", alertId: "B1", severity: p.b1_stale_severity || "HIGH",
       state: p.b1_stale_fired === true ? (p.b1_stale_severity === "CRITICAL" ? "crit" : p.b1_stale_severity === "MEDIUM" ? "info" : "warn") : num(p.trusted_ref) === null ? "na" : "pass",
       desc: `MEXC ${p.ref_mexc_usable ? "usable" : "not priced"} (${qty(p.ref_mexc_unavail)} unavailable / ${qty(p.ref_mexc_unchanged)} unchanged in a row) · KuCoin ${p.ref_kucoin_usable ? "usable" : "not priced"} (${qty(p.ref_kucoin_unavail)} / ${qty(p.ref_kucoin_unchanged)})`,
       figs: [["MEXC", p.ref_mexc_usable ? "usable" : `${qty(p.ref_mexc_unavail)} missed`], ["KuCoin", p.ref_kucoin_usable ? "usable" : `${qty(p.ref_kucoin_unavail)} missed`]],
       note: "Unavailable fires HIGH at 3 cycles, CRITICAL at 6. Unchanged only escalates if the other exchange is still moving and the frozen price has drifted past the B2 threshold; a quiet market stays dashboard-only. A stale source is dropped from the trusted price.",
       naDesc: "No external reference for this pair" },
-    { id: "B4", name: "Circuit breaker proximity", alertId: "B4", severity: active.B4 === "CRITICAL" ? "CRITICAL" : "HIGH",
+    { id: "B4", name: "Circuit Breaker Proximity", alertId: "B4", severity: active.B4 === "CRITICAL" ? "CRITICAL" : "HIGH",
       state: active.B4 === "CRITICAL" ? "crit" : active.B4 ? "warn" : "pass",
       desc: num(p.b4_move_pct) === null ? `No k-line for the ${qty(p.kline_lookback_minutes ?? 60)}min window this cycle — nothing to measure` : `${pctS(p.b4_move_pct, 2, true)} from ${px(p.b4_window_open)} (open of the oldest candle in the ${qty(p.kline_lookback_minutes ?? 60)}min window)`,
       figs: [["Move", pctS(p.b4_move_pct, 2, true)], ["From", px(p.b4_window_open)]],
       note: `HIGH at ±${pctS(p.b4_warn_pct, 1)}, CRITICAL at ±${pctS(p.b4_breaker_pct, 1)} — the level an exchange would typically halt trading at. Uses no external reference.` },
-    { id: "G2", name: "Candle wick / anomalous print", alertId: "G2", severity: active.G2 === "CRITICAL" ? "CRITICAL" : "HIGH",
+    { id: "G2", name: "Candle Wick / Anomalous Print", alertId: "G2", severity: active.G2 === "CRITICAL" ? "CRITICAL" : "HIGH",
       state: active.G2 === "CRITICAL" ? "crit" : active.G2 ? "warn" : "pass",
       desc: !num(p.g2_candles_scanned) ? "No candles in the window this cycle — nothing scanned" : `Widest swing ${pctS(p.g2_worst_swing_pct, 2)}${p.g2_worst_candle ? ` at ${p.g2_worst_candle}` : ""} across ${qty(p.g2_candles_scanned)} candles` + (num(p.g2_zero_prints) ? ` · ${qty(p.g2_zero_prints)} zero print(s)` : ""),
       figs: [["Widest swing", pctS(p.g2_worst_swing_pct, 2)], ["At", p.g2_worst_candle || "—"]],
       note: `Every candle in the window is rescanned each cycle, not just the newest — a bad print can appear and revert between two polls. HIGH past ${pctS(p.g2_swing_threshold_pct, 1)} swing; a low ≤ 0 is always CRITICAL.` },
-    { id: "D1", name: "Volume spike", alertId: "D1", severity: "HIGH",
+    { id: "D1", name: "Volume Spike", alertId: "D1", severity: "HIGH",
       state: num(p.d1_threshold) === null ? "na" : p.d1_spike ? "warn" : "pass",
       desc: `${money(p.d1_window_volume, cur)} traded in the window vs ${money(p.d1_threshold, cur)} floor` + (num(p.d1_baseline) !== null ? ` vs ${money(p.d1_baseline, cur)} typical` : "") + (p.d1_context ? ` — ${p.d1_context}` : ""),
       figs: [["Window", money(p.d1_window_volume, cur)], ["Typical", money(p.d1_baseline, cur)], ["Floor", money(p.d1_threshold, cur)]],
       note: "Needs both: a multiple of this pair’s own baseline (set in config; the evidence line above names it) AND above its absolute floor. The baseline is the median of what this pair traded in the same hour of day over the last 30 days, so a daily peak no longer looks like a spike. Sends after 3 consecutive cycles, capped at 2 deliveries per episode.",
       naDesc: "Monitor-only pair — no volume floor defined" },
-    { id: "D2", name: "Fill rate deviation", alertId: "D2", severity: active.D2 === "CRITICAL" ? "CRITICAL" : active.D2 === "HIGH" ? "HIGH" : "MEDIUM",
+    { id: "D2", name: "Fill Rate Deviation", alertId: "D2", severity: active.D2 === "CRITICAL" ? "CRITICAL" : active.D2 === "HIGH" ? "HIGH" : "MEDIUM",
       state: (["delisted", "warming", "too_thin"].includes(p.fill_rate_status) || num(p.fill_events_1h) === null) ? "na" : active.D2 === "CRITICAL" ? "crit" : active.D2 ? "warn" : "pass",
       desc: `${qty(p.fill_events_1h)} fill events in the last hour vs ${qty(p.fill_baseline_hourly, 1)} typical for this market`
         + (num(p.fill_pct_change) !== null ? ` — ${pctS(p.fill_pct_change, 0, true)}${p.fill_direction ? " " + p.fill_direction : ""}` : p.fill_direction ? ` — ${p.fill_direction}` : "")
@@ -1444,16 +1444,16 @@ function checksFor(p) {
       naDesc: p.fill_rate_status === "delisted" ? "Asset delisted — still quoted, never trades. Excluded by config so it can’t alert forever"
         : p.fill_rate_status === "too_thin" ? "Too few fills per hour for a change test to mean anything — reported, never alerted"
         : "Baseline still building — needs a full trailing hour plus closed-hour history" },
-    { id: "F1", name: "Cross-pair arbitrage gap", alertId: "F1", severity: active.F1 === "HIGH" ? "HIGH" : "MEDIUM",
+    { id: "F1", name: "Cross-Pair Arbitrage Gap", alertId: "F1", severity: active.F1 === "HIGH" ? "HIGH" : "MEDIUM",
       state: active.F1 ? "warn" : "pass",
       desc: num(p.f1_gap_pct) !== null ? `Quoted ${px(p.f1_actual)} vs implied ${px(p.f1_implied)} — ${pctS(p.f1_gap_pct, 2, true)} via ${p.f1_legs || "linked legs"}` + (p.f1_suspect ? ` · suspect leg: ${String(p.f1_suspect).toUpperCase()}` : "") : "No gap beyond threshold against the implied cross-rate this cycle",
       figs: [["Quoted", px(p.f1_actual)], ["Implied", px(p.f1_implied)], ["Gap", pctS(p.f1_gap_pct, 2, true)]],
       note: `Builds a reference for NGN pairs out of Quidax’s own prices, since no external one exists. Fires past ±${pctS(p.f1_threshold_pct ?? 0.5, 2)}. Dashboard only. If a leg already fired B1, that leg is named as the likely cause.` },
-    { id: "DWS", name: "Dynamic weighted spread", alertId: null, severity: "HIGH",
+    { id: "DWS", name: "Dynamic Weighted Spread", alertId: null, severity: "HIGH",
       state: p.dws_poor ? "warn" : "pass",
       desc: `${qty(p.dws, 4)} vs ${qty(p.dws_threshold, 2)} threshold — ${p.dws_poor ? "book is genuinely hollow" : "real size sits behind the touch"}`,
       note: "Not an alert on its own — it’s the gate that decides whether a wide raw spread counts as A2. Size-weighted distance from mid across the top 10 levels each side." },
-    { id: "DEPTH", name: "Depth liquidity", alertId: null, severity: "INFO",
+    { id: "DEPTH", name: "Depth Liquidity", alertId: null, severity: "INFO",
       state: "info",
       desc: `Bid side ${p.depth_bid || "—"} · ask side ${p.depth_ask || "—"}`,
       note: "Value of every resting order on each side, capped at the depth limit the API is asked for. Context for A4 and A5 rather than a check." },
@@ -1474,12 +1474,14 @@ function evidence(p, id) {
   const c = checksFor(p).find(x => x.alertId === id && isOpenIssue(x));
   return c ? c.desc : "";
 }
+// "1/3cyc" means a Tier 2 alert is part-way through its confirmation cycles.
+const tgLabel = st => TG_STATE[st] || (/^\d+\/\d+cyc$/.test(st) ? `Confirming · ${st.replace("cyc", "")} cycles` : st);
 function tgSummary(p) {
   if (p.telegram_fired) return { sent: true, text: "Sent" };
   const states = parsePairs(p.telegram_detail);
   if (!states.length) return { sent: false, text: "—" };
   const s = states[0].val;
-  return { sent: false, text: s === "flag-only" ? "Dashboard" : s === "cooldown" ? "Cooldown" : s === "capped" ? "Capped" : s === "acked" || s === "suspended" ? "Muted" : s };
+  return { sent: false, text: s === "flag-only" ? "Dashboard" : s === "cooldown" ? "Cooldown" : s === "capped" ? "Capped" : s === "acked" || s === "suspended" ? "Muted" : /cyc$/.test(s) ? s.replace("cyc", "") + " cycles" : s };
 }
 const tierOf = p => p.alert_tier ?? 0;
 function bucket(p) {
@@ -1652,15 +1654,15 @@ function issueCards(p, tg) {
       `<div class="fig"><div class="fig-k">${esc(k)}</div><div class="fig-v ${i === 0 ? tone : ""}">${esc(v)}</div></div>`).join("");
     return `<article class="icard${muted ? " is-muted" : ""}">
       <div class="ic-top">
-        <span class="issue-name">${esc(c.name)}</span>
-        <span class="issue-id">${esc(c.alertId)} · ${esc(String(c.sev).toLowerCase())}</span>
+        <span class="issue-name">${esc(c.alertId)} ${esc(c.name)}</span>
+        <span class="issue-id">· ${esc(String(c.sev).toLowerCase())}</span>
         ${muted ? `<span class="tag">Muted</span>` : ""}
         <span class="chip ${c.tier === 1 ? "t1" : c.tier === 2 ? "t2" : ""}">${c.tier < 9 ? "Tier " + c.tier : "—"}</span>
       </div>
       ${figs ? `<div class="figs">${figs}</div>` : ""}
       <p class="ev">${esc(c.desc)}</p>
       ${st || canMute ? `<div class="ic-foot">
-        ${st ? `<span class="ic-tg">${st === "fired" ? `<span style="color:var(--accent)">${sendIcon(11)}</span>` : ""}${esc(TG_STATE[st] || st)}</span>` : ""}
+        ${st ? `<span class="ic-tg">${st === "fired" ? `<span style="color:var(--accent)">${sendIcon(11)}</span>` : ""}${esc(tgLabel(st))}</span>` : ""}
         ${canMute ? `<label class="switch"${CAN_WRITE ? "" : ` title="${esc(READ_ONLY_MSG)}"`}>
           <span>Mute until it clears</span>
           <input type="checkbox" role="switch" data-ack="${esc(c.alertId)}"${muted ? " checked" : ""}${CAN_WRITE ? "" : " disabled"} aria-label="Mute ${esc(c.alertId)} on ${esc(sym.toUpperCase())} until it clears" />
@@ -1677,7 +1679,7 @@ function issueCards(p, tg) {
   const summary = [passN && `${passN} pass`, naN && `${naN} not applicable`, ctxN && `${ctxN} context`].filter(Boolean).join(" · ");
   const other = c => `<div class="ochk ${c.state}">
       <span class="odot" aria-hidden="true"></span>
-      <div><div class="oname">${esc(c.name)}${c.alertId ? ` <span class="issue-id">${esc(c.alertId)}</span>` : ""}${c.state === "na" ? ` <span class="issue-id">· not applicable</span>` : ""}</div>
+      <div><div class="oname">${c.alertId ? esc(c.alertId) + " " : ""}${esc(c.name)}${c.state === "na" ? ` <span class="issue-id">· not applicable</span>` : ""}</div>
       <div class="odesc">${esc(c.desc)}</div></div>
     </div>`;
 
@@ -1744,7 +1746,7 @@ function showTip(chip) {
   const st = p ? Object.fromEntries(parsePairs(p.telegram_detail).map(x => [x.id, x.val]))[id] : null;
   const ev = p ? evidence(p, id) : "";
   const muted = p && isAcked(p.symbol, id);
-  tip.innerHTML = `<b>${esc(CHECK_NAMES[id] || id)}</b> <span>${esc(sev.toLowerCase())}${muted ? " · muted" : ""}</span>${ev ? `<div class="tip-ev">${esc(ev)}</div>` : ""}${st ? `<span>${esc(TG_STATE[st] || st)}</span>` : ""}`;
+  tip.innerHTML = `<b>${esc(id)}${CHECK_NAMES[id] ? " " + esc(CHECK_NAMES[id]) : ""}</b> <span>· ${esc(sev.toLowerCase())}${muted ? " · muted" : ""}</span>${ev ? `<div class="tip-ev">${esc(ev)}</div>` : ""}${st ? `<span>${esc(tgLabel(st))}</span>` : ""}`;
   const r = chip.getBoundingClientRect();
   tip.style.left = "0px"; tip.style.top = "0px";
   const tr = tip.getBoundingClientRect();
@@ -2485,7 +2487,7 @@ function tiersFor(id) {
 function alertOptions(ids, selected) {
   const opt = id => {
     const t = tiersFor(id);
-    return `<option value="${esc(id)}"${id === selected ? " selected" : ""}>${esc(id)}${CHECK_NAMES[id] ? " · " + esc(CHECK_NAMES[id]) : ""}${t.length > 1 ? ` (also T${t.slice(1).join("/T")})` : ""}</option>`;
+    return `<option value="${esc(id)}"${id === selected ? " selected" : ""}>${esc(id)}${CHECK_NAMES[id] ? " " + esc(CHECK_NAMES[id]) : ""}${t.length > 1 ? ` (also T${t.slice(1).join("/T")})` : ""}</option>`;
   };
   if (!Object.keys(tierMapNow()).length) return ids.map(opt).join("");
   const groups = { 1: [], 2: [], 3: [], 0: [] };
@@ -2680,7 +2682,7 @@ function renderLog() {
   $("log-body").innerHTML = rows.length ? rows.map(r => `<tr>
     <td class="t num">${esc(r.ts)}</td>
     <td class="m">${esc(symParts(r.market).base)}<span class="mkt-quote">/${esc(symParts(r.market).quote)}</span></td>
-    <td title="${esc(CHECK_NAMES[r.issue] || r.issue)}">${esc(r.issue)} <span class="muted">${esc(CHECK_NAMES[r.issue] || "")}</span></td>
+    <td>${esc(r.issue)}${CHECK_NAMES[r.issue] ? " " + esc(CHECK_NAMES[r.issue]) : ""}</td>
     <td>${sevChip(r.severity)}</td>
     <td class="t">T${esc(r.tier)}</td>
     <td class="r num t">${esc(r.depth || "—")}</td></tr>`).join("")
@@ -2789,7 +2791,7 @@ function renderLedger() {
       <td><label class="ck-wrap"><input class="ck" type="checkbox" data-act="ack" aria-label="Signed off"${r.acknowledged ? " checked" : ""}${ro} /></label></td>
       <td class="t num">${esc(r.ts)}${r.fired_count > 1 ? `<span class="rep" title="Paged ${r.fired_count} times; most recently ${esc(r.last_ts)}">×${r.fired_count}</span>` : ""}</td>
       <td class="m" title="${esc(r.label)}">${ledMarket(r.market)}</td>
-      <td>${esc(r.issue)} <span class="muted">${esc(r.name)}</span></td>
+      <td>${esc(r.issue)} ${esc(r.name)}</td>
       <td>${sevChip(r.severity)}</td>
       <td class="t num">${r.acknowledged_at ? esc(r.acknowledged_at) : "—"}</td>
       <td><select class="select" data-act="action" aria-label="Action taken"${r.acknowledged && CAN_WRITE ? "" : " disabled"}>${r.action ? "" : '<option value=""></option>'}${opts}</select></td>
@@ -2887,7 +2889,7 @@ const CFG = [
     { k: "kline.candle_minutes", l: "Candle size (minutes)", min: 1, step: 1, h: "B4 and G2 — candle period requested from the API (usually 1). Larger candles keep anomalies in view longer but blur a brief wick into a whole candle’s range, which is what G2 exists to catch. Independent of D1’s own candle size." },
     { k: "kline.lookback_minutes", l: "Lookback window (minutes)", min: 1, step: 1, h: "B4 and G2 — how far back both checks look. B4 measures price now against the open of the oldest candle; G2 rescans every candle each cycle, so this is also how long an anomalous print stays visible." },
   ]},
-  { id: "volume", title: "Volume spike", sub: "D1", fields: [
+  { id: "volume", title: "Volume Spike", sub: "D1", fields: [
     { k: "volume_spike.mode", l: "Trigger mode", type: "select", def: "baseline_relative", options: [["baseline_relative", "Baseline-relative"], ["absolute", "Absolute (legacy flat threshold)"]], h: "Baseline-relative fires on an unusual surge for this pair, with the absolute threshold kept as a floor. Absolute reverts to the flat per-pair threshold — an instant rollback without a redeploy." },
     { k: "volume_spike.spike_ratio", l: "Spike ratio (× baseline)", min: 1, step: 0.1, h: "Baseline-relative only. Fires when window volume ≥ this multiple of the pair’s baseline (and still clears the absolute floor)." },
     { k: "volume_spike.min_baseline_buckets", l: "Min baseline windows (trust gate)", min: 2, step: 1, h: "How many recorded windows the baseline needs before it’s trusted. Keep ≤ “Baseline windows”, or the baseline never becomes ready. Warm-up ≈ this × D1 lookback after a cold start." },
