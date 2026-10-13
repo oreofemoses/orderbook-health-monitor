@@ -41,5 +41,6 @@ data.bak-*/
 !fill_rate.py
 !baseline.py
 !dashboard.html
+!dashboard-next.html
 !favicon.ico
 !start.sh

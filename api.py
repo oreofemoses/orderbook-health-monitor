@@ -437,6 +437,16 @@ def serve_dashboard():
     return FileResponse(path)
 
 
+# The redesigned dashboard, served alongside dashboard.html while it's trialled.
+# Swap the two routes (or point "/" at dashboard-next.html) to make it the default.
+@app.get("/next")
+def serve_dashboard_next():
+    path = STATIC_DIR / "dashboard-next.html"
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="dashboard-next.html not found next to api.py")
+    return FileResponse(path)
+
+
 @app.get("/favicon.ico")
 def serve_favicon():
     path = STATIC_DIR / "favicon.ico"
